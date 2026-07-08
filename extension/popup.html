@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <style>
+    body { width: 300px; font-family: -apple-system, system-ui, sans-serif; padding: 14px; margin: 0; color: #1a1a1a; }
+    h1 { font-size: 15px; margin: 0 0 4px; }
+    .sub { font-size: 11px; color: #777; margin: 0 0 12px; }
+    label { font-size: 12px; display: block; margin: 8px 0 3px; font-weight: 600; }
+    select, input { width: 100%; padding: 6px; font-size: 12px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 6px; }
+    .row { display: flex; gap: 8px; }
+    .row > div { flex: 1; }
+    .btns { display: flex; gap: 8px; margin-top: 14px; }
+    button { flex: 1; padding: 9px; font-size: 13px; font-weight: 600; border: none; border-radius: 8px; cursor: pointer; }
+    #start { background: #4f46e5; color: #fff; }
+    #stop  { background: #ef4444; color: #fff; }
+    #download { background: #16a34a; color: #fff; }
+    #status { margin-top: 12px; padding: 9px; background: #f3f4f6; border-radius: 8px; font-size: 12px; min-height: 18px; line-height: 1.4; word-break: break-word; }
+    details { margin-top: 10px; font-size: 11px; color: #555; }
+  </style>
+</head>
+<body>
+  <h1>Universal Chat Scraper</h1>
+  <p class="sub">Auto-scrolls & captures full history → JSON.</p>
+
+  <label>Mode</label>
+  <select id="mode">
+    <option value="auto">Auto (Discord if detected)</option>
+    <option value="discord">Discord</option>
+    <option value="generic">Generic (any site)</option>
+  </select>
+
+  <div class="row">
+    <div>
+      <label>Scroll direction</label>
+      <select id="dir">
+        <option value="up">Up (chat history)</option>
+        <option value="down">Down (feeds)</option>
+      </select>
+    </div>
+    <div>
+      <label>Wait (ms)</label>
+      <input id="wait" type="number" value="1500" step="100" />
+    </div>
+  </div>
+
+  <label>Stop after N stable scrolls</label>
+  <input id="stable" type="number" value="15" />
+
+  <div class="btns">
+    <button id="start">Start</button>
+    <button id="stop">Stop</button>
+  </div>
+  <div class="btns">
+    <button id="download">Download JSON</button>
+    <button id="clear" style="background:#6b7280;color:#fff;flex:0 0 90px;">Clear</button>
+  </div>
+  <div class="btns">
+    <button id="watch" style="background:#0ea5e9;color:#fff;">👀 Watch (live signals)</button>
+    <button id="unwatch" style="background:#6b7280;color:#fff;flex:0 0 70px;">Stop</button>
+  </div>
+
+  <div id="status">Ready.</div>
+
+  <details>
+    <summary>Tips</summary>
+    Each Discord channel has its OWN separate storage, so different channels never mix —
+    no need to Clear between them. Each downloads as its own file named by channel id.
+    Captured messages save to disk continuously, so a crash/sleep/reload loses nothing —
+    click <b>Start</b> again to resume. <b>Clear</b> wipes only the current channel.
+    If it stops too early on a slow connection, raise Wait to 2000.
+  </details>
+
+  <script src="popup.js"></script>
+</body>
+</html>

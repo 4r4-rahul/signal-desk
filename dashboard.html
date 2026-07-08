@@ -1,0 +1,865 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Signal Desk</title>
+<style>
+  :root{
+    --bg:#0a0e17; --panel:#121a2b; --panel2:#0f1524; --line:#1f2a3d;
+    --txt:#e6eef9; --muted:#8496b3; --dim:#5c6b86;
+    --blue:#38bdf8; --green:#22c55e; --amber:#f59e0b; --orange:#fb923c; --red:#ef4444;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:radial-gradient(1200px 800px at 70% -10%,#101a30 0%,var(--bg) 55%);
+    color:var(--txt);font-family:'Inter',system-ui,-apple-system,sans-serif;-webkit-font-smoothing:antialiased}
+  .mono{font-family:'JetBrains Mono',ui-monospace,'SF Mono',Menlo,monospace}
+  header{position:sticky;top:0;z-index:5;backdrop-filter:blur(12px);
+    background:rgba(10,14,23,.75);border-bottom:1px solid var(--line);
+    display:flex;align-items:center;gap:18px;padding:14px 22px}
+  .logo{font-weight:800;font-size:18px;letter-spacing:.3px;display:flex;align-items:center;gap:9px}
+  .logo .b{color:var(--blue)}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--green);box-shadow:0 0 0 0 rgba(34,197,94,.5);
+    animation:pulse 1.8s infinite}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(34,197,94,.5)}70%{box-shadow:0 0 0 8px rgba(34,197,94,0)}100%{box-shadow:0 0 0 0 rgba(34,197,94,0)}}
+  .spacer{flex:1}
+  .chip{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:7px 12px;font-size:13px;color:var(--muted)}
+  .chip b{color:var(--txt)}
+  .wallet{max-width:1080px;margin:16px auto 0;padding:14px 20px;display:flex;align-items:center;gap:20px;
+    flex-wrap:wrap;background:linear-gradient(180deg,var(--panel),var(--panel2));border:1px solid var(--line);border-radius:14px}
+  .wcell{display:flex;flex-direction:column;gap:3px}
+  .wk{font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px}
+  .wv{font-size:19px;font-weight:700;font-family:'JetBrains Mono',ui-monospace,monospace}
+  .wsep{width:1px;height:32px;background:var(--line)}
+  .wbar{flex:1;min-width:130px;height:9px;border-radius:6px;background:#1f2a3d;overflow:hidden;display:flex}
+  .wbar .res{background:#22c55e;height:100%} .wbar .slv{background:#38bdf8;height:100%}
+  .stats{max-width:1080px;margin:14px auto 0;padding:15px 20px;background:linear-gradient(180deg,var(--panel),var(--panel2));border:1px solid var(--line);border-radius:14px}
+  .stats-h{font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.6px;margin-bottom:12px;display:flex;align-items:center;gap:10px}
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(138px,1fr));gap:10px}
+  .kpi{background:rgba(255,255,255,.02);border:1px solid var(--line);border-radius:11px;padding:11px 13px}
+  .kpi .k{font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px}
+  .kpi .v{font-size:21px;font-weight:800;margin-top:4px;font-family:'JetBrains Mono',ui-monospace,monospace;line-height:1.1}
+  .kpi .sub{font-size:10.5px;color:var(--muted);margin-top:3px}
+  .ptable{width:100%;border-collapse:collapse;margin-top:14px;font-size:12.5px;overflow-x:auto}
+  .ptable th{text-align:right;color:var(--dim);font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:.4px;padding:5px 8px;border-bottom:1px solid var(--line)}
+  .ptable th:first-child,.ptable td:first-child{text-align:left;color:var(--txt)}
+  .ptable td{text-align:right;padding:6px 8px;border-bottom:1px solid var(--line);font-family:'JetBrains Mono',ui-monospace,monospace;color:var(--muted)}
+  .ptable tr:last-child td{border-bottom:none}
+  .sources{max-width:1080px;margin:14px auto 0;padding:0 20px;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .src{display:flex;align-items:center;gap:7px;background:var(--panel);border:1px solid var(--line);
+    border-radius:999px;padding:6px 13px;font-size:12.5px;color:var(--muted);cursor:pointer;user-select:none}
+  .src.off{opacity:.45}
+  .src .d{width:8px;height:8px;border-radius:50%;background:var(--green)}
+  .src b{color:var(--txt)}
+  .src small{color:var(--dim)}
+  .disc{max-width:1080px;margin:12px auto 0;padding:11px 16px;border-radius:12px;font-size:13.5px;
+    font-weight:600;display:flex;gap:12px;align-items:center;border:1px solid var(--line)}
+  .disc:empty{display:none}
+  .disc.ok{background:rgba(34,197,94,.08);color:#bbf7d0;border-color:rgba(34,197,94,.3)}
+  .disc.stop{background:rgba(239,68,68,.13);color:#fecaca;border-color:rgba(239,68,68,.45)}
+  .disc .m{color:var(--muted);font-weight:500}
+  .positions{max-width:1080px;margin:16px auto 0;padding:0 20px;display:grid;gap:10px}
+  .pos-h{font-size:13px;color:var(--muted);font-weight:700}
+  .pos{background:linear-gradient(180deg,var(--panel),var(--panel2));border:1px solid var(--line);
+    border-left:4px solid var(--st);border-radius:12px;padding:12px 14px}
+  .pos-top{display:flex;align-items:center;gap:10px;font-size:15px;font-weight:700}
+  .pos-badge{font-size:10px;font-weight:700;padding:2px 7px;border-radius:5px;background:rgba(255,255,255,.06);color:var(--st)}
+  .pos-line{color:var(--muted);font-size:12.5px;margin-top:5px}
+  .pos-sug{margin-top:7px;font-size:12.5px;background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.3);color:#fde68a;padding:6px 9px;border-radius:8px}
+  .pos-act{display:flex;gap:7px;margin-top:9px;flex-wrap:wrap;align-items:center}
+  .pos-act button{padding:6px 11px;font-size:12px}
+  .wrap{max-width:1080px;margin:16px auto 22px;padding:0 20px;display:grid;gap:16px}
+  .empty{color:var(--dim);text-align:center;padding:80px 0;font-size:15px}
+  .empty .big{font-size:40px;margin-bottom:10px;opacity:.5}
+
+  .card{position:relative;background:linear-gradient(180deg,var(--panel),var(--panel2));
+    border:1px solid var(--line);border-radius:16px;padding:18px 20px 16px;overflow:hidden;
+    animation:rise .35s ease}
+  @keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+  .card::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--tier)}
+  .card.status-SKIPPED,.card.status-CLOSED{opacity:.6}
+  .top{display:flex;align-items:center;gap:16px}
+  .ring{flex:0 0 auto}
+  .ring text{font-family:'JetBrains Mono',monospace}
+  .head{flex:1;min-width:0}
+  .sig{font-size:20px;font-weight:700;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .badge{font-size:11px;font-weight:700;padding:3px 8px;border-radius:6px;text-transform:uppercase;letter-spacing:.4px}
+  .badge.prov{background:rgba(56,189,248,.14);color:var(--blue)}
+  .badge.lotto{background:rgba(239,68,68,.15);color:var(--red)}
+  .badge.tier{background:var(--tierbg);color:var(--tier)}
+  .sub{color:var(--muted);font-size:12.5px;margin-top:5px}
+  .reasons{color:var(--dim);font-size:11.5px;margin-top:3px}
+
+  .plan{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin:16px 0 4px}
+  .cell{background:rgba(255,255,255,.02);border:1px solid var(--line);border-radius:11px;padding:10px 12px}
+  .cell .k{font-size:10.5px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px}
+  .cell .v{font-size:16px;font-weight:700;margin-top:3px}
+  .cell .v.g{color:var(--green)} .cell .v.r{color:var(--red)}
+  .planline{color:var(--muted);font-size:12.5px;margin-top:8px;line-height:1.5}
+  .planline b{color:var(--txt)}
+  .warn{color:var(--amber);font-size:13px;padding:10px 0}
+
+  .actions{display:flex;align-items:center;gap:10px;margin-top:14px;flex-wrap:wrap}
+  input.px{width:78px;background:var(--panel2);border:1px solid var(--line);color:var(--txt);
+    border-radius:9px;padding:8px 10px;font-size:13px}
+  button{border:none;border-radius:10px;padding:9px 16px;font-size:13px;font-weight:700;cursor:pointer;color:#fff;transition:.15s}
+  button:hover{filter:brightness(1.1)}
+  .take{background:var(--green)} .skip{background:#374151} .close{background:var(--blue)}
+  .statustag{font-size:12px;font-weight:700;padding:5px 11px;border-radius:8px}
+  .statustag.TAKEN{background:rgba(34,197,94,.15);color:var(--green)}
+  .statustag.SKIPPED{background:#2a3344;color:var(--muted)}
+  .statustag.CLOSED{background:rgba(56,189,248,.15);color:var(--blue)}
+  .statustag.WATCHING{background:rgba(168,139,250,.16);color:#a88bfa}
+  .watchnote{font-size:11px;color:var(--muted);font-style:italic}
+  .card.status-WATCHING{opacity:.9;border-left:2px solid #a88bfa}
+  .sechdr{font-size:11px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);
+    margin:18px 2px 9px;display:flex;align-items:center;gap:8px}
+  .sechdr:first-child{margin-top:2px}
+  .secn{background:#20293a;color:var(--muted);border-radius:10px;padding:1px 8px;font-size:11px;font-weight:600}
+  .secline{flex:1;height:1px;background:#1c2534}
+  .skipsec{margin-top:18px;border-top:1px solid #1e2836}
+  .skipsec>summary{cursor:pointer;list-style:none;padding:11px 2px;font-size:12px;font-weight:600;
+    color:var(--muted);user-select:none;display:flex;align-items:center;gap:8px}
+  .skipsec>summary::-webkit-details-marker{display:none}
+  .skipsec>summary::before{content:'▸';transition:transform .15s}
+  .skipsec[open]>summary::before{transform:rotate(90deg)}
+  .skipsec>summary:hover{color:var(--text)}
+  .skipwrap{opacity:.62}
+  .skipwrap:hover{opacity:.85}
+  .sortbar{max-width:1080px;margin:14px auto -2px;padding:0 20px;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+  .sortbar .lbl{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.07em;margin-right:2px}
+  .fchip{background:var(--panel);border:1px solid var(--line);border-radius:999px;padding:6px 12px;font-size:12.5px;
+    color:var(--muted);cursor:pointer;user-select:none;display:flex;align-items:center;gap:6px;transition:border-color .12s,color .12s,background .12s}
+  .fchip:hover{border-color:#33415a;color:var(--txt)}
+  .fchip.on{background:rgba(56,189,248,.13);border-color:rgba(56,189,248,.42);color:var(--txt)}
+  .fchip .cnt{background:#20293a;border-radius:9px;padding:0 7px;font-size:11px;color:var(--muted)}
+  .fchip.on .cnt{background:rgba(56,189,248,.22);color:#bfe3fb}
+  .fchip.all{font-weight:600}
+  .fchip.dim{opacity:.5}
+  .ticket{display:flex;flex-wrap:wrap;gap:7px;margin:11px 0 3px}
+  .tk{display:inline-flex;align-items:center;gap:5px;background:#141c2a;border:1px solid var(--line);
+    border-radius:999px;padding:5px 11px;font-size:12px;color:var(--muted);
+    font-family:'JetBrains Mono',ui-monospace,monospace;white-space:nowrap}
+  .tk b{color:var(--txt);font-weight:700}
+  .tk i{color:var(--dim);font-style:normal;font-size:10.5px}
+  .tk.buy{border-color:rgba(56,189,248,.42);background:rgba(56,189,248,.1)} .tk.buy b{color:#7dd3fc}
+  .tk.stop{border-color:rgba(239,68,68,.36);background:rgba(239,68,68,.09)} .tk.stop b{color:#fca5a5}
+  .tk.tp{border-color:rgba(34,197,94,.32);background:rgba(34,197,94,.09)} .tk.tp b{color:#86efac}
+  .tk.rr{border-color:rgba(245,158,11,.4);background:rgba(245,158,11,.1)} .tk.rr b{color:var(--amber)}
+  .tk.warn{border-color:rgba(245,158,11,.45);background:rgba(245,158,11,.12);color:var(--amber)}
+  .slive{margin:9px 0 2px;display:flex;flex-wrap:wrap;gap:9px;align-items:center;font-size:12px}
+  .slive:empty{display:none}
+  .lvmove{font-family:'JetBrains Mono',ui-monospace,monospace;color:var(--txt);font-weight:700}
+  .lvnow{color:var(--muted);font-family:'JetBrains Mono',ui-monospace,monospace;font-size:11.5px}
+  .lvreco{padding:3px 11px;border-radius:999px;font-weight:600}
+  .lvreco.go{background:rgba(34,197,94,.15);color:#86efac}
+  .lvreco.better{background:rgba(34,197,94,.24);color:#4ade80}
+  .lvreco.caution{background:rgba(245,158,11,.15);color:var(--amber)}
+  .lvreco.skip{background:rgba(239,68,68,.16);color:#fca5a5}
+  .coach{margin-top:2px}
+  .coach:empty{display:none}
+  .coachrow{display:flex;flex-wrap:wrap;gap:7px;margin:9px 0 0}
+  .coachex{margin:8px 0 2px;font-size:11.5px;color:var(--muted);font-family:'JetBrains Mono',ui-monospace,monospace}
+  .coachex b{color:var(--txt);font-weight:700}
+  .tk.gr-A{border-color:rgba(34,197,94,.5);background:rgba(34,197,94,.13)} .tk.gr-A b{color:#4ade80}
+  .tk.gr-B{border-color:rgba(56,189,248,.45);background:rgba(56,189,248,.11)} .tk.gr-B b{color:#7dd3fc}
+  .tk.gr-C{border-color:rgba(245,158,11,.42);background:rgba(245,158,11,.1)} .tk.gr-C b{color:var(--amber)}
+  .tk.gr-D{border-color:rgba(239,68,68,.45);background:rgba(239,68,68,.12)} .tk.gr-D b{color:#fca5a5}
+  .logf{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;color:var(--muted);
+    padding-left:8px;margin-left:4px;border-left:1px solid var(--line)}
+  .sizerow{display:flex;flex-wrap:wrap;gap:7px;margin:8px 0 0}
+  .tk.sz{border-color:rgba(168,139,250,.42);background:rgba(168,139,250,.1)} .tk.sz b{color:#c4b5fd}
+
+  /* live management surface on a taken card */
+  .mgmt{margin-top:14px;border-top:1px solid var(--line);padding-top:12px}
+  .mgmt .row{color:var(--muted);font-size:12.5px;margin-top:5px}
+  .mgmt .row b{color:var(--txt)}
+  .qbar{height:7px;border-radius:5px;background:#1f2a3d;overflow:hidden;margin:8px 0 2px;max-width:280px}
+  .qbar .f{height:100%;background:var(--st)}
+  /* provider/you/market timeline */
+  .tl{margin-top:10px;font-size:12px}
+  .tl-head{cursor:pointer;color:var(--muted);user-select:none}
+  .tl-head:hover{color:var(--txt)}
+  .tl-body{margin-top:6px;border-left:2px solid var(--line);padding-left:10px}
+  .tl-row{display:flex;gap:8px;padding:2px 0;line-height:1.4}
+  .tl-t{color:var(--dim);font-family:'JetBrains Mono',monospace;font-size:11px;min-width:42px}
+  /* modal (lifetime view) */
+  .overlay{position:fixed;inset:0;background:rgba(4,7,13,.72);backdrop-filter:blur(4px);z-index:50;
+    display:flex;align-items:flex-start;justify-content:center;padding:40px 16px;overflow:auto}
+  .modal{max-width:640px;width:100%;background:linear-gradient(180deg,var(--panel),var(--panel2));
+    border:1px solid var(--line);border-radius:16px;padding:20px 22px}
+  .modal h2{margin:0 0 2px;font-size:19px}
+  .modal .x{float:right;cursor:pointer;color:var(--muted);font-size:22px;line-height:1;border:none;background:none}
+  .lf-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:9px;margin:14px 0}
+  .lf-grid .cell .v{font-size:15px}
+  .lf-sec{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px;margin:14px 0 6px}
+  .ledger{font-size:12.5px;color:var(--muted)}
+  .ledger div{padding:3px 0;border-bottom:1px solid var(--line)}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">⚡ Signal&nbsp;<span class="b">Desk</span></div>
+  <span class="dot" id="dot" title="server live"></span>
+  <div class="spacer"></div>
+  <div class="chip">Account <b id="acct">$—</b></div>
+  <div class="chip">Risk <b id="risk">—</b></div>
+  <div class="chip">Signals <b id="n">0</b> · Taken <b id="nt">0</b> · Skipped <b id="ns">0</b></div>
+</header>
+
+<div id="wallet" class="wallet"></div>
+<div id="stats" class="stats"></div>
+<div id="sources" class="sources"></div>
+<div id="discipline" class="disc"></div>
+<div id="milestone" class="disc"></div>
+<div id="pending" class="positions"></div>
+<div id="positions" class="positions"></div>
+<div id="modal"></div>
+
+<div class="sortbar" id="sortbar"></div>
+<div class="wrap" id="feed">
+  <div class="empty"><div class="big">📡</div>Waiting for live signals…<br>
+    Start <span class="mono">python3 server.py</span>, open the channel, hit <b>👀 Watch</b> in the extension.</div>
+</div>
+
+<script>
+const TIER={HIGH:['#22c55e','rgba(34,197,94,.15)'],MEDIUM:['#f59e0b','rgba(245,158,11,.15)'],
+  LOW:['#fb923c','rgba(251,146,60,.15)'],SKIP:['#ef4444','rgba(239,68,68,.15)']};
+const typed={};        // preserve in-progress input by signal id
+const muted=new Set(); // providers toggled off in the filter
+
+// ---- feed sections + the top sorting/filter bar ----
+function secOf(s){const st=s.pos&&s.pos.state;
+  if(st==='OPEN'||st==='PARTIALLY_TRIMMED'||st==='RUNNER')return 'live';
+  if(st==='CLOSED'||st==='CUT'||s.status==='CLOSED')return 'closed';
+  if(s.status==='TAKEN')return 'live';
+  if(s.status==='WATCHING')return 'watch';
+  if(s.status==='SKIPPED')return 'skip';
+  return 'new';}
+const SECS=[['live','📈 Live & taken'],['new','🔔 New signals'],['watch','👀 Watching'],
+  ['closed','✅ Closed'],['skip','🗑 Dismissed']];
+const SECLBL=Object.fromEntries(SECS);
+let secOn;
+try{secOn=JSON.parse(localStorage.getItem('secOn'))}catch(e){}
+if(!secOn) secOn={live:1,new:1,watch:1,closed:1,skip:0};   // hide dismissed by default
+function saveSec(){try{localStorage.setItem('secOn',JSON.stringify(secOn))}catch(e){}}
+function toggleSec(k){secOn[k]=secOn[k]?0:1;saveSec();refresh();}
+function setAllSec(v){SECS.forEach(([k])=>secOn[k]=v);saveSec();refresh();}
+function renderSortbar(counts){
+  const bar=document.getElementById('sortbar'); if(!bar) return;
+  const allOn=SECS.every(([k])=>secOn[k]);
+  let h='<span class="lbl">Show</span>';
+  h+=`<div class="fchip all ${allOn?'on':''}" onclick="setAllSec(${allOn?0:1})" title="toggle everything">${allOn?'All ✓':'All'}</div>`;
+  h+=SECS.map(([k,lbl])=>`<div class="fchip ${secOn[k]?'on':''} ${(counts[k]||0)===0?'dim':''}" onclick="toggleSec('${k}')">${lbl}<span class="cnt">${counts[k]||0}</span></div>`).join('');
+  bar.innerHTML=h;
+}
+
+function ago(iso,nowIso){
+  if(!iso) return '—';
+  const s=Math.max(0,(Date.parse(nowIso)-Date.parse(iso))/1000);
+  return s<60?Math.round(s)+'s ago':s<3600?Math.round(s/60)+'m ago':Math.round(s/3600)+'h ago';
+}
+function renderSources(src,nowIso){
+  const el=document.getElementById('sources');
+  const keys=Object.keys(src||{});
+  if(!keys.length){el.innerHTML='<span class="src off"><span class="d" style="background:#5c6b86"></span>Nothing listening — open a channel & hit <b>&nbsp;👀 Watch</b></span>';return;}
+  el.innerHTML='<span style="color:var(--dim);font-size:12px;align-self:center">Listening:</span>'+keys.map(k=>{
+    const s=src[k];
+    const live=((Date.parse(nowIso)-Date.parse(s.last_beat||0))/1000)<70;   // heartbeat ~20s
+    const hrs=Math.max((Date.parse(nowIso)-Date.parse(s.first||nowIso))/3.6e6,0.05);
+    const rate=s.count?(s.count/hrs).toFixed(1):'0';
+    const last=s.last_signal?`${ago(s.last_signal_iso,nowIso)} · ${s.last_signal}`:'no signal yet';
+    const key=s.provider||k;
+    return `<div class="src ${muted.has(key)?'off':''}" onclick="toggleSrc('${key}')" title="${live?'live — receiving heartbeat':'stale — window not sending (minimized/closed?)'}">
+      <span class="d" style="background:${live?'#22c55e':'#6b7280'}"></span>
+      <div style="line-height:1.35"><b>${s.name||k}</b>${s.provider?` <small style="color:var(--blue)">→${s.provider}</small>`:''}<br>
+      <small>${s.count||0} signals · ${rate}/hr · last ${last}</small></div></div>`;
+  }).join('');
+}
+function toggleSrc(k){muted.has(k)?muted.delete(k):muted.add(k);refresh();}
+
+const money=n=>'$'+Math.round(n||0).toLocaleString();
+
+const POS={};   // id -> latest position object (for the lifetime modal lookup)
+const stCol=s=>s==='CUT'?'#ef4444':s==='RUNNER'?'#38bdf8':s==='PARTIALLY_TRIMMED'?'#f59e0b':s==='CLOSED'?'#38bdf8':'#22c55e';
+function hm(iso){if(!iso)return'';const d=new Date(iso);return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');}
+function fmtdur(s){if(s==null)return'—';if(s<60)return s+'s';if(s<3600)return Math.round(s/60)+'m';return (s/3600).toFixed(1)+'h';}
+
+// live P&L line — patched in place each poll (id=live-<pid>) so it updates without blinking the card
+function liveLineHTML(p){
+  const lv=p.live||{};
+  if(lv.mid==null) return '<span style="color:var(--dim)">📡 waiting for live quote…</span>';
+  const c=lv.pnl_pct>=0?'#22c55e':'#ef4444';
+  return `📡 Live $${lv.mid} · <b style="color:${c}">${lv.pnl_pct>=0?'+':''}${lv.pnl_pct}%</b> · peak +${lv.peak_pct||0}%`
+    +`${lv.delta!=null?' · Δ'+lv.delta:''}${lv.iv!=null?' · IV '+Math.round(lv.iv*100)+'%':''}${lv.spread_pct!=null?' · spr '+lv.spread_pct+'%':''}`;
+}
+
+// merged timeline: 💬 provider recommendations · ✅ your actions · 📡 live-market alerts
+function tline(p){
+  const ev=[];
+  (p.provider_events||[]).forEach(e=>ev.push({t:e.ts,lane:'prov',
+    txt:`<b>${p.provider}</b> ${e.raw||(e.type||'').replace('_',' ')}${e.pct_out?` · ${e.estimated?'~':''}${e.pct_out}% out`:''}${e.pct_up?` · +${e.pct_up}%`:''}`}));
+  (p.user_actions||[]).forEach(a=>{
+    let d;
+    if(a.kind==='STOP') d=`moved stop → $${a.stop}`;
+    else if(a.kind==='RUNNER_KEEP') d='left it as a runner';
+    else{const v=a.kind==='CUT'?'cut':a.kind==='CLOSE'?'closed':'trimmed';
+      d=`${v} ${a.qty||''} @ $${a.price}${a.realized_delta!=null?` (${a.realized_delta>=0?'+':'−'}$${Math.abs(Math.round(a.realized_delta))})`:''}`;}
+    ev.push({t:a.ts,lane:'you',txt:d});
+  });
+  (p.live_alerts||[]).forEach(l=>ev.push({t:l.ts,lane:'live',txt:l.alert}));
+  ev.sort((a,b)=>Date.parse(a.t)-Date.parse(b.t));
+  return ev;
+}
+const IC={prov:'💬',you:'✅',live:'📡'}, LCL={prov:'var(--blue)',you:'var(--green)',live:'var(--dim)'};
+function tlineHTML(p,forceOpen){
+  const ev=tline(p);
+  if(!ev.length) return '';
+  const rows=ev.map(e=>`<div class="tl-row"><span class="tl-t">${hm(e.t)}</span><span style="color:${LCL[e.lane]}">${IC[e.lane]} ${e.txt}</span></div>`).join('');
+  if(forceOpen) return `<div class="tl-body">${rows}</div>`;
+  const last=ev.slice(-2).map(e=>`${IC[e.lane]} ${e.txt.replace(/<[^>]+>/g,'')}`).join(' · ');
+  const bid='tl-'+p.id;
+  return `<div class="tl"><div class="tl-head" onclick="var x=document.getElementById('${bid}');x.style.display=x.style.display==='none'?'block':'none'">▸ Timeline (${ev.length}) — <span style="color:var(--dim)">${last}</span></div><div class="tl-body" id="${bid}" style="display:none">${rows}</div></div>`;
+}
+
+// the management surface (used inside a taken card, and standalone for orphan positions)
+function posBody(p){
+  POS[p.id]=p;
+  if(p.kind==='tracked'){   // provider-followed shell — no live position, just their update timeline
+    const ppo=p.provider_pct_out||0;
+    const prog=ppo>0?`<div class="row" style="color:var(--blue)">💬 ${p.provider} is <b>${ppo}% out</b> of this</div>`:'';
+    return `<div class="mgmt">${prog}${tlineHTML(p,true)}</div>`;
+  }
+  const closedPct=p.qty_initial?Math.round((1-p.qty_remaining/p.qty_initial)*100):0;
+  const rz=p.realized||0, done=(p.state==='CLOSED'||p.state==='CUT');
+  const entryLine=`<div class="row">Entry <b>$${p.entry}</b> · <b>${p.qty_remaining}/${p.qty_initial}</b> left (${closedPct}% out) · Realized <b style="color:${rz>=0?'#22c55e':'#ef4444'}">${rz>=0?'+':'−'}$${Math.abs(Math.round(rz))}</b> · Stop $${p.stop??'—'}</div>`;
+  const qbar=`<div class="qbar"><div class="f" style="width:${closedPct}%"></div></div>`;
+  const liveLine=done?'':`<div class="row" id="live-${p.id}">${liveLineHTML(p)}</div>`;
+  const lv=p.live||{};
+  const liveAlert=(!done&&lv.alert)?`<div class="pos-sug" style="background:rgba(239,68,68,.16);border-color:rgba(239,68,68,.5);color:#fecaca">🚨 <b>LIVE:</b> ${lv.alert}</div>`:'';
+  const ppo=p.provider_pct_out||0;
+  const div=(!done&&ppo>0&&ppo-closedPct>=10)?`<div class="row" style="color:#f59e0b">⚠ ${p.provider} ${ppo}% out · you ${closedPct}% — you're behind his exit</div>`:'';
+  const s=p.suggested;
+  const sug=(!done&&s)?`<div class="pos-sug">💬 <b>${p.provider}:</b> "${s.raw}" → <b>${s.hint||s.type}</b>${s.pct_out?` ${s.estimated?'~':''}${s.pct_out}%`:''}${s.price?` @$${s.price}`:''}${s.stop_ref?` stop→${s.stop_ref}`:''}</div>`:'';
+  let actions;
+  if(done){
+    actions=`<div class="pos-act"><span class="statustag ${p.state==='CUT'?'SKIPPED':'CLOSED'}">${p.state} ${rz>=0?'+':'−'}$${Math.abs(Math.round(rz))}</span>
+      <button class="close" onclick="showLifetime('${p.id}')">📜 Lifetime</button></div>`;
+  }else{
+    const qtyPrefill=s&&s.pct_out?Math.max(1,Math.round(p.qty_remaining*s.pct_out/100)):'';
+    const pxPrefill=s&&s.price?s.price:(lv.mid!=null?lv.mid:'');
+    actions=`<div class="pos-act">
+      <input class="px mono" id="mpx-${p.id}" placeholder="price" value="${pxPrefill}" style="width:66px">
+      <input class="px mono" id="mqty-${p.id}" placeholder="qty" value="${qtyPrefill}" style="width:48px">
+      <button class="close" onclick="mng('${p.id}','SELL')">Trim</button>
+      <button class="take" onclick="mng('${p.id}','CLOSE')">Close all</button>
+      <button class="skip" onclick="mng('${p.id}','CUT')">Cut</button>
+      <button class="skip" onclick="mng('${p.id}','RUNNER_KEEP')">Leave it</button>
+      <button class="skip" onclick="mngStop('${p.id}')">Move stop</button>
+    </div>`;
+  }
+  const ladder=(!done)?`<div class="coachex" style="margin-top:8px">${posExitLadder(p)}</div>`:'';
+  return `<div class="mgmt">${entryLine}${qbar}${liveLine}${liveAlert}${div}${sug}${ladder}${tlineHTML(p)}${actions}</div>`;
+}
+
+function posCard(p){   // standalone card for orphan positions (no matching signal, e.g. after restart)
+  const tracked=p.kind==='tracked';
+  const badge=tracked
+    ? '<span class="pos-badge" style="background:rgba(56,189,248,.18);color:var(--blue)">👁 PROVIDER-TRACKED · not taken</span>'
+    : `<span class="pos-badge">${p.state}</span>`;
+  return `<div class="pos" style="--st:${tracked?'#38bdf8':stCol(p.state)}${tracked?';opacity:.9;border-style:dashed':''}">
+    <div class="pos-top">${p.ticker||''} ${p.leg||''} ${badge} <small style="color:var(--blue);font-weight:500">${p.provider}</small></div>
+    ${tracked?`<div class="sub" style="color:var(--dim)">an entry you didn't take — following ${p.provider}'s updates</div>`:''}
+    ${posBody(p)}</div>`;
+}
+function renderPositions(ps){
+  const el=document.getElementById('positions');
+  if(!ps||!ps.length){el.innerHTML='';return;}
+  el.innerHTML=`<div class="pos-h">📂 Positions without a live card (${ps.length})</div>`+ps.map(posCard).join('');
+}
+
+function lifeHTML(p){
+  const r=p.close_record||{}, rz=p.realized||0;
+  const ret=r.return_pct!=null?r.return_pct:0, R=r.R_multiple, win=rz>=0;
+  const ev=tline(p);
+  const fills=(p.user_actions||[]).filter(a=>a.qty).map(a=>{
+    const v=a.kind==='CUT'?'Cut':a.kind==='CLOSE'?'Closed':'Trimmed';
+    return `<div>${hm(a.ts)} · ${v} <b>${a.qty}</b> @ $${a.price} → <span style="color:${a.realized_delta>=0?'#22c55e':'#ef4444'}">${a.realized_delta>=0?'+':'−'}$${Math.abs(Math.round(a.realized_delta||0))}</span></div>`;
+  }).join('')||'<div style="color:var(--dim)">no partial fills recorded</div>';
+  const peak=r.peak_pct!=null?r.peak_pct:p.peak_pct;
+  const evp=r.exit_vs_peak_pct;
+  const divLine=(r.provider_pct_out_final!=null)?`<div class="row">${p.provider} exited <b>${r.provider_pct_out_final}%</b> · you <b>${r.your_pct_out_final||100}%</b></div>`:'';
+  return `<div class="modal">
+    <button class="x" onclick="closeModal()">×</button>
+    <h2>${p.ticker||''} ${p.leg||''} · <span style="color:${win?'#22c55e':'#ef4444'}">${p.state} ${win?'+':'−'}$${Math.abs(Math.round(rz))} (${ret>=0?'+':''}${ret}%)</span></h2>
+    <div class="sub" style="color:var(--muted)">${p.provider} · opened ${hm(p.opened)} → closed ${hm(p.closed)} · held ${fmtdur(r.hold_secs)}</div>
+    <div class="lf-grid">
+      ${cell('Entry','$'+p.avg_entry)}
+      ${cell('Qty',p.qty_initial)}
+      ${cell('R-multiple',R!=null?R+'R':'—',R!=null?(R>=0?'g':'r'):'')}
+      ${cell('Conf@entry',(p.conf_at_entry??'—')+'')}
+      ${cell('Init. stop','$'+(p.initial_stop??'—'),'r')}
+      ${cell('Targets','$'+(p.tp1??'—')+' / $'+(p.tp2??'—'),'g')}
+      ${cell('Peak',peak!=null?'+'+peak+'%':'—','g')}
+      ${cell('Exit vs peak',evp!=null?evp+'%':'—',evp<0?'r':'')}
+    </div>
+    ${p.tape_at_entry?`<div class="row" style="color:var(--muted)">📈 Tape at entry: <b>${p.tape_at_entry}</b></div>`:''}
+    ${divLine}
+    <div class="lf-sec">Fills</div><div class="ledger">${fills}</div>
+    <div class="lf-sec">Full timeline (${ev.length})</div>
+    ${tlineHTML(p,true)}
+  </div>`;
+}
+function showLifetime(pid){
+  const p=(typeof pid==='object')?pid:POS[pid];
+  if(!p) return;
+  POS[p.id]=p;
+  const m=document.getElementById('modal');
+  m.className='overlay'; m.onclick=e=>{if(e.target===m)closeModal();};
+  m.innerHTML=lifeHTML(p);
+}
+function closeModal(){const m=document.getElementById('modal');m.className='';m.innerHTML='';}
+function renderPending(pd){
+  const el=document.getElementById('pending');
+  if(!pd||!pd.length){el.innerHTML='';return;}
+  el.innerHTML=pd.map(x=>{
+    const c=x.classified, btns=x.candidates.map(p=>`<button class="close" onclick="assign('${x.id}','${p.id}')">${p.ticker||''} ${p.leg||''} · ${p.state}</button>`).join(' ');
+    return `<div class="pos" style="--st:#f59e0b;background:rgba(245,158,11,.08)"><div style="font-size:13px;color:#fde68a">❓ <b>${x.provider}:</b> "${c.raw}" → <b>${(c.type||'').replace('_',' ')}</b>${c.via_llm?' <small>(AI-read)</small>':''} — which position?</div><div class="pos-act">${btns} <button class="skip" onclick="assign('${x.id}','')">Ignore</button></div></div>`;
+  }).join('');
+}
+async function assign(pid,posid){
+  await fetch('/api/assign',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pending_id:pid,position_id:posid})});
+  refresh();
+}
+async function mng(pid,kind){
+  const px=document.getElementById('mpx-'+pid), qty=document.getElementById('mqty-'+pid);
+  const b={id:pid,kind};
+  if(px&&px.value) b.price=parseFloat(px.value);
+  if(qty&&qty.value&&kind==='SELL') b.qty=parseInt(qty.value);
+  if((kind==='CLOSE'||kind==='CUT')&&(!px||!px.value)&&!confirm(`Record ${kind} with no price? (P&L will use your entry — enter the real exit price to be accurate)`))return;
+  if(kind==='CUT'&&!confirm('Record CUT — close remaining at a loss?'))return;
+  const r=await fetch('/api/manage',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});
+  const p=await r.json().catch(()=>null);
+  await refresh();
+  if(p&&(p.state==='CLOSED'||p.state==='CUT')) showLifetime(p);   // full lifetime on close
+}
+async function mngStop(pid){
+  const s=prompt('New stop price:'); if(s===null)return;
+  await fetch('/api/manage',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:pid,kind:'STOP',stop:parseFloat(s)})});
+  refresh();
+}
+function pfmt(v){return v==null?'∞':v;}                 // profit-factor/payoff: null = no losses = ∞
+function sparkline(curve){
+  if(!curve||curve.length<2) return '';
+  const w=120,h=26,mn=Math.min(0,...curve),mx=Math.max(0,...curve),rng=(mx-mn)||1;
+  const pts=curve.map((v,i)=>[i/(curve.length-1)*w, h-(v-mn)/rng*h]);
+  const d=pts.map((p,i)=>(i?'L':'M')+p[0].toFixed(1)+' '+p[1].toFixed(1)).join(' ');
+  const last=curve[curve.length-1], col=last>=0?'#22c55e':'#ef4444';
+  const zy=(h-(0-mn)/rng*h).toFixed(1);
+  return `<svg width="${w}" height="${h}" style="margin-left:auto"><line x1="0" y1="${zy}" x2="${w}" y2="${zy}" stroke="#2a3344" stroke-dasharray="2 2"/><path d="${d}" fill="none" stroke="${col}" stroke-width="1.5" stroke-linejoin="round"/></svg>`;
+}
+function renderStats(st){
+  const el=document.getElementById('stats');
+  if(!st||!st.overall||!st.overall.n){el.innerHTML='<div class="stats-h">📊 Performance <span style="color:var(--dim);font-weight:500;text-transform:none">— no closed trades yet; stats populate as you take & close trades</span></div>';return;}
+  const o=st.overall, m$=n=>(n>=0?'+':'−')+'$'+Math.abs(Math.round(n)).toLocaleString(), pos=x=>x>=0;
+  const kpis=[
+    ['Total P&L', m$(o.total), pos(o.total), `${o.wins}W · ${o.losses}L`],
+    ['Win rate', o.win_rate+'%', o.win_rate>=50, `of ${o.n} trades`],
+    ['Expectancy', m$(o.expectancy), pos(o.expectancy), 'per trade'+(o.expectancy_R!=null?` · ${o.expectancy_R>=0?'+':''}${o.expectancy_R}R`:'')],
+    ['Profit factor', pfmt(o.profit_factor), (o.profit_factor==null||o.profit_factor>=1), 'gross win ÷ loss'],
+    ['Payoff', pfmt(o.payoff)+(o.payoff==null?'':'×'), (o.payoff==null||o.payoff>=1), `avg +$${Math.round(o.avg_win)} / −$${Math.round(o.avg_loss)}`],
+    ['Max drawdown', m$(o.max_dd), o.max_dd>=0, o.kelly_pct!=null?`Kelly ${o.kelly_pct}%`:'peak-to-trough'],
+  ];
+  const tiles=kpis.map(([k,v,good,sub])=>`<div class="kpi"><div class="k">${k}</div><div class="v" style="color:${good?'#22c55e':'#ef4444'}">${v}</div><div class="sub">${sub}</div></div>`).join('');
+  const rows=Object.entries(st.providers).map(([p,mm])=>`<tr>
+    <td>${p}</td><td>${mm.n}</td><td>${mm.win_rate}%</td>
+    <td style="color:${mm.expectancy>=0?'#22c55e':'#ef4444'}">${m$(mm.expectancy)}</td>
+    <td>${pfmt(mm.profit_factor)}</td><td>${pfmt(mm.payoff)}${mm.payoff==null?'':'×'}</td>
+    <td style="color:${mm.total>=0?'#22c55e':'#ef4444'};font-weight:700">${m$(mm.total)}</td></tr>`).join('');
+  const caveat=o.n<20?` <span style="color:var(--amber)">· small sample (n=${o.n}) — directional only</span>`:'';
+  el.innerHTML=`<div class="stats-h">📊 Performance <span style="color:var(--dim);font-weight:500;text-transform:none">your real closed trades${caveat}</span>${sparkline(o.curve)}</div>
+    <div class="kpis">${tiles}</div>
+    <table class="ptable"><thead><tr><th>Provider</th><th>N</th><th>Win%</th><th>Expectancy</th><th>PF</th><th>Payoff</th><th>Total</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+function renderWallet(d){
+  const sl=d.sleeve||{}, principal=d.start||0;
+  const sleeveEq=sl.equity!=null?sl.equity:principal, reserve=sl.withdrawn||0;
+  const total=sleeveEq+reserve, profit=total-principal, pc=profit>=0?'#22c55e':'#ef4444';
+  const resPct=total>0?reserve/total*100:0;
+  document.getElementById('wallet').innerHTML=`
+    <div class="wcell"><div class="wk">Principal</div><div class="wv">${money(principal)}</div></div>
+    <div class="wsep"></div>
+    <div class="wcell"><div class="wk">Sleeve · at risk</div><div class="wv" style="color:#38bdf8">${money(sleeveEq)}</div></div>
+    <div class="wcell"><div class="wk">Reserve · banked 🔒</div><div class="wv" style="color:#22c55e">${money(reserve)}</div></div>
+    <div class="wbar" title="green = banked & safe · blue = still at risk"><div class="res" style="width:${resPct}%"></div><div class="slv" style="width:${100-resPct}%"></div></div>
+    <div class="wsep"></div>
+    <div class="wcell"><div class="wk">Total</div><div class="wv">${money(total)}</div></div>
+    <div class="wcell"><div class="wk">Profit</div><div class="wv" style="color:${pc}">${profit>=0?'+':''}${money(profit)} <span style="font-size:12px">(${principal?(profit/principal*100).toFixed(1):0}%)</span></div></div>`;
+}
+function renderMilestone(sl){
+  const el=document.getElementById('milestone');
+  if(sl&&sl.milestone_due>100){
+    el.className='disc ok'; el.style.borderColor='#f59e0b'; el.style.color='#fde68a';
+    el.innerHTML=`💰 <b>Milestone — bank $${Math.round(sl.milestone_due).toLocaleString()}</b> to reserve (peak $${Math.round(sl.peak).toLocaleString()}, withdrawn $${Math.round(sl.withdrawn).toLocaleString()}). <button class="take" style="padding:5px 12px;margin-left:6px" onclick="withdraw(${Math.round(sl.milestone_due)})">Bank it</button>`;
+  }else el.innerHTML='';
+}
+async function withdraw(amt){
+  if(!confirm('Record a $'+amt.toLocaleString()+' withdrawal to your cash-locked reserve?'))return;
+  await fetch('/api/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'withdraw',amount:amt})});
+  refresh();
+}
+
+let BLOCKED=false;
+async function overrideDay(on){
+  if(on && !confirm('Trade through today’s day-stop?\n\nThe breaker tripped for a reason (losing streak / risk budget). Only override with a clear edge — size small and honor every stop. It auto-resets tomorrow.')) return;
+  await fetch('/api/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'override_daystop',on})});
+  refresh();
+}
+function renderDiscipline(x,sl){
+  const el=document.getElementById('discipline'); if(!x){el.innerHTML='';return;}
+  const ov=window.DAY_OVERRIDE;                 // day-stop deliberately overridden for today
+  BLOCKED=(x.blocked && !ov) || (sl&&sl.halted);   // sleeve −20% halt is NEVER overridable
+  if(sl&&sl.halted){
+    el.className='disc stop';
+    el.innerHTML=`🛑 <b>−20% DRAWDOWN HALT</b> — sleeve $${Math.round(sl.equity).toLocaleString()} vs HWM $${Math.round(sl.hwm).toLocaleString()}. Trading stopped, manual review required.`;
+    return;
+  }
+  const thr=sl?` · Throttle ${sl.throttle}x${sl.drawdown<-0.1?' (DD '+sl.drawdown+'%)':''}`:'';
+  if(x.blocked && !ov){
+    el.className='disc stop';
+    el.innerHTML=`🛑 <b>DAY STOPPED</b> — ${x.reasons.join(' · ')}. <span class="m">No new trades — after a streak like this, the breaker is usually right.</span> <button class="skip" onclick="overrideDay(true)" title="deliberately trade through the day-stop for the rest of today">⚠ Override today</button>`;
+  }else if(x.blocked && ov){
+    el.className='disc stop'; el.style.background='rgba(245,158,11,.12)'; el.style.borderColor='rgba(245,158,11,.5)';
+    el.innerHTML=`⚠ <b style="color:var(--amber)">DAY-STOP OVERRIDDEN</b> — trading through: ${x.reasons.join(' · ')}. <span class="m">Breaker bypassed for today — size small, honor every stop.</span> <button class="skip" onclick="overrideDay(false)">Turn off</button>`;
+  }else{
+    el.style.background=''; el.style.borderColor='';
+    el.className='disc ok';
+    const budget=(x.eff_budget_R!=null?x.eff_budget_R:x.budget_R);
+    const house=x.house_active?` · 🔥 <b>House +${x.extra_R}R</b> (budget→${budget}R, peak +${x.peak_R}R)`:'';
+    el.innerHTML=`✅ <b>Discipline OK</b> <span class="m">Risk ${x.deployed_R}/${budget}R · Heat ${x.heat_R}/${x.max_heat_R}R · Realized ${x.realized_R>=0?'+':''}${x.realized_R}R (stop ${x.daily_stop_R}R) · Streak ${x.consec_losses}/${x.max_consec}${house}${thr}</span>`;
+  }
+}
+
+function ring(score,color){
+  const r=26,c=2*Math.PI*r,off=c*(1-score/100);
+  return `<svg class="ring" width="72" height="72" viewBox="0 0 72 72">
+    <circle cx="36" cy="36" r="${r}" fill="none" stroke="#1f2a3d" stroke-width="7"/>
+    <circle cx="36" cy="36" r="${r}" fill="none" stroke="${color}" stroke-width="7"
+      stroke-linecap="round" stroke-dasharray="${c}" stroke-dashoffset="${off}"
+      transform="rotate(-90 36 36)"/>
+    <text x="36" y="34" text-anchor="middle" fill="#e6eef9" font-size="19" font-weight="700">${score}</text>
+    <text x="36" y="48" text-anchor="middle" fill="#5c6b86" font-size="9">/100</text></svg>`;
+}
+
+function cell(k,v,cls=''){return `<div class="cell"><div class="k">${k}</div><div class="v ${cls}">${v}</div></div>`}
+
+function planHTML(s){
+  const p=s.plan;
+  if(s.paper && !s.manual_override) return `<div class="warn" style="color:var(--blue)">👁 <b>PAPER MODE</b> — ${s.provider} is distrusted (paper-only until it proves out on your logged fills). Tracking hypothetical fills, no live risk.</div>`;
+  if(!p.ok) return `<div class="warn">⚠ ${p.reason}</div>`;
+  const paperbanner=(s.paper&&s.manual_override)?`<div class="warn" style="color:var(--amber)">👁 <b>${s.provider} is PAPER</b> (data says avoid) — this is a <b>DISCRETIONARY 1-lot</b> trade on YOUR read. Size is hard-capped at 1.</div>`:'';
+  const mult=s.size_mult!=null&&s.size_mult<1?` <span style="color:var(--dim)">(×${s.size_mult} ${s.provider})</span>`:'';
+  const floor=p.min_position?' <span style="color:var(--amber)">· min 1-lot (edge thin at your size)</span>':'';
+  const tp=p.tp1_pct||40, tr=p.trail_pct||25, st=p.stop_pct||30;
+  let ex;
+  if(p.contracts>=3) ex=`Sell <b>${p.sold}</b> at <b>$${p.tp1}</b> (+${tp}%) · keep <b>${p.runner}</b> runner → stop BE, trail ${tr}% off peak / EOD`;
+  else if(p.contracts==2) ex=`Sell <b>1</b> at <b>$${p.tp1}</b> (+${tp}%) · trail the 2nd ${tr}% off peak → EOD`;
+  else ex=`Full <b>1</b> lot out at <b>$${p.tp1}</b> (+${tp}%)`;
+  const styp=p.stop_dynamic?(p.stop_reliable?'vol-adjusted':'lotto — may gap through'):'flat (no live Greeks)';
+  const sterms=p.stop_terms?` <span style="color:var(--dim)">[leverage ${p.stop_terms.Omega}× · 1σ move ${p.stop_terms.EM_pct}% · vol ${Math.round(p.stop_terms.sigma*100)}%]</span>`:'';
+  const stopmsg = `🛑 <b>Stop $${p.stop}</b> (−${st}%, ${styp}) — set this in your bracket order${sterms}`
+      + (p.follow_exits?` · <span style="color:var(--dim)">${s.provider} manages, so you can also lean on his trims</span>`
+                       :` · <span style="color:var(--amber)">mandatory — ${s.provider} won't cut the loss for you</span>`);
+  const ss=s.sig&&s.sig.stated_stop;
+  const ssmsg=ss?`<div class="planline" style="color:var(--green)">📌 <b>${s.provider}'s stated stop:</b> ${ss.kind==='underlying'?'exit if the STOCK hits $'+ss.value:ss.kind==='pct'?'−'+ss.value+'% of premium':'$'+ss.value+' premium'} — use his if you're following him</div>`:'';
+  return `${paperbanner}<div class="plan">
+    ${cell('Contracts',p.contracts)}
+    ${cell('Capital','$'+p.capital)}
+    ${cell('Risk','$'+p.risk+' ('+p.risk_pct+'%)','r')}
+    ${cell('Stop','$'+p.stop,'r')}
+    ${cell('Target','$'+p.tp1,'g')}
+  </div><div class="planline">🎯 ${ex}${mult}${floor}</div>${ssmsg}<div class="planline" style="color:var(--amber)">${stopmsg}</div>`;
+}
+
+function ticketHTML(s){
+  const t=s.ticket; if(!t||t.limit==null) return '';
+  const chip=(cls,lbl,val,sub)=>`<span class="tk ${cls}">${lbl} <b>${val}</b>${sub?` <i>${sub}</i>`:''}</span>`;
+  let h='<div class="ticket">';
+  h+=chip('buy','🎯 Limit',`$${t.limit}`,`bid ${t.bid??'—'} / ask ${t.ask??'—'}`);
+  h+=chip('stop','🛑 Stop',`$${t.stop}`,`−${t.stop_pct}%`);
+  h+=chip('tp','🥇 T1',`$${t.t1}`,`+${t.t1_pct}%`);
+  h+=chip('tp','🥈 T2',`$${t.t2}`,`+${t.t2_pct}%`);
+  if(t.t3!=null) h+=chip('tp','🏆 T3',`$${t.t3}`,`+${t.t3_pct}%`);
+  if(t.rr3!=null) h+=chip('rr','⚖️ R:R',`${t.rr1}→${t.rr2}→${t.rr3}×`,'T1·T2·T3');
+  else if(t.rr2!=null) h+=chip('rr','⚖️ R:R',`${t.rr1}×→${t.rr2}×`,'T1→T2');
+  if(t.chasing_pct) h+=`<span class="tk warn">⚠ chasing +${t.chasing_pct}% vs provider $${t.prov_entry}</span>`;
+  if(t.wide) h+=`<span class="tk warn">⚠ wide spread ${t.spread_pct}% — limit only</span>`;
+  h+='</div>';
+  h+=sizingHTML(s);
+  h+=`<div class="slive" id="slive-${s.id}">${liveRecoHTML(s.live)}</div>`;   // live move% + reco (patched)
+  h+=`<div class="coach" id="coach-${s.id}">${coachHTML(s)}</div>`;            // grade/liq/BE/exit (patched)
+  return h;
+}
+function liqGrade(s){
+  const t=s.ticket||{}, sp=t.spread_pct, mid=t.mid;
+  if(mid!=null&&mid<0.15) return {k:'lo',emoji:'🔴',word:'penny',txt:`$${mid} · slippage trap`};
+  if(sp==null) return {k:'mid',emoji:'🟡',word:'ok',txt:'spread n/a'};
+  if(sp<=8)  return {k:'hi', emoji:'🟢',word:'liquid',txt:`spread ${sp}%`};
+  if(sp<=15) return {k:'mid',emoji:'🟡',word:'ok',   txt:`spread ${sp}%`};
+  return {k:'lo',emoji:'🔴',word:'thin',txt:`spread ${sp}% · slippage`};
+}
+function grade(s){
+  const t=s.ticket||{}, L=s.live;
+  const chase = L? L.chase_pct : (t.chasing_pct||0);
+  let entry = chase<=8?30 : chase<=15?22 : chase<=25?12 : 4;   // entry quality (buy-zone best)
+  if(L&&L.level==='better') entry=30;
+  if(L&&L.level==='skip') entry=0;
+  const lk=liqGrade(s).k; const liq = lk==='hi'?25 : lk==='mid'?15 : 3;
+  const prov = s.tier_key==='HIGH'?20 : s.tier_key==='MEDIUM'?15 : s.tier_key==='LOW'?9 : 4;
+  const rr=t.rr2||0; const rrs = rr>=2?15 : rr>=1.5?10 : rr>=1?5 : 0;
+  let sc=entry+liq+prov+rrs; if(s.sig&&s.sig.lotto) sc-=20;
+  sc=Math.max(0,Math.min(100,sc));
+  return {g: sc>=80?'A':sc>=65?'B':sc>=50?'C':'D', sc};
+}
+function breakeven(s){
+  const t=s.ticket||{}, stop=t.stop_pct||30, t1=t.t1_pct||28, t2=t.t2_pct||64;
+  const blended=t1/3 + t2*2/3;                       // scale ⅓ @ T1, run ⅔ to T2
+  const be=Math.round(stop/(stop+blended)*100);
+  let cmp='';
+  const st=(window.STATS&&window.STATS.providers&&window.STATS.providers[s.provider])||null;
+  if(st&&st.n>=5&&st.win_rate!=null) cmp=st.win_rate>=be?` · you ${st.win_rate}% ✅`:` · you ${st.win_rate}% ⚠`;
+  return {be, cmp};
+}
+function exitLadder(n,t){
+  n=Math.max(1,Math.round(n||1));
+  const t3=t.t3||t.t2;
+  if(n===1) return `🔒 <b>1 lot:</b> run to $${t3}; if it tags $${t.t1}, slide stop→BE $${t.limit}`;
+  if(n===2) return `🔒 <b>Exit 2 lots:</b> sell <b>1</b> @ $${t.t1} → stop→BE $${t.limit} → run <b>1</b> to $${t3}`;
+  const a=Math.max(1,Math.round(n/3)), b=Math.max(1,Math.round(n/3)), c=n-a-b;   // thirds across T1/T2/T3
+  return `🔒 <b>Exit ${n} lots:</b> sell <b>${a}</b> @ $${t.t1} · <b>${b}</b> @ $${t.t2} · run <b>${c}</b> to $${t3} <i>(stop→BE $${t.limit} after 1st)</i>`;
+}
+function sizingHTML(s){
+  const p=s.plan; if(!p||!p.ok||p.risk==null) return '';
+  const basis=p.risk_basis?` <i>(${p.risk_basis})</i>`:'';
+  return `<div class="sizerow"><span class="tk sz">🎲 Risk <b>${p.risk_pct}%</b> ≈ <b>$${Math.round(p.risk)}</b>`
+    +` → <b>${p.contracts}</b> ×$${p.entry}${basis}</span>`
+    +`<span class="tk">🛑 stop $${p.stop} · exit at your fill</span></div>`;
+}
+function posExitLadder(p){
+  // 3-tier exit ladder for the ACTUAL held quantity, off YOUR fill — recomputes live as you trim
+  const n=p.qty_remaining||0;
+  if(!n||p.state==='CLOSED'||p.state==='CUT'||!p.entry) return '';
+  const t1p=p.tp1_pct||30, t2p=t1p+35, t3p=t1p+75;
+  const t1=+(p.entry*(1+t1p/100)).toFixed(2), t2=+(p.entry*(1+t2p/100)).toFixed(2),
+        t3=+(p.entry*(1+t3p/100)).toFixed(2), be=+(+p.entry).toFixed(2);
+  if(n===1) return `🔒 <b>1 left:</b> run to $${t3} (+${t3p}%); if it tags $${t1}, move stop→BE $${be}`;
+  if(n===2) return `🔒 <b>2 left:</b> sell <b>1</b> @ $${t1} → stop→BE $${be} → run <b>1</b> to $${t3}`;
+  const a=Math.max(1,Math.round(n/3)), b=Math.max(1,Math.round(n/3)), c=n-a-b;
+  return `🔒 <b>${n} left:</b> sell <b>${a}</b> @ $${t1} · <b>${b}</b> @ $${t2} · run <b>${c}</b> to $${t3} <i>(stop→BE $${be} after 1st)</i>`;
+}
+function coachHTML(s){
+  if(!s.ticket||s.ticket.limit==null) return '';
+  const g=s.grade||grade(s), lq=liqGrade(s), be=breakeven(s), t=s.ticket;
+  // contracts to scale: grade-tilted plan size for auto providers; the grade's suggested lots for manual
+  const n = s.manual_override ? ((s.grade&&s.grade.suggest_lots)||1) : ((s.plan&&s.plan.contracts)||1);
+  let h='<div class="coachrow">';
+  h+=`<span class="tk gr-${g.g}">🎓 Grade <b>${g.g}</b></span>`;
+  h+=`<span class="tk">💧 ${lq.emoji} <b>${lq.word}</b> <i>${lq.txt}</i></span>`;
+  h+=`<span class="tk">🧮 Break-even <b>${be.be}%</b><i>${be.cmp}</i></span>`;
+  if(s.grade&&s.grade.mult&&s.grade.mult!==1) h+=`<span class="tk gr-${g.g}">📦 size ${s.grade.mult}×</span>`;
+  h+='</div>';
+  h+=`<div class="coachex">${exitLadder(n,t)}</div>`;
+  return h;
+}
+function liveRecoHTML(l){
+  if(!l||l.move_pct==null) return '';
+  const mv=l.move_pct>0?`📈 +${l.move_pct}%`:(l.move_pct<0?`📉 ${l.move_pct}%`:`● 0%`);
+  return `<span class="lvmove">${mv} since signal</span>`
+    +`<span class="lvnow">now $${l.mid}${l.ask!=null?` · ask $${l.ask}`:''}</span>`
+    +`<span class="lvreco ${l.level}">${l.text}</span>`;
+}
+function watchBadge(s){
+  const e=s.entered_from_watch; if(!e) return '';
+  const w=e.watched_at!=null?` <span style="color:var(--muted)">(watched $${e.watched_at})</span>`:'';
+  if(e.provisional&&e.candidates&&e.candidates.length){   // ambiguous fill -> confirm or switch
+    const sw=e.candidates.map(c=>`<button class="skip" onclick="act('${s.id}','relink_fill',{target:'${c.id}'})" title="this fill was actually ${c.label} (watched $${c.watched_at})">→ ${c.label}</button>`).join('');
+    return `<div class="planline" style="color:var(--amber)">⚠ entered $${e.entered_at}${w} — assumed, confirm?
+      <button class="take" onclick="act('${s.id}','confirm_fill')">✓ ${s.sig.ticker} ${s.sig.strike}${s.sig.type}</button>${sw}</div>`;
+  }
+  const alt=e.alternatives&&e.alternatives.length?` <span style="color:var(--muted)">· alt: ${e.alternatives.join(', ')}</span>`:'';
+  return `<div class="planline" style="color:var(--green)">✅ entered $${e.entered_at}${w}${alt}</div>`;
+}
+function logForm(s){   // record a trade you already filled outside the desk (works even when day-stopped)
+  return `<span class="logf">📝 filled it?
+    <input class="px mono" id="le-${s.id}" placeholder="in" style="width:50px">
+    <input class="px mono" id="lx-${s.id}" placeholder="out" style="width:50px">
+    <input class="px mono" id="lq-${s.id}" placeholder="qty" value="1" style="width:42px">
+    <button class="take" onclick="logTrade('${s.id}')" title="log this completed round-trip">Log</button></span>`;
+}
+async function logTrade(id){
+  const e=document.getElementById('le-'+id),x=document.getElementById('lx-'+id),q=document.getElementById('lq-'+id);
+  if(!e.value||!x.value){alert('enter both your entry (in) and exit (out) price');return;}
+  const r=await fetch('/api/action',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({id,action:'log_trade',entry:parseFloat(e.value),exit:parseFloat(x.value),qty:parseInt(q.value||'1')})});
+  const j=await r.json().catch(()=>({}));
+  alert(j&&j.realized!=null?('✅ Logged '+(j.realized>=0?'+':'−')+'$'+Math.abs(Math.round(j.realized))):('Could not log: '+((j&&j.error)||'?')));
+  refresh();
+}
+function actionsHTML(s){
+  if(s.status==='WATCHING'){
+    const lvl=s.sig.premium!=null?`@ $${s.sig.premium}`:'';
+    return `<div class="actions"><span class="statustag WATCHING">👀 WATCHING ${lvl}</span>
+      <span class="watchnote">provider eyeing — not filled yet</span>
+      <input class="px mono" id="px-${s.id}" placeholder="fill" value="${typed[s.id]??''}" style="width:60px">
+      <button class="take" onclick="act('${s.id}','enter')" title="mark as entered at this fill price">Mark entered</button>
+      <button class="skip" onclick="act('${s.id}','skip')">Dismiss</button></div>`;
+  }
+  if(s.status==='NEW'){
+    if(s.verified===false) return `<div class="actions"><span class="statustag SKIPPED">❌ misparse — not a real contract</span>
+      <button class="skip" onclick="act('${s.id}','skip')">Dismiss</button></div>`;
+    if(window.KILLED&&window.KILLED[s.provider]) return `<div class="actions"><span class="statustag SKIPPED">⛔ ${s.provider} disabled (neg edge ${window.KILLED[s.provider]}%)</span>
+      <button class="skip" onclick="act('${s.id}','skip')">Skip</button> ${logForm(s)}</div>`;
+    if(BLOCKED) return `<div class="actions"><span class="statustag SKIPPED">🛑 day stopped</span>
+      <button class="skip" onclick="act('${s.id}','skip')">Skip</button> ${logForm(s)}</div>`;
+    if(s.paper){
+      if(s.manual_override) return `<div class="actions"><span class="statustag" style="background:rgba(245,158,11,.15);color:var(--amber)">👁 PAPER · your call</span>
+        <input class="px mono" id="px-${s.id}" placeholder="fill" value="${typed[s.id]??(s.plan.ok?s.plan.entry:(s.sig.premium||''))}">
+        <input class="px mono" id="qty-${s.id}" placeholder="qty" value="${(s.grade&&s.grade.suggest_lots)||1}" style="width:52px" title="contracts YOU actually took (grade-suggested default)">
+        <button class="take" onclick="act('${s.id}','take')" title="discretionary — logs your real size & fill">Take</button>
+        <button class="skip" onclick="act('${s.id}','skip')">Dismiss</button></div>`;
+      return `<div class="actions"><span class="statustag" style="background:rgba(56,189,248,.15);color:var(--blue)">👁 PAPER — tracking only</span>
+        <button class="skip" onclick="act('${s.id}','skip')">Dismiss</button></div>`;
+    }
+    const q=(s.plan.ok?s.plan.entry:(s.sig.premium||''));
+    const dq=(s.plan.ok?s.plan.contracts:1);
+    return `<div class="actions">
+      <input class="px mono" id="px-${s.id}" placeholder="fill" value="${typed[s.id]??q}">
+      <input class="px mono" id="qty-${s.id}" placeholder="qty" value="${dq}" style="width:52px" title="contracts YOU actually took">
+      <button class="take" onclick="act('${s.id}','take')">Take</button>
+      <button class="skip" onclick="act('${s.id}','skip')">Skip</button> ${logForm(s)}</div>`;
+  }
+  if(s.status==='TAKEN'){
+    return `<div class="actions"><span class="statustag TAKEN">TAKEN</span>
+      <input class="px mono" id="px-${s.id}" placeholder="exit" value="${typed[s.id]??''}">
+      <button class="close" onclick="act('${s.id}','close')">Close</button>
+      <button class="skip" onclick="act('${s.id}','skip')">Cut</button></div>`;
+  }
+  const rp=s.plan&&s.rp!==undefined?'':'';
+  return `<div class="actions"><span class="statustag ${s.status}">${s.status}</span></div>`;
+}
+
+function card(s){
+  const [col,bg]=TIER[s.tier_key]||TIER.LOW;
+  const g=s.sig;
+  const title=`${g.ticker} ${g.strike}${g.type}`;
+  const meta=[g.dte!=null?g.dte+'DTE':null,g.premium?'@$'+Number(g.premium).toFixed(2):null].filter(Boolean).join(' · ');
+  const o=s.opt;
+  const optLine=(o&&!o.error&&(o.delta!=null||o.iv!=null||o.spread_pct!=null))
+    ?`<div class="sub">📐 option ${o.delta!=null?'Δ'+o.delta:''}${o.iv!=null?' · IV '+Math.round(o.iv*100)+'%':''}${o.spread_pct!=null?' · spread '+o.spread_pct+'%':''}${o.mid!=null?' · mid $'+o.mid:''}</div>`:'';
+  const vb=s.verified===true?'<span class="badge" style="background:rgba(34,197,94,.15);color:var(--green)">✓ IBKR verified</span>'
+    :s.verified===false?'<span class="badge" style="background:rgba(239,68,68,.18);color:var(--red)">❌ unverified</span>':'';
+  const head=`<div class="top">
+      <div>${ring(s.score,col)}</div>
+      <div class="head">
+        <div class="sig">${title}
+          <span class="badge tier">${s.tier_key}</span>
+          <span class="badge prov">${s.provider}</span>
+          ${g.lotto?'<span class="badge lotto">Lotto</span>':''}
+          ${vb}
+        </div>
+        <div class="sub mono">${s.ts} · ${meta}</div>
+        ${s.raw?`<div class="sub" style="color:var(--dim)">📩 "${s.raw.replace(/</g,'&lt;')}"</div>`:''}
+        ${s.sig&&s.sig.assumed_call?`<div class="sub" style="color:var(--amber)">↔ no C/P in the signal — assumed <b>CALL</b>; verify direction before taking</div>`:''}
+        ${(s.provider_events&&s.provider_events.length)?`<div class="sub" style="color:var(--blue)">💬 ${s.provider} update: "${((s.last_provider_update||s.provider_events.slice(-1)[0]).raw||'').replace(/</g,'&lt;')}"${(s.last_provider_update||{}).pct_up?` · +${s.last_provider_update.pct_up}%`:''}</div>`:''}
+        ${s.behavior&&s.behavior.recommendation?`<div class="sub" style="color:var(--muted)">🧭 <b>${s.behavior.recommendation}</b> · ${s.behavior.note||''}${s.behavior.cuts_losers===false?' <span style="color:var(--amber)">⚠ hides losers — set your own stop</span>':''}</div>`:''}
+        ${s.cosign?`<div class="sub" style="color:var(--amber)">🔗 also called by <b>${s.cosign.join(', ')}</b> — same correlated cluster: this is <b>ONE bet</b>, don't size it 4×</div>`:''}
+        ${s.verified===false?`<div class="sub" style="color:var(--red)">⚠ ${s.verify_note||'contract not found at IBKR — do not trade'}</div>`:''}
+        ${s.evidence?`<div class="sub">📊 ${s.evidence}</div>`:''}
+        ${s.tech&&s.tech.ind?`<div class="sub">📈 <b>${s.tech.label}</b> · px ${s.tech.ind.price} · VWAP ${s.tech.ind.vwap} · RSI ${s.tech.ind.rsi} · BB ${s.tech.ind.bb_low}–${s.tech.ind.bb_up}</div>`:''}
+        ${optLine}
+        <div class="reasons">${(s.reasons||[]).join(' · ')}</div>
+      </div>
+    </div>`;
+  if(s.pos){   // ONE card: a taken trade morphs into its live management surface
+    return `<div class="card status-${s.pos.state}" style="--tier:${col};--tierbg:${bg}">${head}${posBody(s.pos)}</div>`;
+  }
+  return `<div class="card status-${s.status}" style="--tier:${col};--tierbg:${bg}">${head}${watchBadge(s)}${ticketHTML(s)}${planHTML(s)}${actionsHTML(s)}</div>`;
+}
+
+async function act(id,action,extra){
+  const el=document.getElementById('px-'+id), qel=document.getElementById('qty-'+id);
+  const body={id,action,...(extra||{})}; if(el&&el.value) body.price=parseFloat(el.value);
+  if(qel&&qel.value&&action==='take') body.qty=parseInt(qel.value);
+  const r=await fetch('/api/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const j=await r.json().catch(()=>({}));
+  if(j&&j.blocked){alert('🛑 Blocked by discipline: '+(j.reasons||[]).join(' · '));}
+  delete typed[id]; refresh();
+}
+
+async function refresh(){
+  try{
+    const r=await fetch('/api/signals'); const d=await r.json();
+    document.getElementById('dot').style.background='var(--green)';
+    const grow=d.start?((d.account/d.start-1)*100):0;
+    document.getElementById('acct').innerHTML=`$${Number(d.account).toLocaleString(undefined,{maximumFractionDigits:0})} <span style="color:${grow>=0?'#22c55e':'#ef4444'}">(${grow>=0?'+':''}${grow.toFixed(1)}%)</span>`;
+    document.getElementById('risk').textContent=d.risk+'%';
+    let S=d.signals||[];
+    renderWallet(d);
+    renderStats(d.stats);
+    renderSources(d.sources,d.now);
+    window.DAY_OVERRIDE=d.day_override;
+    renderDiscipline(d.discipline,d.sleeve);
+    renderMilestone(d.sleeve);
+    renderPending(d.pending);
+    renderPositions(d.positions);
+    window.KILLED=d.killed||{};
+    document.getElementById('n').textContent=S.length;
+    document.getElementById('nt').textContent=S.filter(x=>x.status==='TAKEN'||x.status==='CLOSED').length;
+    document.getElementById('ns').textContent=S.filter(x=>x.status==='SKIPPED').length;
+    S=S.filter(x=>!muted.has(x.provider));            // apply channel filter
+    S.sort((a,b)=>(Date.parse(b.iso||0)-Date.parse(a.iso||0)));   // newest first (section order set below)
+    // group into sections + counts, then render the top filter bar every refresh
+    const groups={live:[],new:[],watch:[],closed:[],skip:[]};
+    S.forEach(s=>groups[secOf(s)].push(s));
+    const counts=Object.fromEntries(Object.entries(groups).map(([k,v])=>[k,v.length]));
+    renderSortbar(counts);
+    // capture in-progress typing before re-render
+    document.querySelectorAll('input.px').forEach(i=>{const id=i.id.slice(3);if(i.value)typed[id]=i.value;});
+    const feed=document.getElementById('feed');
+    const ORDER=['live','new','watch','closed','skip'];   // display order of sections
+    const shown=S.filter(s=>secOn[secOf(s)]);
+    if(!shown.length){
+      const sigE='EMPTY|'+JSON.stringify(secOn)+'|'+S.length;
+      if(feed.dataset.sig!==sigE){feed.dataset.sig=sigE;
+        feed.innerHTML=`<div class="empty"><div class="big">🫧</div>Nothing to show for this filter.<br>Pick a section in the bar above.</div>`;}
+      return;
+    }
+    // re-render only on STRUCTURAL change (state/qty/realized/events/filter) — live P&L is patched separately
+    const pkey=s=>s.pos?[s.pos.state,s.pos.qty_remaining,s.pos.realized,(s.pos.provider_events||[]).length,
+      (s.pos.user_actions||[]).length,(s.pos.live_alerts||[]).length,(s.pos.suggested||{}).raw||''].join(','):'';
+    const sig=S.map(s=>s.id+s.status+s.score+s.tier_key+((s.plan||{}).contracts||'')+pkey(s)).join('|')
+              +'|'+BLOCKED+'|'+Object.keys(window.KILLED||{}).join(',')+'|'+JSON.stringify(secOn);
+    if(sig!==feed.dataset.sig){
+      feed.dataset.sig=sig;
+      const hdr=(k,n)=>`<div class="sechdr">${SECLBL[k]} <span class="secn">${n}</span><span class="secline"></span></div>`;
+      let html='';
+      ORDER.forEach(k=>{
+        if(!secOn[k]||!groups[k].length) return;
+        html+=hdr(k, groups[k].length);
+        html+=(k==='skip'?'<div class="skipwrap">':'')+groups[k].map(card).join('')+(k==='skip'?'</div>':'');
+      });
+      feed.innerHTML=html;
+    }
+    // always patch live P&L lines in place (smooth, no card blink)
+    S.forEach(s=>{ if(s.pos){ POS[s.pos.id]=s.pos; const el=document.getElementById('live-'+s.pos.id);
+      if(el) el.innerHTML=liveLineHTML(s.pos); } });
+    // patch live move% + recommendation, and the coach chips (grade/liq/BE/exit) on un-taken cards
+    window.STATS=d.stats;
+    S.forEach(s=>{ const el=document.getElementById('slive-'+s.id); if(el) el.innerHTML=liveRecoHTML(s.live);
+      const ce=document.getElementById('coach-'+s.id); if(ce) ce.innerHTML=coachHTML(s); });
+  }catch(e){document.getElementById('dot').style.background='var(--red)';}
+}
+refresh(); setInterval(refresh,1500);
+</script>
+</body>
+</html>

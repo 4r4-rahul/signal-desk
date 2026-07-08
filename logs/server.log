@@ -1,0 +1,140 @@
+----------------------------------------
+Exception occurred during processing of request from ('127.0.0.1', 51624)
+Traceback (most recent call last):
+  File "/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/socketserver.py", line 318, in _handle_request_noblock
+    self.process_request(request, client_address)
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/socketserver.py", line 349, in process_request
+    self.finish_request(request, client_address)
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/socketserver.py", line 362, in finish_request
+    self.RequestHandlerClass(request, client_address, self)
+    ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/socketserver.py", line 766, in __init__
+    self.handle()
+    ~~~~~~~~~~~^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/http/server.py", line 496, in handle
+    self.handle_one_request()
+    ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/http/server.py", line 484, in handle_one_request
+    method()
+    ~~~~~~^^
+  File "/Users/rahul/Workspace/Copy trading/server.py", line 578, in do_GET
+    return self._send(200, {"account": E.ACCOUNT, "risk": E.RISK_PCT, "start": START_ACCOUNT,
+           ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                            "now": datetime.now(ET).isoformat(),
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<2 lines>...
+                            "positions": orphans,
+                            ^^^^^^^^^^^^^^^^^^^^^
+                            "pending": PENDING, "signals": sigs, "stats": ST.performance()})
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/rahul/Workspace/Copy trading/server.py", line 536, in _send
+    self.wfile.write(body if isinstance(body, bytes) else json.dumps(body).encode())
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.4_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/socketserver.py", line 845, in write
+    self._sock.sendall(b)
+    ~~~~~~~~~~~~~~~~~~^^^
+BrokenPipeError: [Errno 32] Broken pipe
+----------------------------------------
+Error 1100, reqId -1: Connectivity between IBKR and Trader Workstation has been lost.
+Error 1102, reqId -1: Connectivity between IBKR and Trader Workstation has been restored - data maintained. All data farms are connected: usfarm.nj; cashfarm; usopt; usfarm; euhmds; fundfarm; ushmds; secdefnj.
+Error 1100, reqId -1: Connectivity between IBKR and Trader Workstation has been lost.
+Error 1102, reqId -1: Connectivity between IBKR and Trader Workstation has been restored - data maintained. All data farms are connected: usfarm.nj; cashfarm; usopt; usfarm; euhmds; fundfarm; ushmds; secdefnj.
+Error 1100, reqId -1: Connectivity between IBKR and Trader Workstation has been lost.
+Error 1102, reqId -1: Connectivity between IBKR and Trader Workstation has been restored - data maintained. All data farms are connected: usfarm.nj; cashfarm; usopt; usfarm; euhmds; fundfarm; ushmds; secdefnj.
+Error 322, reqId 12581: Error processing request.-'bX' : cause - Maximum number of account summary requests exceeded; desubscribe to previous request first
+Error 1100, reqId -1: Connectivity between IBKR and Trader Workstation has been lost.
+Error 322, reqId 12581: Error processing request.-'bX' : cause - Maximum number of account summary requests exceeded; desubscribe to previous request first
+Error 1102, reqId -1: Connectivity between IBKR and Trader Workstation has been restored - data maintained. All data farms are connected: usfarm.nj; cashfarm; usopt; usfarm; euhmds; fundfarm; ushmds; secdefnj.
+Error 322, reqId 12582: Error processing request.-'bX' : cause - Maximum number of account summary requests exceeded; desubscribe to previous request first
+Error 1100, reqId -1: Connectivity between IBKR and Trader Workstation has been lost.
+Error 322, reqId 12582: Error processing request.-'bX' : cause - Maximum number of account summary requests exceeded; desubscribe to previous request first
+Error 1102, reqId -1: Connectivity between IBKR and Trader Workstation has been restored - data maintained. All data farms are connected: usfarm.nj; cashfarm; usopt; usfarm; euhmds; fundfarm; ushmds; secdefnj.
+Error 322, reqId 12583: Error processing request.-'bX' : cause - Maximum number of account summary requests exceeded; desubscribe to previous request first
+Error 1100, reqId -1: Connectivity between IBKR and Trader Workstation has been lost.
+Error 322, reqId 12583: Error processing request.-'bX' : cause - Maximum number of account summary requests exceeded; desubscribe to previous request first
+Error 1102, reqId -1: Connectivity between IBKR and Trader Workstation has been restored - data maintained. All data farms are connected: usfarm.nj; cashfarm; usopt; usfarm; euhmds; fundfarm; ushmds; secdefnj.
+Error 322, reqId 12584: Error processing request.-'bX' : cause - Maximum number of account summary requests exceeded; desubscribe to previous request first
+Error 1100, reqId -1: Connectivity between IBKR and Trader Workstation has been lost.
+Error 322, reqId 12584: Error processing request.-'bX' : cause - Maximum number of account summary requests exceeded; desubscribe to previous request first
+Error 1102, reqId -1: Connectivity between IBKR and Trader Workstation has been restored - data maintained. All data farms are connected: usfarm.nj; cashfarm; usopt; usfarm; euhmds; fundfarm; ushmds; secdefnj.
+Error 322, reqId 12585: Error processing request.-'bX' : cause - Maximum number of account summary requests exceeded; desubscribe to previous request first
+Error 1100, reqId -1: Connectivity between IBKR and Trader Workstation has been lost.
+Error 322, reqId 12585: Error processing request.-'bX' : cause - Maximum number of account summary requests exceeded; desubscribe to previous request first
+Error 1102, reqId -1: Connectivity between IBKR and Trader Workstation has been restored - data maintained. The following farms are connected: . The following farms are not connected: usfarm.nj; cashfarm; usopt; usfarm; euhmds; fundfarm; ushmds; secdefnj.
+Error 322, reqId 12586: Error processing request.-'bX' : cause - Maximum number of account summary requests exceeded; desubscribe to previous request first
+Error 1100, reqId -1: Connectivity between IBKR and Trader Workstation has been lost.
+Error 322, reqId 12586: Error processing request.-'bX' : cause - Maximum number of account summary requests exceeded; desubscribe to previous request first
+Error 1102, reqId -1: Connectivity between IBKR and Trader Workstation has been restored - data maintained. All data farms are connected: usfarm.nj; cashfarm; usopt; usfarm; euhmds; fundfarm; ushmds; secdefnj.
+Error 322, reqId 12587: Error processing request.-'bX' : cause - Maximum number of account summary requests exceeded; desubscribe to previous request first
+Error 1100, reqId -1: Connectivity between IBKR and Trader Workstation has been lost.
+Error 322, reqId 12587: Error processing request.-'bX' : cause - Maximum number of account summary requests exceeded; desubscribe to previous request first
+Error 1102, reqId -1: Connectivity between IBKR and Trader Workstation has been restored - data maintained. All data farms are connected: usfarm.nj; cashfarm; usopt; usfarm; euhmds; fundfarm; ushmds; secdefnj.
+Error 322, reqId 12588: Error processing request.-'bX' : cause - Maximum number of account summary requests exceeded; desubscribe to previous request first
+Error 1100, reqId -1: Connectivity between IBKR and Trader Workstation has been lost.
+Error 322, reqId 12588: Error processing request.-'bX' : cause - Maximum number of account summary requests exceeded; desubscribe to previous request first
+Error 1102, reqId -1: Connectivity between IBKR and Trader Workstation has been restored - data maintained. All data farms are connected: usfarm.nj; cashfarm; usopt; usfarm; euhmds; fundfarm; ushmds; secdefnj.
+Error 322, reqId 12589: Error processing request.-'bX' : cause - Maximum number of account summary requests exceeded; desubscribe to previous request first
+Error 1100, reqId -1: Connectivity between IBKR and Trader Workstation has been lost.
+Error 322, reqId 12589: Error processing request.-'bX' : cause - Maximum number of account summary requests exceeded; desubscribe to previous request first
+Error 1102, reqId -1: Connectivity between IBKR and Trader Workstation has been restored - data maintained. All data farms are connected: usfarm.nj; cashfarm; usopt; usfarm; euhmds; fundfarm; ushmds; secdefnj.
+Error 322, reqId 12590: Error processing request.-'bX' : cause - Maximum number of account summary requests exceeded; desubscribe to previous request first
+Error 1100, reqId -1: Connectivity between IBKR and Trader Workstation has been lost.
+Error 322, reqId 12590: Error processing request.-'bX' : cause - Maximum number of account summary requests exceeded; desubscribe to previous request first
+Error 1102, reqId -1: Connectivity between IBKR and Trader Workstation has been restored - data maintained. All data farms are connected: usfarm.nj; cashfarm; usopt; usfarm; euhmds; fundfarm; ushmds; secdefnj.
+Error 322, reqId 12591: Error processing request.-'bX' : cause - Maximum number of account summary requests exceeded; desubscribe to previous request first
+Error 1100, reqId -1: Connectivity between IBKR and Trader Workstation has been lost.
+Error 322, reqId 12591: Error processing request.-'bX' : cause - Maximum number of account summary requests exceeded; desubscribe to previous request first
+Error 1102, reqId -1: Connectivity between IBKR and Trader Workstation has been restored - data maintained. All data farms are connected: usfarm.nj; cashfarm; usopt; usfarm; euhmds; fundfarm; ushmds; secdefnj.
+Error 322, reqId 12592: Error processing request.-'bX' : cause - Maximum number of account summary requests exceeded; desubscribe to previous request first
+Error 1100, reqId -1: Connectivity between IBKR and Trader Workstation has been lost.
+Error 322, reqId 12592: Error processing request.-'bX' : cause - Maximum number of account summary requests exceeded; desubscribe to previous request first
+Error 1102, reqId -1: Connectivity between IBKR and Trader Workstation has been restored - data maintained. All data farms are connected: usfarm.nj; cashfarm; usopt; usfarm; euhmds; fundfarm; ushmds; secdefnj.
+Error 322, reqId 12593: Error processing request.-'bX' : cause - Maximum number of account summary requests exceeded; desubscribe to previous request first
+Error 1100, reqId -1: Connectivity between IBKR and Trader Workstation has been lost.
+Error 322, reqId 12593: Error processing request.-'bX' : cause - Maximum number of account summary requests exceeded; desubscribe to previous request first
+Error 1102, reqId -1: Connectivity between IBKR and Trader Workstation has been restored - data maintained. The following farms are connected: usfarm.nj; cashfarm; usopt; usfarm; fundfarm; ushmds; secdefnj. The following farms are not connected: euhmds.
+Error 322, reqId 12594: Error processing request.-'bX' : cause - Maximum number of account summary requests exceeded; desubscribe to previous request first
+Error 1100, reqId -1: Connectivity between IBKR and Trader Workstation has been lost.
+Error 322, reqId 12594: Error processing request.-'bX' : cause - Maximum number of account summary requests exceeded; desubscribe to previous request first
+Error 1102, reqId -1: Connectivity between IBKR and Trader Workstation has been restored - data maintained. All data farms are connected: usfarm.nj; cashfarm; usopt; usfarm; euhmds; fundfarm; ushmds; secdefnj.
+Error 322, reqId 12595: Error processing request.-'bX' : cause - Maximum number of account summary requests exceeded; desubscribe to previous request first
+Error 1100, reqId -1: Connectivity between IBKR and Trader Workstation has been lost.
+Error 1100, reqId -1: Connectivity between IBKR and Trader Workstation has been lost.
+Error 322, reqId 12595: Error processing request.-'bX' : cause - Maximum number of account summary requests exceeded; desubscribe to previous request first
+Error 1102, reqId -1: Connectivity between IBKR and Trader Workstation has been restored - data maintained. All data farms are connected: usfarm.nj; cashfarm; usopt; usfarm; euhmds; fundfarm; ushmds; secdefnj.
+Error 322, reqId 12596: Error processing request.-'bX' : cause - Maximum number of account summary requests exceeded; desubscribe to previous request first
+Error 1102, reqId -1: Connectivity between IBKR and Trader Workstation has been restored - data maintained. All data farms are connected: usfarm.nj; cashfarm; usopt; usfarm; euhmds; fundfarm; ushmds; secdefnj.
+💹 Compounding: allocation sleeve — start $15,000 → now $15,063.00
+🟢 Signal Desk → http://localhost:8787   (account $15,063, 1.0% risk, 20 tickers loaded)
+   Open that URL, then turn on 'Watch' in the extension. Ctrl+C to stop.
+📡 Live position monitor started (IBKR option prices + Greeks).
+
+⚡ 09:50:52 optionking  TSLA 430C  conf 45/100 LOW
+
+⚡ 09:51:01 mike  MSFT 405C  conf 40/100 SKIP
+
+⚡ 09:51:11 jmt  SPY 751C  conf 73/100 MEDIUM
+
+⚡ 09:52:06 prince  AAPL 315C  conf 65/100 MEDIUM
+Error 1100, reqId -1: Connectivity between IBKR and Trader Workstation has been lost.
+Error 1100, reqId -1: Connectivity between IBKR and Trader Workstation has been lost.
+Error 322, reqId 12596: Error processing request.-'bX' : cause - Maximum number of account summary requests exceeded; desubscribe to previous request first
+Error 1102, reqId -1: Connectivity between IBKR and Trader Workstation has been restored - data maintained. All data farms are connected: usfarm.nj; cashfarm; usopt; usfarm; euhmds; fundfarm; ushmds; secdefnj.
+Error 322, reqId 12597: Error processing request.-'bX' : cause - Maximum number of account summary requests exceeded; desubscribe to previous request first
+Error 1102, reqId -1: Connectivity between IBKR and Trader Workstation has been restored - data maintained. All data farms are connected: usfarm.nj; cashfarm; usopt; usfarm; euhmds; fundfarm; ushmds; secdefnj.
+
+⚡ 10:02:04 mike  MU 1160C  conf 18/100 SKIP
+
+⚡ 10:02:11 mike  MU 715P  conf 25/100 SKIP
+
+⚡ 10:02:19 mike  SPCX 165C  conf 40/100 SKIP
+
+⚡ 10:02:28 mike  QQQ 719C  conf 32/100 SKIP
+
+⚡ 10:02:53 optionking  SPY 751C  conf 55/100 LOW
+
+⚡ 10:19:26 prince  QQQ 722P  conf 47/100 LOW
+
+⚡ 10:38:29 sulker  IWM 295P  conf 59/100 LOW

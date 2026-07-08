@@ -1,0 +1,15 @@
+# secrets — NEVER commit
+.env
+*.key
+
+# python / venv
+.venv/
+__pycache__/
+*.pyc
+
+# data & local db / journals
+data/*.json
+channels/*/*.db
+channels/*/messages.json
+channels/*/journal.csv
+channels/*/live_signals.md

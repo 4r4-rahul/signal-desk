@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "Universal Chat Scraper",
+  "version": "1.1.0",
+  "description": "One-click crash-safe auto-scroll capture of chat/feed history (Discord-aware + generic). Persists to IndexedDB, resumes after crashes, keeps the screen awake. Saves to JSON.",
+  "permissions": ["scripting", "activeTab", "tabs", "storage", "unlimitedStorage", "power"],
+  "host_permissions": ["*://*.discord.com/*", "http://localhost/*", "http://127.0.0.1/*"],
+  "background": { "service_worker": "background.js" },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Chat Scraper"
+  }
+}
