@@ -1,179 +1,144 @@
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-💹 Compounding: allocation sleeve — start $15,000 → now $14,888.00
-🟢 Signal Desk → http://localhost:8787   (account $14,888, 1.0% risk, 20 tickers loaded)
-   Open that URL, then turn on 'Watch' in the extension. Ctrl+C to stop.
-📡 Live position monitor started (IBKR option prices + Greeks).
-
-⚡ 12:29:08 sulker  NVDA 197.5P  conf 54/100 LOW
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-
-⚡ 12:49:45 sulker  AAPL 315C  conf 45/100 LOW
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-
-⚡ 13:08:13 prince_small  AAPL 313.02C  conf 66/100 MEDIUM
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
-API connection failed: TimeoutError()
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open
+API connection failed: ConnectionRefusedError(61, "Connect call failed ('127.0.0.1', 7497)")
+Make sure API port on TWS/IBG is open

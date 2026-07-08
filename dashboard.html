@@ -169,6 +169,19 @@
     padding-left:8px;margin-left:4px;border-left:1px solid var(--line)}
   .sizerow{display:flex;flex-wrap:wrap;gap:7px;margin:8px 0 0}
   .tk.sz{border-color:rgba(168,139,250,.42);background:rgba(168,139,250,.1)} .tk.sz b{color:#c4b5fd}
+  .greekrow{display:flex;flex-wrap:wrap;gap:7px;margin:9px 0 0}
+  .greekrow:empty{display:none}
+  .tk.g-hot{border-color:rgba(239,68,68,.4);background:rgba(239,68,68,.09);color:#fca5a5}
+  .tk.g-warm{border-color:rgba(245,158,11,.38);background:rgba(245,158,11,.09);color:var(--amber)}
+  .tk.g-cool{border-color:rgba(34,197,94,.32);background:rgba(34,197,94,.08);color:#86efac}
+  .verdict{margin:10px 0 2px;padding:8px 12px;border-radius:10px;font-size:13px;border:1px solid}
+  .verdict:empty{display:none}
+  .verdict b{font-weight:800}
+  .verdict .vr{color:var(--muted);font-weight:500}
+  .verdict .va{margin-top:4px;font-size:12px;color:var(--txt);font-family:'JetBrains Mono',ui-monospace,monospace}
+  .verdict.v-take{background:rgba(34,197,94,.12);border-color:rgba(34,197,94,.45)} .verdict.v-take b{color:#4ade80}
+  .verdict.v-small,.verdict.v-wait{background:rgba(245,158,11,.1);border-color:rgba(245,158,11,.42)} .verdict.v-small b,.verdict.v-wait b{color:var(--amber)}
+  .verdict.v-skip{background:rgba(239,68,68,.11);border-color:rgba(239,68,68,.42)} .verdict.v-skip b{color:#fca5a5}
 
   /* live management surface on a taken card */
   .mgmt{margin-top:14px;border-top:1px solid var(--line);padding-top:12px}
@@ -595,10 +608,88 @@ function ticketHTML(s){
   if(t.chasing_pct) h+=`<span class="tk warn">⚠ chasing +${t.chasing_pct}% vs provider $${t.prov_entry}</span>`;
   if(t.wide) h+=`<span class="tk warn">⚠ wide spread ${t.spread_pct}% — limit only</span>`;
   h+='</div>';
+  h+=`<div class="vslot" id="vslot-${s.id}">${verdictHTML(s)}</div>`;          // 🎯 Chip's call (patched)
   h+=sizingHTML(s);
   h+=`<div class="slive" id="slive-${s.id}">${liveRecoHTML(s.live)}</div>`;   // live move% + reco (patched)
   h+=`<div class="coach" id="coach-${s.id}">${coachHTML(s)}</div>`;            // grade/liq/BE/exit (patched)
+  h+=`<div class="greeks" id="greeks-${s.id}">${greeksHTML(s)}</div>`;        // theta/tape/IV/lev/confluence
   return h;
+}
+function verdict(s){   // synthesize every chip into one call
+  const t=s.ticket||{}, L=s.live, o=s.opt||{}, tech=s.tech||{}, sg=s.sig||{};
+  const g=(s.grade||grade(s)).g;
+  const against=tech.label&&tech.label.includes('AGAINST');
+  const aligned=tech.label&&tech.label.includes('ALIGNED');
+  const lvl=L?L.level:null;                          // go | better | caution | skip
+  const D=dteFrom(o.expiry,window.NOW);
+  const decay=(o.theta&&o.mid)?Math.abs(o.theta)/o.mid*100:null;
+  const fast=D===0||(decay!=null&&decay>=40);
+  const rich=o.iv&&tech.rv&&(o.iv/tech.rv>=1.3);
+  const thin=liqGrade(s).k==='lo';
+  const lotto=!!sg.lotto||(o.delta!=null&&Math.abs(o.delta)<0.20);
+  // 1) SKIP
+  if(against) return {c:'skip',head:'🚫 SKIP',reason:'tape is AGAINST you — fighting the trend',act:'pass; wait for the tape to flip'};
+  if(g==='D') return {c:'skip',head:'🚫 SKIP',reason:'grade D — weak execution setup',act:'let it go'};
+  if(lvl==='skip') return {c:'skip',head:'🚫 SKIP',reason:(L&&L.text)?L.text.replace(/^\S+\s*/,''):'entry too far / faded',act:'wait for a real pullback'};
+  if(thin&&lvl==='caution') return {c:'skip',head:'🚫 SKIP',reason:'thin spread + chasing — slippage trap',act:'skip'};
+  // 2) WAIT
+  if(lvl==='caution') return {c:'wait',head:'⏳ WAIT',reason:`paying up +${L.chase_pct}% — R:R thinning`,act:'wait for the buy zone, or 1 lot only'};
+  // 3) TAKE (+ modifiers)
+  let head='✅ TAKE', c='take';
+  if(g==='C'||thin||lotto||rich){ head='⚠ TAKE SMALL'; c='small'; }
+  const acts=[lotto?'size small (lotto)':(g==='A'?'full grade size':'grade size'),
+             fast?'scalp T1 — don’t hold':'scale T1 → run T2/T3'];
+  if(t.stop!=null) acts.push(`set stop $${t.stop}`);
+  const good=[]; if(aligned)good.push('tape with you'); if(s.cosign&&s.cosign.length)good.push('confluence'); if(rich)good.push('IV rich — hold your limit');
+  return {c,head,reason:good.length?good.join(' · '):'clean, buy-zone setup',act:acts.join(' · ')};
+}
+function verdictHTML(s){
+  if(!s.ticket||s.ticket.limit==null||s.status!=='NEW') return '';
+  const v=verdict(s);
+  return `<div class="verdict v-${v.c}">🎯 <b>${v.head}</b> <span class="vr">— ${v.reason}</span><div class="va">→ ${v.act}</div></div>`;
+}
+function dteFrom(exp,nowIso){                       // days to expiry, in ET
+  if(!exp||!nowIso||exp.length<8) return null;
+  const ed=new Date(+exp.slice(0,4),+exp.slice(4,6)-1,+exp.slice(6,8));
+  const td=new Date(+nowIso.slice(0,4),+nowIso.slice(5,7)-1,+nowIso.slice(8,10));
+  return Math.round((ed-td)/86400000);
+}
+function hrsToClose(nowIso){                        // hours until 4pm ET
+  if(!nowIso) return null;
+  const mins=(+nowIso.slice(11,13))*60 + (+nowIso.slice(14,16));
+  return Math.max(0,(16*60-mins)/60);
+}
+function greeksHTML(s){
+  const o=s.opt||{}, t=s.tech||{}, pl=s.plan||{}, now=window.NOW;
+  if(o.mid==null && o.delta==null && !(t.label&&t.label!=='no data')) return '';
+  let h='<div class="greekrow">';
+  const D=dteFrom(o.expiry,now);                    // ⏰ theta / time
+  if(o.theta!=null && o.mid){
+    const dec=Math.round(Math.abs(o.theta)/o.mid*100), zero=D===0, hrs=zero?hrsToClose(now):null;
+    const lbl=zero?`0DTE${hrs!=null?` · ${hrs.toFixed(1)}h left`:''} · θ ${dec}%/day`:`${D} DTE · θ ${dec}%/day`;
+    const cls=(zero||dec>=40)?'g-hot':dec>=20?'g-warm':'g-cool';
+    const note=zero?' — scalp, don’t hold':(dec>=40?' — fast decay':'');
+    h+=`<span class="tk ${cls}">⏰ ${lbl}${note}</span>`;
+  } else if(D!=null){ h+=`<span class="tk">⏰ ${D===0?'0DTE':D+' DTE'}</span>`; }
+  if(t.label && t.label!=='no data'){               // 🌡️ tape (already alignment-aware)
+    const al=t.label.includes('ALIGNED'), ag=t.label.includes('AGAINST');
+    h+=`<span class="tk ${al?'g-cool':ag?'g-hot':'g-warm'}">🌡️ Tape ${t.label}${ag?' — fighting the trend':''}</span>`;
+  }
+  if(o.iv!=null){                                   // 📊 IV vs realized vol
+    const ivp=Math.round(o.iv*100); let tag='',cls='';
+    if(t.rv){ const r=o.iv/t.rv; if(r>=1.3){tag=` · rich ${r.toFixed(1)}×real`;cls='g-warm';} else if(r<=0.85){tag=` · cheap ${r.toFixed(1)}×real`;cls='g-cool';} else tag=' · fair'; }
+    h+=`<span class="tk ${cls}">📊 IV ${ivp}%${tag}</span>`;
+  }
+  const om=(pl.stop_terms||{}).Omega;               // ⚡ leverage + delta
+  if(om||o.delta!=null){
+    const lev=om?`${Math.round(om)}× lev · `:'';
+    h+=`<span class="tk">⚡ ${lev}Δ${o.delta!=null?Math.abs(o.delta).toFixed(2):'—'}</span>`;
+  }
+  if(s.cosign&&s.cosign.length){                    // 🔗 confluence — other providers on the same bet
+    h+=`<span class="tk g-cool">🔗 also called by ${s.cosign.join(', ')}</span>`;
+  }
+  h+='</div>';
+  return h==='<div class="greekrow"></div>'?'':h;
 }
 function liqGrade(s){
   const t=s.ticket||{}, sp=t.spread_pct, mid=t.mid;
@@ -854,9 +945,11 @@ async function refresh(){
     S.forEach(s=>{ if(s.pos){ POS[s.pos.id]=s.pos; const el=document.getElementById('live-'+s.pos.id);
       if(el) el.innerHTML=liveLineHTML(s.pos); } });
     // patch live move% + recommendation, and the coach chips (grade/liq/BE/exit) on un-taken cards
-    window.STATS=d.stats;
+    window.STATS=d.stats; window.NOW=d.now;
     S.forEach(s=>{ const el=document.getElementById('slive-'+s.id); if(el) el.innerHTML=liveRecoHTML(s.live);
-      const ce=document.getElementById('coach-'+s.id); if(ce) ce.innerHTML=coachHTML(s); });
+      const ce=document.getElementById('coach-'+s.id); if(ce) ce.innerHTML=coachHTML(s);
+      const ge=document.getElementById('greeks-'+s.id); if(ge) ge.innerHTML=greeksHTML(s);
+      const ve=document.getElementById('vslot-'+s.id); if(ve) ve.innerHTML=verdictHTML(s); });
   }catch(e){document.getElementById('dot').style.background='var(--red)';}
 }
 refresh(); setInterval(refresh,1500);
