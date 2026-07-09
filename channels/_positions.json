@@ -2362,7 +2362,12 @@
     "tape_at_entry": "ALIGNED \u2713",
     "provider_events": [],
     "user_actions": [],
-    "live_alerts": [],
+    "live_alerts": [
+      {
+        "ts": "2026-07-09T15:45:06.488432-04:00",
+        "alert": "\u23f0 EOD \u2014 flat 0DTE before the close"
+      }
+    ],
     "resigned_events": [],
     "opened": "2026-07-09T13:22:04.751908-04:00",
     "closed": null,

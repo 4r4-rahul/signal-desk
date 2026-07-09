@@ -44,6 +44,18 @@
   .dp-fill.r{background:linear-gradient(90deg,#dc2626,#ef4444)}
   .dp-v{width:74px;text-align:right;font-weight:700;font-family:'JetBrains Mono',ui-monospace,monospace;flex-shrink:0}
   .dp-n{width:56px;text-align:right;color:var(--muted);font-size:11px;flex-shrink:0}
+  #drawdown:empty{display:none}
+  .dd-cur{font-size:13px;margin-bottom:5px}
+  .dd-max{font-size:12px;color:var(--muted);margin-bottom:9px}
+  .dd-gauge{position:relative;height:10px;background:#161e2c;border-radius:5px;overflow:hidden;margin-bottom:9px;
+    border-right:2px solid #ef4444}
+  .dd-fill{height:100%;border-radius:5px}
+  .dd-fill.g{background:#22c55e} .dd-fill.y{background:#f59e0b} .dd-fill.o{background:#fb923c} .dd-fill.r{background:#ef4444}
+  .dd-tier{display:flex;flex-wrap:wrap;align-items:center;gap:10px;font-size:12px}
+  .dd-badge{font-weight:700;padding:3px 10px;border-radius:8px}
+  .dd-badge.g{background:rgba(34,197,94,.15);color:#86efac} .dd-badge.y{background:rgba(245,158,11,.15);color:var(--amber)}
+  .dd-badge.o{background:rgba(251,146,60,.16);color:#fdba74} .dd-badge.r{background:rgba(239,68,68,.16);color:#fca5a5}
+  .dd-rule{color:var(--dim);font-size:11px}
   .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(138px,1fr));gap:10px}
   .kpi{background:rgba(255,255,255,.02);border:1px solid var(--line);border-radius:11px;padding:11px 13px}
   .kpi .k{font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px}
@@ -262,6 +274,7 @@
 <div id="wallet" class="wallet"></div>
 <div id="stats" class="stats"></div>
 <div id="daypnl" class="stats"></div>
+<div id="drawdown" class="stats"></div>
 <div id="sources" class="sources"></div>
 <div id="chipstray" class="chipstray"></div>
 <div id="qualitypack" class="qualitypack"></div>
@@ -513,6 +526,27 @@ function sparkline(curve){
   const last=curve[curve.length-1], col=last>=0?'#22c55e':'#ef4444';
   const zy=(h-(0-mn)/rng*h).toFixed(1);
   return `<svg width="${w}" height="${h}" style="margin-left:auto"><line x1="0" y1="${zy}" x2="${w}" y2="${zy}" stroke="#2a3344" stroke-dasharray="2 2"/><path d="${d}" fill="none" stroke="${col}" stroke-width="1.5" stroke-linejoin="round"/></svg>`;
+}
+function renderDrawdown(dd,acct){
+  const el=document.getElementById('drawdown'); if(!el) return;
+  if(!dd||dd.max_dd==null){el.innerHTML='';return;}
+  const R=acct||1, curPct=dd.current_dd/R*100, maxPct=dd.max_dd/R*100, a=Math.abs(curPct);
+  let tier,tcls;
+  if(a<5){tier='🟢 NORMAL — full size';tcls='g';}
+  else if(a<10){tier='🟡 CAUTION — trim size';tcls='y';}
+  else if(a<15){tier='🟠 CUT SIZE — A/B setups only';tcls='o';}
+  else if(a<20){tier='🔴 DEFENSIVE — A only, 1 lot';tcls='r';}
+  else {tier='🛑 HALT — stop & review';tcls='r';}
+  const cur=dd.underwater
+    ? `🔻 <b style="color:#ef4444">−$${Math.abs(Math.round(dd.current_dd))}</b> (${curPct.toFixed(1)}%) below your high · ${dd.trades_since_hwm} trade${dd.trades_since_hwm!==1?'s':''} since a new high`
+    : `🟢 <b style="color:#22c55e">at a new high</b> — no current drawdown`;
+  const tr=dd.max_dd_trough, when=tr?`bottomed <b>${tr.date}</b> on ${tr.leg} (${tr.provider})`:'';
+  const gauge=Math.min(100,a/20*100);
+  el.innerHTML=`<div class="stats-h">🛡️ Drawdown & Safety</div>
+    <div class="dd-cur">${cur}</div>
+    <div class="dd-max">Max: <b style="color:#ef4444">−$${Math.abs(Math.round(dd.max_dd))}</b> (${maxPct.toFixed(1)}%) · ${when} · from a +$${Math.round(dd.peak_eq)} high${dd.recovered?' · <span style="color:#22c55e">recovered ✓</span>':' · <span style="color:var(--amber)">still underwater</span>'}</div>
+    <div class="dd-gauge"><div class="dd-fill ${tcls}" style="width:${gauge}%"></div></div>
+    <div class="dd-tier"><span class="dd-badge ${tcls}">${tier}</span> <span class="dd-rule">−5% caution · −10% cut · −15% A-only · −20% HALT</span></div>`;
 }
 function renderDayPnl(days){
   const el=document.getElementById('daypnl'); if(!el) return;
@@ -1079,8 +1113,10 @@ async function refresh(){
     document.getElementById('risk').textContent=d.risk+'%';
     let S=d.signals||[];
     window.NOW=d.now; window.STATS=d.stats; window.KILLED=d.killed||{};   // early so quality-pack verdicts are accurate
-    // TODAY P&L: realized (from discipline) + live open unrealized
-    const rzToday=((d.discipline&&d.discipline.realized_R)||0)*(d.account/100);
+    // TODAY P&L: realized closed today (from the closed-trades LEDGER — one source of truth, matches Day P&L)
+    const _td=(d.now||'').slice(0,10);
+    const _tr=((d.stats&&d.stats.by_day)||[]).find(x=>x.date===_td);
+    const rzToday=_tr?_tr.total:0;
     window._todayGain=rzToday;
     let openPnl=0;
     S.forEach(s=>{ const p=s.pos; if(p&&p.live&&p.live.pnl_pct!=null&&['OPEN','PARTIALLY_TRIMMED','RUNNER'].includes(p.state))
@@ -1091,6 +1127,7 @@ async function refresh(){
     renderWallet(d);
     renderStats(d.stats);
     renderDayPnl(d.stats&&d.stats.by_day);
+    renderDrawdown(d.stats&&d.stats.drawdown,d.account);
     renderSources(d.sources,d.now);
     window.DAY_OVERRIDE=d.day_override;
     renderChipsTray(d.discipline,d.account);

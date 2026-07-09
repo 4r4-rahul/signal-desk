@@ -68,6 +68,43 @@ def _metrics(trades):
             "avg_hold_min": round(sum(holds) / len(holds) / 60, 1) if holds else None}
 
 
+def _drawdown(trades):
+    """Drawdown analytics on the realized equity curve — current DD (below the all-time high), max DD
+    and WHEN it bottomed, whether it recovered, and how long since a new high. This is what keeps you
+    safe: manage from your CURRENT distance to the peak, not a static all-time number."""
+    trades = sorted(trades, key=lambda t: t.get("closed_utc") or t.get("closed") or "")
+    if not trades:
+        return {}
+    eq = run_peak = hwm = 0.0
+    run_peak_i = hwm_i = -1
+    maxdd = 0.0
+    mdd_peak_i = mdd_trough_i = -1
+
+    def _lab(i):
+        if i < 0 or i >= len(trades):
+            return None
+        t = trades[i]
+        return {"date": (t.get("closed") or t.get("closed_utc") or "")[:10],
+                "leg": f"{t.get('ticker')} {t.get('leg')}", "provider": t.get("provider")}
+
+    for i, t in enumerate(trades):
+        eq += float(t.get("realized") or 0)
+        if eq >= run_peak:
+            run_peak, run_peak_i = eq, i
+        dd = eq - run_peak
+        if dd < maxdd:
+            maxdd, mdd_trough_i, mdd_peak_i = dd, i, run_peak_i
+        if eq >= hwm:
+            hwm, hwm_i = eq, i
+    cur_dd = round(eq - hwm, 2)                        # how far below the all-time high, right now
+    trough_eq = round(sum(float(t.get("realized") or 0) for t in trades[:mdd_trough_i + 1]), 2) if mdd_trough_i >= 0 else 0
+    return {"hwm": round(hwm, 2), "current_eq": round(eq, 2), "current_dd": cur_dd,
+            "underwater": cur_dd < -0.01, "trades_since_hwm": (len(trades) - 1 - hwm_i) if hwm_i >= 0 else 0,
+            "max_dd": round(maxdd, 2), "max_dd_peak": _lab(mdd_peak_i), "max_dd_trough": _lab(mdd_trough_i),
+            "peak_eq": round(sum(float(t.get("realized") or 0) for t in trades[:mdd_peak_i + 1]), 2) if mdd_peak_i >= 0 else 0,
+            "trough_eq": trough_eq, "recovered": eq > trough_eq}
+
+
 def performance():
     """Overall + per-provider performance. Providers ranked by realized total."""
     trades = _load()
@@ -85,7 +122,8 @@ def performance():
     days = [{"date": d, "total": round(sum(v), 2), "n": len(v),
              "wins": sum(1 for x in v if x > 0), "losses": sum(1 for x in v if x < 0)}
             for d, v in sorted(byday.items())]
-    return {"overall": _metrics(trades), "providers": providers, "by_day": days}
+    return {"overall": _metrics(trades), "providers": providers, "by_day": days,
+            "drawdown": _drawdown(trades)}
 
 
 if __name__ == "__main__":
