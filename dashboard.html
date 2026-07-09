@@ -174,6 +174,13 @@
   .tk.g-hot{border-color:rgba(239,68,68,.4);background:rgba(239,68,68,.09);color:#fca5a5}
   .tk.g-warm{border-color:rgba(245,158,11,.38);background:rgba(245,158,11,.09);color:var(--amber)}
   .tk.g-cool{border-color:rgba(34,197,94,.32);background:rgba(34,197,94,.08);color:#86efac}
+  .shadow{margin:8px 0 2px;font-size:12px;padding:6px 11px;border-radius:9px;border:1px solid}
+  .shadow.sh-win{background:rgba(239,68,68,.09);border-color:rgba(239,68,68,.3);color:#fca5a5}
+  .shadow.sh-loss{background:rgba(34,197,94,.09);border-color:rgba(34,197,94,.3);color:#86efac}
+  .shadow.sh-track{background:#151d2b;border-color:var(--line);color:var(--muted)}
+  .skipscore{display:flex;flex-wrap:wrap;gap:12px;align-items:center;font-size:12.5px;padding:9px 11px;margin:2px 0 10px;
+    background:var(--panel);border:1px solid var(--line);border-radius:10px}
+  .skipscore .ss{color:var(--muted)} .skipscore .ss-v{margin-left:auto;font-weight:600;color:var(--txt)}
   .qualitypack{max-width:1080px;margin:0 auto;padding:0 20px}
   .qualitypack:empty{display:none}
   .qp-h{font-size:13px;font-weight:800;color:var(--txt);padding:12px 0 7px;display:flex;align-items:center;gap:9px;flex-wrap:wrap}
@@ -893,6 +900,23 @@ function liveRecoHTML(l){
     +`<span class="lvnow">now $${l.mid}${l.ask!=null?` · ask $${l.ask}`:''}</span>`
     +`<span class="lvreco ${l.level}">${l.text}</span>`;
 }
+function shadowHTML(s){   // for a SKIPPED card: what would've happened if we'd taken it
+  const sh=s.shadow; if(!sh) return '';
+  if(sh.state==='WIN') return `<div class="shadow sh-win">👻 if taken: <b>WON</b> — hit T1 +${sh.t1_pct}% (peak +${sh.peak}%). A good one we passed.</div>`;
+  if(sh.state==='LOSS') return `<div class="shadow sh-loss">👻 if taken: <b>LOST</b> — stopped −${sh.stop_pct}% (peak +${sh.peak}%). Good skip. 👍</div>`;
+  return `<div class="shadow sh-track">👻 tracking: now ${sh.now>=0?'+':''}${sh.now}% · peak +${sh.peak}% · trough ${sh.trough}%</div>`;
+}
+function skipScoreHTML(cards){
+  const sh=(cards||[]).map(c=>c.shadow).filter(Boolean);
+  if(!sh.length) return '';
+  const win=sh.filter(x=>x.state==='WIN'), loss=sh.filter(x=>x.state==='LOSS'), track=sh.filter(x=>x.state==='tracking');
+  const dol=x=>Math.round((x.result_pct/100)*x.ref*100);            // would-be P&L per 1 lot
+  const saved=loss.reduce((a,x)=>a+Math.abs(dol(x)),0), missed=win.reduce((a,x)=>a+dol(x),0), net=saved-missed;
+  const v=(win.length>loss.length)?'⚠ skipping winners — maybe too cautious':((loss.length>win.length)?'✅ your skips dodge losers — good filter':'≈ roughly even');
+  return `<div class="skipscore"><b>👻 Skip scorecard</b> <span class="ss">${win.length} would’ve won · ${loss.length} would’ve lost${track.length?` · ${track.length} live`:''}</span>`
+    +`<span class="ss">net of skipping: <b style="color:${net>=0?'#86efac':'#fca5a5'}">${net>=0?'+':'−'}$${Math.abs(net)}/lot</b></span>`
+    +`<span class="ss-v">${v}</span></div>`;
+}
 function watchBadge(s){
   const e=s.entered_from_watch; if(!e) return '';
   const w=e.watched_at!=null?` <span style="color:var(--muted)">(watched $${e.watched_at})</span>`:'';
@@ -998,7 +1022,7 @@ function card(s){
   if(s.pos){   // ONE card: a taken trade morphs into its live management surface
     return `<div class="card status-${s.pos.state}" style="--tier:${col};--tierbg:${bg}">${head}${posBody(s.pos)}</div>`;
   }
-  return `<div class="card status-${s.status}" style="--tier:${col};--tierbg:${bg}">${head}${watchBadge(s)}${ticketHTML(s)}${planHTML(s)}${actionsHTML(s)}</div>`;
+  return `<div class="card status-${s.status}" style="--tier:${col};--tierbg:${bg}">${head}${shadowHTML(s)}${watchBadge(s)}${ticketHTML(s)}${planHTML(s)}${actionsHTML(s)}</div>`;
 }
 
 async function act(id,action,extra){
@@ -1073,6 +1097,7 @@ async function refresh(){
       ORDER.forEach(k=>{
         if(!secOn[k]||!groups[k].length) return;
         html+=hdr(k, groups[k].length);
+        if(k==='skip') html+=skipScoreHTML(groups[k]);
         html+=(k==='skip'?'<div class="skipwrap">':'')+groups[k].map(card).join('')+(k==='skip'?'</div>':'');
       });
       feed.innerHTML=html;

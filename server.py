@@ -259,6 +259,22 @@ def _live_reco(prov_entry, mid, ask, spread_pct):
             "wide": wide, "level": lvl, "text": txt}
 
 
+def _init_shadow(entry):
+    """Begin shadow-tracking a SKIPPED signal: from here, did it hit OUR T1 (win) or OUR stop (loss)?
+    Records the reference price + our stop/target so the monitor can decide the would-be outcome."""
+    if entry.get("shadow"):
+        return
+    tk, sg = entry.get("ticket") or {}, entry.get("sig") or {}
+    ref = tk.get("limit") or sg.get("premium")
+    if not ref:
+        return
+    entry["shadow"] = {"ref": ref, "stop_pct": (entry.get("plan") or {}).get("stop_pct") or tk.get("stop_pct") or 30,
+                       "t1_pct": tk.get("t1_pct") or 30,
+                       "expiry": _resolve_expiry(sg) or (entry.get("opt") or {}).get("expiry"),
+                       "start_utc": datetime.now(timezone.utc).isoformat(), "state": "tracking",
+                       "peak": 0.0, "trough": 0.0, "now": 0.0}
+
+
 def _pos_alert(p, st, key, text):
     if key in st["fired"]:
         return
@@ -344,6 +360,28 @@ def monitor_loop():
             for k in list(LIVE_SIG):                          # drop stale ids no longer in the feed
                 if k not in {s["id"] for s in SIGNALS}:
                     LIVE_SIG.pop(k, None)
+            # SHADOW TRACK skipped signals: what would've happened if we'd TAKEN them? (win at T1 or stop out?)
+            shadows = [s for s in SIGNALS if s.get("status") == "SKIPPED"
+                       and (s.get("shadow") or {}).get("state") == "tracking" and (s.get("sig") or {}).get("premium")]
+            dirty = False
+            for s in shadows[-15:]:
+                sh, sg = s["shadow"], s["sig"]
+                exp = sh.get("expiry") or _resolve_expiry(sg) or (s.get("opt") or {}).get("expiry")
+                q = MK.option_quote(sg["ticker"], str(sg["strike"]).split(".")[0], sg["type"], expiry=exp, ib=conn)
+                if not q or q.get("error") or q.get("mid") is None:
+                    continue
+                pct = round((q["mid"] / sh["ref"] - 1) * 100, 1)
+                sh["now"] = pct
+                sh["peak"] = round(max(sh.get("peak", 0), pct), 1)
+                sh["trough"] = round(min(sh.get("trough", 0), pct), 1)
+                if pct <= -sh["stop_pct"]:                    # hit OUR stop first -> would've LOST
+                    sh["state"], sh["result_pct"] = "LOSS", -sh["stop_pct"]
+                elif pct >= sh["t1_pct"]:                     # hit T1 first -> would've WON (banked at scale)
+                    sh["state"], sh["result_pct"] = "WIN", sh["t1_pct"]
+                dirty = True
+                conn.sleep(1)
+            if dirty:
+                save_signals()
             conn.sleep(20)
         except Exception:
             try: conn.disconnect()
@@ -817,6 +855,7 @@ def act(data):
         row["status"] = "CLOSED"
     elif action == "skip":
         row["status"] = "SKIPPED"
+        _init_shadow(entry)                        # track what we'd have made/lost had we taken it
     journal[sid] = row
     T.write_journal(jp, journal)
     entry["status"] = row["status"]
