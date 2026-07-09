@@ -49,10 +49,19 @@ CREATE TABLE IF NOT EXISTS decisions (
 CREATE TABLE IF NOT EXISTS outcomes (
   signal_id TEXT PRIMARY KEY,
   kind TEXT, result TEXT,
-  realized_usd REAL, r_multiple REAL,
+  realized_usd REAL, r_multiple REAL, return_pct REAL, exit_vs_peak_pct REAL,
+  prov_pct_out REAL, your_pct_out REAL,
   entry_px REAL, exit_px REAL, peak_pct REAL, trough_pct REAL,
   hold_secs INTEGER, opened_utc TEXT, closed_utc TEXT
 );
+CREATE TABLE IF NOT EXISTS events (
+  signal_id TEXT, source TEXT, seq INTEGER, ts_utc TEXT,
+  kind TEXT, qty INTEGER, price REAL, pct_out REAL, pct_up REAL,
+  realized_delta REAL, stop_ref TEXT, raw TEXT,
+  PRIMARY KEY (signal_id, source, seq)
+);
+CREATE INDEX IF NOT EXISTS ix_ev_sig  ON events(signal_id);
+CREATE INDEX IF NOT EXISTS ix_ev_kind ON events(kind);
 CREATE INDEX IF NOT EXISTS ix_sig_provider ON signals(provider);
 CREATE INDEX IF NOT EXISTS ix_sig_ticker   ON signals(ticker);
 CREATE INDEX IF NOT EXISTS ix_sig_ts       ON signals(ts_utc);
@@ -82,17 +91,39 @@ def connect():
     return con
 
 
-def _upsert(con, table, row):
-    row = {k: v for k, v in row.items() if v is not None or k == "signal_id"}
-    if not row.get("signal_id"):
+def _upsert(con, table, row, keys=("signal_id",)):
+    row = {k: v for k, v in row.items() if v is not None or k in keys}
+    if any(row.get(k) is None for k in keys):
         return
     cols = list(row)
     ph = ",".join("?" for _ in cols)
-    setc = ",".join(f"{c}=excluded.{c}" for c in cols if c != "signal_id")
+    setc = ",".join(f"{c}=excluded.{c}" for c in cols if c not in keys)
+    conflict = ",".join(keys)
     sql = (f"INSERT INTO {table} ({','.join(cols)}) VALUES ({ph}) "
-           f"ON CONFLICT(signal_id) DO UPDATE SET {setc}") if setc else \
+           f"ON CONFLICT({conflict}) DO UPDATE SET {setc}") if setc else \
           f"INSERT OR IGNORE INTO {table} ({','.join(cols)}) VALUES ({ph})"
     con.execute(sql, [row[c] for c in cols])
+
+
+def _ingest_events(con, r):
+    """Explode a closed-trade record's management arc into queryable event rows."""
+    sid = r.get("journal_id") or r.get("id")
+    if not sid:
+        return
+    for i, a in enumerate(r.get("user_actions") or []):
+        _upsert(con, "events", {"signal_id": sid, "source": "you", "seq": i,
+                                "ts_utc": a.get("ts_utc") or a.get("ts"), "kind": a.get("kind"),
+                                "qty": a.get("qty"), "price": _f(a.get("price")),
+                                "realized_delta": _f(a.get("realized_delta")),
+                                "stop_ref": str(a.get("stop")) if a.get("stop") is not None else None},
+                keys=("signal_id", "source", "seq"))
+    for i, a in enumerate(r.get("provider_events") or []):
+        _upsert(con, "events", {"signal_id": sid, "source": "provider", "seq": i,
+                                "ts_utc": a.get("ts_utc") or a.get("ts"), "kind": a.get("type"),
+                                "price": _f(a.get("price")), "pct_out": _f(a.get("pct_out")),
+                                "pct_up": _f(a.get("pct_up")), "stop_ref": a.get("stop_ref"),
+                                "raw": (a.get("raw") or "")[:200]},
+                keys=("signal_id", "source", "seq"))
 
 
 def _signal_row(e):
@@ -178,9 +209,12 @@ def sync_outcomes(signals=None):
                 _upsert(con, "outcomes", {
                     "signal_id": sid, "kind": "REALIZED", "result": res,
                     "realized_usd": _f(rz), "r_multiple": _f(r.get("R_multiple")),
+                    "return_pct": _f(r.get("return_pct")), "exit_vs_peak_pct": _f(r.get("exit_vs_peak_pct")),
+                    "prov_pct_out": _f(r.get("provider_pct_out_final")), "your_pct_out": _f(r.get("your_pct_out_final")),
                     "entry_px": _f(r.get("avg_entry")), "exit_px": _f(r.get("avg_exit")),
                     "peak_pct": _f(r.get("peak_pct")), "hold_secs": r.get("hold_secs"),
                     "opened_utc": r.get("opened_utc"), "closed_utc": r.get("closed_utc")})
+                _ingest_events(con, r)                # every trim / cut / provider exit as its own row
         for e in (signals or []):
             row = _shadow_outcome(e)
             if row:
@@ -248,6 +282,10 @@ def summary():
     print(f"  signals  : {n_sig}")
     print(f"  decisions: {n_dec}  (taken {taken}, skipped {skipped})")
     print(f"  outcomes : {n_out}  (win {wins}, loss {loss})")
+    n_ev = q("SELECT COUNT(*) FROM events")
+    you = q("SELECT COUNT(*) FROM events WHERE source=?", "you")
+    prov = q("SELECT COUNT(*) FROM events WHERE source=?", "provider")
+    print(f"  events   : {n_ev}  (your trims/cuts {you}, provider exits {prov})")
     print(f"  ml rows w/ label: {labeled}")
     print("\n  by provider (signals / labeled):")
     for prov, n, lab in con.execute(
