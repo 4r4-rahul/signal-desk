@@ -56,6 +56,62 @@ def _alert(text, title):
         pass
 
 
+def _signal_alert(e):
+    """Push the FULL info of a new card to Discord immediately — everything on the UI, one message."""
+    if not e:
+        return
+    sg = e.get("sig") or {}; pl = e.get("plan") or {}; tk = e.get("ticket") or {}
+    o = e.get("opt") or {}; gr = e.get("grade") or {}; tech = e.get("tech") or {}
+    leg = f"{sg.get('ticker')} {sg.get('strike')}{sg.get('type')}"
+    L = [f"**{leg}**  ·  exp {sg.get('expiry') or '0DTE'}  ·  provider entry **${sg.get('premium')}**"]
+    if e.get("watch"):
+        L.append("👀 **WATCHING** — provider not filled yet")
+    tags = []
+    if gr.get("g"):
+        tags.append(f"🎓 Grade {gr['g']} ({gr.get('score')})")
+    if e.get("tier_key"):
+        tags.append(f"{e['tier_key']} · conf {e.get('score')}")
+    if tags:
+        L.append(" · ".join(tags))
+    if tk.get("limit") is not None:
+        L.append(f"🎯 **Limit ${tk['limit']}** (bid {tk.get('bid')} / ask {tk.get('ask')})   "
+                 f"🛑 **Stop ${tk['stop']}** (−{tk.get('stop_pct')}%)")
+        L.append(f"🥇 T1 ${tk.get('t1')} (+{tk.get('t1_pct')}%)  ·  🥈 T2 ${tk.get('t2')} (+{tk.get('t2_pct')}%)  "
+                 f"·  🏆 T3 ${tk.get('t3')} (+{tk.get('t3_pct')}%)")
+        if tk.get("rr3") is not None:
+            L.append(f"⚖️ R:R {tk['rr1']} → {tk['rr2']} → {tk['rr3']}×")
+    if pl.get("ok"):
+        L.append(f"🎲 Risk **{pl.get('risk_pct')}%** (~${round(pl.get('risk', 0))}) → "
+                 f"**{pl.get('contracts')}** contracts · {pl.get('risk_basis')}")
+    micro = []
+    if o.get("iv") is not None:
+        micro.append(f"IV {round(o['iv'] * 100)}%")
+    if o.get("delta") is not None:
+        micro.append(f"Δ{round(o['delta'], 2)}")
+    if o.get("theta") is not None and o.get("mid"):
+        micro.append(f"θ {round(abs(o['theta']) / o['mid'] * 100)}%/day")
+    if tech.get("label") and tech.get("label") != "no data":
+        micro.append(f"tape {tech['label']}")
+    if tk.get("spread_pct") is not None:
+        micro.append(f"spread {tk['spread_pct']}%")
+    if micro:
+        L.append("📊 " + "  ·  ".join(micro))
+    flags = []
+    if tk.get("chasing_pct"):
+        flags.append(f"⚠ chasing +{tk['chasing_pct']}%")
+    if tk.get("wide"):
+        flags.append("⚠ wide spread")
+    if sg.get("lotto"):
+        flags.append("🎰 lotto")
+    if e.get("cosign"):
+        flags.append("🔗 also: " + ", ".join(e["cosign"]))
+    if flags:
+        L.append("  ·  ".join(flags))
+    L.append(f"\n📝 _{(e.get('raw') or '')[:220]}_")
+    L.append("🖥️ http://localhost:8787")
+    _alert("\n".join(L), f"🔔 New signal — {e.get('provider', '?')}")
+
+
 def check_alerts():
     """Edge-triggered webhook alerts on capital-critical events (fire once per change)."""
     due = SLEEVE.get("milestone_due", 0) or 0
@@ -741,16 +797,7 @@ def ingest(data):
         _log_paper_entry(prov, sid, entry)
     touch_source(data.get("channel") or prov or "unknown", prov,
                  f"{res['sig']['ticker']} {res['sig']['strike']}{res['sig']['type']}", data.get("name"))
-    # PING on an actionable, tradeable signal (verified real, not a watch, not paper-without-override,
-    # decent tier) — with the ready-to-key order ticket so you can place it immediately.
-    tk = res.get("ticket")
-    if (tk and entry.get("verified") and not entry.get("watch")
-            and (not entry.get("paper") or entry.get("manual_override"))
-            and res.get("tier_key") in ("HIGH", "MEDIUM")):
-        leg = f"{res['sig']['ticker']} {res['sig']['strike']}{res['sig']['type']}"
-        _alert(f"🎯 {prov}: {leg} — LIMIT ${tk['limit']} · stop ${tk['stop']} · "
-               f"T1 ${tk['t1']} / T2 ${tk['t2']}" + (f" · R:R {tk['rr1']}×→{tk['rr2']}×" if tk.get('rr2') else ""),
-               "Signal Desk — Take?")
+    _signal_alert(entry)                            # push the FULL info of EVERY new card to Discord
     # terminal echo
     print(f"\n⚡ {entry['ts']} {prov or '?'}  {res['sig']['ticker']} {res['sig']['strike']}"
           f"{res['sig']['type']}  conf {res['score']}/100 {res['tier_key']}", flush=True)
