@@ -181,14 +181,17 @@ def record_decision(signal_id, action, qty=None, fill_px=None, ts_utc=None):
 
 
 def _shadow_outcome(e):
+    """Would-be outcome of a SKIPPED signal: disciplined result (WIN/LOSS/SCRATCH by our stop/target,
+    first hit) PLUS the ultimate peak/trough over its full life (what we truly missed or dodged)."""
     sh = e.get("shadow") or {}
-    if sh.get("state") not in ("WIN", "LOSS"):
+    res = sh.get("result") or (sh.get("state") if sh.get("state") in ("WIN", "LOSS") else None)
+    if res not in ("WIN", "LOSS", "SCRATCH"):
         return None
-    return {"signal_id": e.get("id"), "kind": "SHADOW", "result": sh["state"],
-            "realized_usd": None, "r_multiple": None,
+    return {"signal_id": e.get("id"), "kind": "SHADOW", "result": res,
+            "realized_usd": None, "r_multiple": None, "return_pct": _f(sh.get("result_pct")),
             "entry_px": sh.get("ref"), "exit_px": None,
-            "peak_pct": sh.get("peak"), "trough_pct": sh.get("trough"),
-            "hold_secs": None, "opened_utc": sh.get("start_utc"), "closed_utc": None}
+            "peak_pct": _f(sh.get("peak")), "trough_pct": _f(sh.get("trough")),
+            "hold_secs": None, "opened_utc": sh.get("start_utc"), "closed_utc": sh.get("ended_utc")}
 
 
 def sync_outcomes(signals=None):

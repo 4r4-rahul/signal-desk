@@ -275,8 +275,8 @@ def _init_shadow(entry):
     entry["shadow"] = {"ref": ref, "stop_pct": (entry.get("plan") or {}).get("stop_pct") or tk.get("stop_pct") or 30,
                        "t1_pct": tk.get("t1_pct") or 30,
                        "expiry": _resolve_expiry(sg) or (entry.get("opt") or {}).get("expiry"),
-                       "start_utc": datetime.now(timezone.utc).isoformat(), "state": "tracking",
-                       "peak": 0.0, "trough": 0.0, "now": 0.0}
+                       "start_utc": datetime.now(timezone.utc).isoformat(), "state": "live",
+                       "result": None, "peak": 0.0, "trough": 0.0, "now": 0.0}
 
 
 def _pos_alert(p, st, key, text):
@@ -364,13 +364,25 @@ def monitor_loop():
             for k in list(LIVE_SIG):                          # drop stale ids no longer in the feed
                 if k not in {s["id"] for s in SIGNALS}:
                     LIVE_SIG.pop(k, None)
-            # SHADOW TRACK skipped signals: what would've happened if we'd TAKEN them? (win at T1 or stop out?)
-            shadows = [s for s in SIGNALS if s.get("status") == "SKIPPED"
-                       and (s.get("shadow") or {}).get("state") == "tracking" and (s.get("sig") or {}).get("premium")]
+            # SHADOW TRACK skipped signals over their FULL LIFE: the disciplined would-be result (first
+            # T1/stop hit) AND the ultimate peak/trough (what we truly missed or dodged), until expiry.
+            shadows = [s for s in SIGNALS if s.get("status") == "SKIPPED" and s.get("shadow")
+                       and s["shadow"].get("state") != "ended" and (s.get("sig") or {}).get("premium")]
+            today = datetime.now(ET).strftime("%Y%m%d")
+            now_utc = datetime.now(timezone.utc).isoformat()
             dirty = False
-            for s in shadows[-15:]:
+            for s in shadows[-20:]:
                 sh, sg = s["shadow"], s["sig"]
+                if sh.get("state") in ("WIN", "LOSS"):        # migrate old resolved -> keep tracking the full life
+                    sh["result"], sh["state"] = sh.get("result") or sh["state"], "live"
                 exp = sh.get("expiry") or _resolve_expiry(sg) or (s.get("opt") or {}).get("expiry")
+                if exp and exp < today:                       # contract expired -> END its life
+                    sh["state"], sh["ended_utc"] = "ended", now_utc
+                    if not sh.get("result"):
+                        sh["result"] = ("WIN" if sh.get("peak", 0) >= sh["t1_pct"]
+                                        else "LOSS" if sh.get("trough", 0) <= -sh["stop_pct"] else "SCRATCH")
+                    dirty = True
+                    continue
                 q = MK.option_quote(sg["ticker"], str(sg["strike"]).split(".")[0], sg["type"], expiry=exp, ib=conn)
                 if not q or q.get("error") or q.get("mid") is None:
                     continue
@@ -378,10 +390,15 @@ def monitor_loop():
                 sh["now"] = pct
                 sh["peak"] = round(max(sh.get("peak", 0), pct), 1)
                 sh["trough"] = round(min(sh.get("trough", 0), pct), 1)
-                if pct <= -sh["stop_pct"]:                    # hit OUR stop first -> would've LOST
-                    sh["state"], sh["result_pct"] = "LOSS", -sh["stop_pct"]
-                elif pct >= sh["t1_pct"]:                     # hit T1 first -> would've WON (banked at scale)
-                    sh["state"], sh["result_pct"] = "WIN", sh["t1_pct"]
+                if not sh.get("result"):                      # disciplined result = whichever we'd hit FIRST
+                    if pct <= -sh["stop_pct"]:
+                        sh["result"], sh["result_pct"] = "LOSS", -sh["stop_pct"]
+                    elif pct >= sh["t1_pct"]:
+                        sh["result"], sh["result_pct"] = "WIN", sh["t1_pct"]
+                if q["mid"] <= 0.02:                          # decayed to ~worthless -> END its life
+                    sh["state"], sh["ended_utc"] = "ended", now_utc
+                    if not sh.get("result"):
+                        sh["result"] = "LOSS" if sh.get("trough", 0) <= -sh["stop_pct"] else "SCRATCH"
                 dirty = True
                 conn.sleep(1)
             if dirty:

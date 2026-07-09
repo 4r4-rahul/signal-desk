@@ -900,16 +900,25 @@ function liveRecoHTML(l){
     +`<span class="lvnow">now $${l.mid}${l.ask!=null?` · ask $${l.ask}`:''}</span>`
     +`<span class="lvreco ${l.level}">${l.text}</span>`;
 }
-function shadowHTML(s){   // for a SKIPPED card: what would've happened if we'd taken it
+function shadowHTML(s){   // for a SKIPPED card: full-life would-be outcome (disciplined result + ultimate peak/trough)
   const sh=s.shadow; if(!sh) return '';
-  if(sh.state==='WIN') return `<div class="shadow sh-win">👻 if taken: <b>WON</b> — hit T1 +${sh.t1_pct}% (peak +${sh.peak}%). A good one we passed.</div>`;
-  if(sh.state==='LOSS') return `<div class="shadow sh-loss">👻 if taken: <b>LOST</b> — stopped −${sh.stop_pct}% (peak +${sh.peak}%). Good skip. 👍</div>`;
+  const res=sh.result||(['WIN','LOSS'].includes(sh.state)?sh.state:null);
+  const ended=sh.state==='ended'?' · life ended':'';
+  if(res==='WIN')
+    return `<div class="shadow sh-win">👻 if taken: <b>WON</b> — hit T1 +${sh.t1_pct}% <span style="color:var(--muted)">(life peak +${sh.peak}%)</span>. A good one we passed.${ended}</div>`;
+  if(res==='LOSS'){
+    const gotaway=(sh.peak>=sh.t1_pct)?` <span style="color:var(--amber)">⚠ but later ran +${sh.peak}% (whipsaw)</span>`:` <span style="color:var(--muted)">(dropped to ${sh.trough}%)</span>`;
+    return `<div class="shadow sh-loss">👻 if taken: <b>LOST</b> — stopped −${sh.stop_pct}%. Good skip 👍${gotaway}${ended}</div>`;
+  }
+  if(res==='SCRATCH')
+    return `<div class="shadow sh-track">👻 if taken: <b>~scratch</b> — drifted, never hit T1 or stop <span style="color:var(--muted)">(peak +${sh.peak}% / trough ${sh.trough}%)</span>.${ended}</div>`;
   return `<div class="shadow sh-track">👻 tracking: now ${sh.now>=0?'+':''}${sh.now}% · peak +${sh.peak}% · trough ${sh.trough}%</div>`;
 }
 function skipScoreHTML(cards){
   const sh=(cards||[]).map(c=>c.shadow).filter(Boolean);
   if(!sh.length) return '';
-  const win=sh.filter(x=>x.state==='WIN'), loss=sh.filter(x=>x.state==='LOSS'), track=sh.filter(x=>x.state==='tracking');
+  const rz=x=>x.result||(['WIN','LOSS'].includes(x.state)?x.state:null);
+  const win=sh.filter(x=>rz(x)==='WIN'), loss=sh.filter(x=>rz(x)==='LOSS'), track=sh.filter(x=>!rz(x));
   const dol=x=>Math.round((x.result_pct/100)*x.ref*100);            // would-be P&L per 1 lot
   const saved=loss.reduce((a,x)=>a+Math.abs(dol(x)),0), missed=win.reduce((a,x)=>a+dol(x),0), net=saved-missed;
   const v=(win.length>loss.length)?'⚠ skipping winners — maybe too cautious':((loss.length>win.length)?'✅ your skips dodge losers — good filter':'≈ roughly even');
