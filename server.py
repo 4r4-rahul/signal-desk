@@ -264,6 +264,47 @@ def _live_reco(prov_entry, mid, ask, spread_pct):
             "wide": wide, "level": lvl, "text": txt}
 
 
+def _path_tick(signal_id, phase, q, ticker, ref, state, start_utc, conn):
+    """Snapshot the FULL conditions at one tick of a trade's life (shadow OR position) -> path table.
+    Layers: option greeks + underlying spot/move + tape (RSI/VWAP/EMA/BB) + time + momentum + peak flags."""
+    if not DB or not signal_id or not ref or not q.get("mid"):
+        return
+    import market as MK, time as _t
+    pct = round((q["mid"] / ref - 1) * 100, 1)
+    tp = _TAPE_CACHE.get(ticker)
+    if not tp or _t.time() - tp[0] > 180:                # throttle underlying bars fetch to ~3 min
+        try:
+            _ind = MK.indicators(MK.get_bars(conn, ticker)) or {}
+        except Exception:
+            _ind = {}
+        _TAPE_CACHE[ticker] = (_t.time(), _ind)
+    ind = _TAPE_CACHE[ticker][1]
+    spot = ind.get("price")
+    if state.get("entry_spot") is None and spot:
+        state["entry_spot"] = spot
+    es, prev = state.get("entry_spot"), state.get("prev_pct")
+    mom = ("up" if (prev is not None and pct > prev + 2) else
+           "down" if (prev is not None and pct < prev - 2) else "flat")
+    pk = max(state.get("_pk", pct), pct); state["_pk"] = pk
+    tr = min(state.get("_tr", pct), pct); state["_tr"] = tr
+    et = datetime.now(ET)
+    try:
+        mins = round((datetime.now(timezone.utc) - datetime.fromisoformat(start_utc)).total_seconds() / 60, 1) if start_utc else None
+    except Exception:
+        mins = None
+    DB.record_tick({
+        "signal_id": signal_id, "ts_utc": datetime.now(timezone.utc).isoformat(), "phase": phase,
+        "mins": mins, "tod_min": et.hour * 60 + et.minute,
+        "opt_mid": q["mid"], "opt_pct": pct, "bid": q.get("bid"), "ask": q.get("ask"),
+        "iv": q.get("iv"), "delta": q.get("delta"), "gamma": q.get("gamma"),
+        "theta": q.get("theta"), "vega": q.get("vega"),
+        "spot": spot, "spot_pct": (round((spot / es - 1) * 100, 2) if (spot and es) else None),
+        "rsi": ind.get("rsi"), "vwap": ind.get("vwap"), "ema9": ind.get("ema9"), "ema21": ind.get("ema21"),
+        "bb_up": ind.get("bb_up"), "bb_low": ind.get("bb_low"),
+        "momentum": mom, "is_peak": 1 if pct >= pk else 0, "is_trough": 1 if pct <= tr else 0})
+    state["prev_pct"] = pct
+
+
 def _init_shadow(entry):
     """Begin shadow-tracking a SKIPPED signal: from here, did it hit OUR T1 (win) or OUR stop (loss)?
     Records the reference price + our stop/target so the monitor can decide the would-be outcome."""
@@ -330,6 +371,8 @@ def monitor_loop():
                           iv=q.get("iv"), delta=q.get("delta"), spread_pct=q.get("spread_pct"))
                 st["peak_pct"] = round(max(st.get("peak_pct", pnl), pnl), 1)
                 M.update_peak(p["id"], st["peak_pct"])       # persist the market high
+                _path_tick(p.get("journal_id"), "position", q, p["ticker"], entry, st,
+                           p.get("opened_utc") or p.get("opened"), conn)   # full conditions of the LIVE trade
                 _check_pos_rules(p, st)
                 conn.sleep(1)
             # live-quote the ACTIONABLE un-taken cards -> live move% + recommendation on the card
@@ -392,37 +435,7 @@ def monitor_loop():
                 sh["now"] = pct
                 sh["peak"] = round(max(sh.get("peak", 0), pct), 1)
                 sh["trough"] = round(min(sh.get("trough", 0), pct), 1)
-                # --- PATH: snapshot the FULL CONDITIONS at this tick (future ML: what plays behind a peak/reversal)
-                if DB:
-                    tp = _TAPE_CACHE.get(sg["ticker"])
-                    if not tp or time.time() - tp[0] > 180:   # refresh underlying spot+tape every ~3 min
-                        try:
-                            _ind = MK.indicators(MK.get_bars(conn, sg["ticker"])) or {}
-                        except Exception:
-                            _ind = {}
-                        _TAPE_CACHE[sg["ticker"]] = (time.time(), _ind)
-                    ind = _TAPE_CACHE[sg["ticker"]][1]
-                    spot = ind.get("price")
-                    if sh.get("entry_spot") is None and spot:
-                        sh["entry_spot"] = spot
-                    es, prev = sh.get("entry_spot"), sh.get("prev_pct")
-                    mom = ("up" if (prev is not None and pct > prev + 2) else
-                           "down" if (prev is not None and pct < prev - 2) else "flat")
-                    et = datetime.now(ET)
-                    DB.record_tick({
-                        "signal_id": s["id"], "ts_utc": datetime.now(timezone.utc).isoformat(), "phase": "shadow",
-                        "mins": round((datetime.now(timezone.utc)
-                                       - datetime.fromisoformat(sh["start_utc"])).total_seconds() / 60, 1),
-                        "tod_min": et.hour * 60 + et.minute,
-                        "opt_mid": q["mid"], "opt_pct": pct, "bid": q.get("bid"), "ask": q.get("ask"),
-                        "iv": q.get("iv"), "delta": q.get("delta"), "gamma": q.get("gamma"),
-                        "theta": q.get("theta"), "vega": q.get("vega"),
-                        "spot": spot, "spot_pct": (round((spot / es - 1) * 100, 2) if (spot and es) else None),
-                        "rsi": ind.get("rsi"), "vwap": ind.get("vwap"), "ema9": ind.get("ema9"),
-                        "ema21": ind.get("ema21"), "bb_up": ind.get("bb_up"), "bb_low": ind.get("bb_low"),
-                        "momentum": mom, "is_peak": 1 if pct >= sh["peak"] else 0,
-                        "is_trough": 1 if pct <= sh["trough"] else 0})
-                    sh["prev_pct"] = pct
+                _path_tick(s["id"], "shadow", q, sg["ticker"], sh["ref"], sh, sh.get("start_utc"), conn)
                 if not sh.get("result"):                      # disciplined result = whichever we'd hit FIRST
                     if pct <= -sh["stop_pct"]:
                         sh["result"], sh["result_pct"] = "LOSS", -sh["stop_pct"]

@@ -217,6 +217,18 @@ def _shadow_outcome(e):
             "hold_secs": None, "opened_utc": sh.get("start_utc"), "closed_utc": sh.get("ended_utc")}
 
 
+def _entry_from_closed(r):
+    """Reconstruct a signal-feature row from a closed trade's own origin — so an outcome/event whose
+    original card was never archived still has a parent signal (no orphans)."""
+    o = r.get("origin") or {}
+    sig = o.get("sig") or {"ticker": r.get("ticker"), "strike": r.get("strike"), "type": r.get("type"),
+                           "premium": r.get("avg_entry"), "expiry": r.get("expiry")}
+    return {"id": r.get("journal_id") or r.get("id"), "ts_utc": o.get("ts_utc") or r.get("opened_utc"),
+            "provider": r.get("provider"), "sig": sig, "score": o.get("score"), "tier_key": o.get("tier"),
+            "conviction": o.get("conviction"), "size_mult": o.get("size_mult"), "plan": o.get("plan"),
+            "opt": r.get("entry_greeks"), "verified": o.get("verified"), "raw": o.get("raw"), "cosign": o.get("cosign")}
+
+
 def sync_outcomes(signals=None):
     """Upsert REALIZED outcomes from closed_trades.jsonl + SHADOW outcomes from live signals.
     Cheap + idempotent — safe to call every monitor cycle."""
@@ -230,6 +242,8 @@ def sync_outcomes(signals=None):
                 sid = r.get("journal_id") or r.get("id")
                 if not sid:
                     continue
+                if not con.execute("SELECT 1 FROM signals WHERE signal_id=?", (sid,)).fetchone():
+                    _upsert(con, "signals", _signal_row(_entry_from_closed(r)))   # stub the parent signal
                 rz = r.get("realized")
                 res = "WIN" if (rz or 0) > 0 else ("LOSS" if (rz or 0) < 0 else "SCRATCH")
                 _upsert(con, "outcomes", {
@@ -322,9 +336,71 @@ def summary():
     con.close()
 
 
+def validate():
+    """Chip validates the backend chips — integrity, completeness, data quality, source consistency."""
+    con = connect()
+    q = lambda s, *a: con.execute(s, a).fetchone()[0]
+    checks = []
+
+    def C(ok, name, detail="", warn=False):
+        checks.append(("warn" if (not ok and warn) else ("pass" if ok else "fail"), name, detail))
+
+    n_sig = q("SELECT COUNT(*) FROM signals")
+    # 1) referential integrity — no orphan rows
+    for tbl in ("decisions", "outcomes", "events", "path"):
+        orph = q(f"SELECT COUNT(*) FROM {tbl} t "
+                 f"LEFT JOIN signals s ON s.signal_id=t.signal_id WHERE s.signal_id IS NULL")
+        C(orph == 0, f"{tbl}: every row links to a real signal", f"{orph} orphan(s)")
+    # 2) completeness
+    taken = q("SELECT COUNT(*) FROM decisions WHERE action='TAKEN'")
+    skipped = q("SELECT COUNT(*) FROM decisions WHERE action='SKIPPED'")
+    taken_no_out = q("SELECT COUNT(*) FROM decisions d WHERE action='TAKEN' "
+                     "AND NOT EXISTS (SELECT 1 FROM outcomes o WHERE o.signal_id=d.signal_id)")
+    C(taken_no_out == 0, "every TAKEN trade has an outcome", f"{taken_no_out} open/unrecorded", warn=True)
+    shadow_res = q("SELECT COUNT(*) FROM outcomes WHERE kind='SHADOW'")
+    C(True, "skips resolving (shadow)", f"{shadow_res}/{skipped} resolved, rest tracking")
+    # 3) data quality — sane ranges
+    C(q("SELECT COUNT(*) FROM signals WHERE premium IS NOT NULL AND premium<=0") == 0, "premiums positive")
+    C(q("SELECT COUNT(*) FROM signals WHERE iv IS NOT NULL AND (iv<0 OR iv>5)") == 0, "IV in [0,5]")
+    C(q("SELECT COUNT(*) FROM signals WHERE delta IS NOT NULL AND ABS(delta)>1.01") == 0, "delta in [-1,1]")
+    C(q("SELECT COUNT(*) FROM signals WHERE grade IS NOT NULL AND grade NOT IN ('A','B','C','D')") == 0, "grade in A-D")
+    C(q("SELECT COUNT(*) FROM (SELECT signal_id FROM signals GROUP BY signal_id HAVING COUNT(*)>1)") == 0,
+      "no duplicate signals")
+    C(q("SELECT COUNT(*) FROM outcomes WHERE result NOT IN ('WIN','LOSS','SCRATCH')") == 0, "outcome results valid")
+    # 4) source consistency — every jsonl signal made it into the DB
+    src = set()
+    fp = ROOT / "channels" / "_signals.json"
+    if fp.exists():
+        src |= {e.get("id") for e in json.loads(fp.read_text()) if e.get("id")}
+    for f in glob.glob(str(ROOT / "channels" / "*" / "live_signals.jsonl")):
+        for ln in Path(f).read_text().splitlines():
+            if ln.strip():
+                i = json.loads(ln).get("id")
+                if i:
+                    src.add(i)
+    db_ids = {r[0] for r in con.execute("SELECT signal_id FROM signals")}
+    missing = src - db_ids
+    C(len(missing) == 0, "all source signals captured in DB", f"{len(missing)} missing — run backfill", warn=True)
+    with_dec = q("SELECT COUNT(DISTINCT signal_id) FROM decisions")
+    with_path = q("SELECT COUNT(DISTINCT signal_id) FROM path")
+
+    print(f"\n  {'='*54}\n  CHIP VALIDATION — backend data integrity\n  {'='*54}")
+    for st, name, detail in checks:
+        icon = {"pass": "  ✅", "warn": "  ⚠️", "fail": "  ❌"}[st]
+        print(icon + f" {name}" + (f" — {detail}" if detail else ""))
+    print(f"\n  coverage: {n_sig} signals · {with_dec} decided · {taken} taken · {skipped} skipped · {with_path} with path ticks")
+    ok = all(st != "fail" for st, _, _ in checks)
+    print(f"  {'✅ ALL CHECKS PASS — backend is sound' if ok else '❌ ISSUES FOUND (see above)'}\n")
+    con.close()
+    return ok
+
+
 if __name__ == "__main__":
     import sys
     cmd = sys.argv[1] if len(sys.argv) > 1 else "summary"
+    if cmd == "validate":
+        import sys as _s
+        _s.exit(0 if validate() else 1)
     if cmd == "backfill":
         print(f"  backfilled {backfill()} signals -> {DB_PATH.name}")
         summary()
