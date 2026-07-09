@@ -76,7 +76,16 @@ def performance():
         byp.setdefault(t.get("provider") or "unknown", []).append(t)
     providers = {p: _metrics(ts) for p, ts in byp.items()}
     providers = dict(sorted(providers.items(), key=lambda kv: kv[1].get("total", 0), reverse=True))
-    return {"overall": _metrics(trades), "providers": providers}
+    # per-DAY P&L (grouped by the ET trading date the trade closed)
+    byday = {}
+    for t in trades:
+        d = (t.get("closed") or t.get("closed_utc") or "")[:10]     # YYYY-MM-DD (ET close)
+        if d:
+            byday.setdefault(d, []).append(float(t.get("realized") or 0))
+    days = [{"date": d, "total": round(sum(v), 2), "n": len(v),
+             "wins": sum(1 for x in v if x > 0), "losses": sum(1 for x in v if x < 0)}
+            for d, v in sorted(byday.items())]
+    return {"overall": _metrics(trades), "providers": providers, "by_day": days}
 
 
 if __name__ == "__main__":
