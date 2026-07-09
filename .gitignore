@@ -13,3 +13,8 @@ channels/*/*.db
 channels/*/messages.json
 channels/*/journal.csv
 channels/*/live_signals.md
+
+# derived data warehouse (rebuild: python3 db.py backfill)
+signal_desk.db
+signal_desk.db-journal
+ml_dataset.csv

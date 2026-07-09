@@ -18,6 +18,10 @@ import validate as V
 import integrations as N
 import manage as M
 import stats as ST
+try:
+    import db as DB                                    # SQLite warehouse — every signal/decision/outcome
+except Exception:
+    DB = None
 ENRICH = os.environ.get("ENRICH_IBKR", "1") == "1"   # live technicals from IBKR
 START_ACCOUNT = E.ACCOUNT                              # the strategy allocation (env ACCOUNT)
 # compounding source: allocation sleeve (default), full ibkr balance, or fixed
@@ -382,6 +386,8 @@ def monitor_loop():
                 conn.sleep(1)
             if dirty:
                 save_signals()
+            if DB:
+                DB.sync_outcomes(SIGNALS)             # capture shadow resolutions + realized closes
             conn.sleep(20)
         except Exception:
             try: conn.disconnect()
@@ -666,6 +672,8 @@ def ingest(data):
     save_signals()
     _inlog(data.get("channel"), prov, text, "CARD")
     _archive_signal(prov, entry)                    # permanent structured archive of every signal
+    if DB:
+        DB.record_signal(entry)                     # -> SQLite warehouse (features as-of decision)
     if entry.get("paper") and prov:                 # B4: log paper-provider entries for graduation
         _log_paper_entry(prov, sid, entry)
     touch_source(data.get("channel") or prov or "unknown", prov,
@@ -775,6 +783,11 @@ def act(data):
         if _pid:
             M.apply_action(_pid, "CLOSE", price=exo)
         entry["status"] = "CLOSED"; save_signals(); refresh_account()
+        if DB:
+            DB.record_signal(entry)
+            DB.record_decision(sid, "TAKEN", qty=qty, fill_px=ein,
+                               ts_utc=datetime.now(timezone.utc).isoformat())
+            DB.sync_outcomes(SIGNALS)
         realized = round((exo - ein) * qty * 100, 2)
         _inlog("manual", prov, f"logged {sig.get('ticker')} {sig.get('strike')}{sig.get('type')} "
                f"{ein}->{exo} x{qty} = {realized:+.0f}", "LOGGED")
@@ -860,6 +873,13 @@ def act(data):
     T.write_journal(jp, journal)
     entry["status"] = row["status"]
     save_signals()
+    if DB:                                          # warehouse the decision + refresh features as-of now
+        DB.record_signal(entry)
+        _act = {"TAKEN": "TAKEN", "SKIPPED": "SKIPPED", "CLOSED": "TAKEN", "CUT": "TAKEN"}.get(row["status"])
+        if _act:
+            DB.record_decision(sid, _act, qty=data.get("qty"), fill_px=data.get("price"),
+                               ts_utc=datetime.now(timezone.utc).isoformat())
+        DB.sync_outcomes(SIGNALS)
     return {"ok": True, "status": row["status"]}
 
 
