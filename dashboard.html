@@ -16,7 +16,7 @@
   .mono{font-family:'JetBrains Mono',ui-monospace,'SF Mono',Menlo,monospace}
   header{position:sticky;top:0;z-index:5;backdrop-filter:blur(12px);
     background:rgba(10,14,23,.75);border-bottom:1px solid var(--line)}
-  .hbar{max-width:1680px;margin:0;display:flex;align-items:center;gap:18px;padding:14px 16px}
+  .hbar{max-width:1780px;margin:0;display:flex;align-items:center;gap:18px;padding:14px 16px}
   .logo{font-weight:800;font-size:18px;letter-spacing:.3px;display:flex;align-items:center;gap:9px}
   .logo .b{color:var(--blue)}
   .dot{width:9px;height:9px;border-radius:50%;background:var(--green);box-shadow:0 0 0 0 rgba(34,197,94,.5);
@@ -36,14 +36,18 @@
   .stats{max-width:1080px;margin:14px auto 0;padding:15px 20px;background:linear-gradient(180deg,var(--panel),var(--panel2));border:1px solid var(--line);border-radius:14px}
   .stats-h{font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.6px;margin-bottom:12px;display:flex;align-items:center;gap:10px}
   #daypnl:empty{display:none}
-  .dp-row{display:flex;align-items:center;gap:10px;padding:5px 0;font-size:12.5px}
-  .dp-d{width:96px;color:var(--muted);flex-shrink:0}
-  .dp-bar{flex:1;height:9px;background:#161e2c;border-radius:5px;overflow:hidden;min-width:60px}
+  .dp-row{display:flex;align-items:center;gap:8px;padding:5px 0;font-size:12px}
+  .dp-d{width:86px;color:var(--muted);flex-shrink:0}
+  .dp-bar{flex:1;height:9px;background:#161e2c;border-radius:5px;overflow:hidden;min-width:40px}
   .dp-fill{display:block;height:100%;border-radius:5px}
   .dp-fill.g{background:linear-gradient(90deg,#16a34a,#22c55e)}
   .dp-fill.r{background:linear-gradient(90deg,#dc2626,#ef4444)}
-  .dp-v{width:74px;text-align:right;font-weight:700;font-family:'JetBrains Mono',ui-monospace,monospace;flex-shrink:0}
-  .dp-n{width:56px;text-align:right;color:var(--muted);font-size:11px;flex-shrink:0}
+  .dp-v{width:62px;text-align:right;font-weight:700;font-family:'JetBrains Mono',ui-monospace,monospace;flex-shrink:0}
+  .dp-n{width:48px;text-align:right;color:var(--muted);font-size:10.5px;flex-shrink:0}
+  .daysorts{display:flex;gap:5px;margin:1px 0 8px}
+  .dp-more{margin-top:9px;font-size:12px;color:#7dd3fc;cursor:pointer;font-weight:600}
+  .dp-more:hover{text-decoration:underline}
+  .lf-grid .cell .l{font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.4px}
   #drawdown:empty{display:none}
   .dd-cur{font-size:13px;margin-bottom:5px}
   .dd-max{font-size:12px;color:var(--muted);margin-bottom:9px}
@@ -259,11 +263,18 @@
   .ledger{font-size:12.5px;color:var(--muted)}
   .ledger div{padding:3px 0;border-bottom:1px solid var(--line)}
   /* ---- two-column layout: left rail (Listening) + main ---- */
-  .layout{max-width:1680px;margin:14px 0 26px;padding:0 16px;display:grid;grid-template-columns:270px minmax(0,1fr);gap:22px;align-items:start}
+  .layout{max-width:1780px;margin:14px 0 26px;padding:0 16px;display:grid;gap:20px;align-items:start;
+    grid-template-columns:258px minmax(0,1fr) 336px;grid-template-areas:"lrail main rrail"}
+  .rail{grid-area:lrail} .main{grid-area:main} .rrail{grid-area:rrail}
   .main{min-width:0}
   .main>.wallet,.main>.stats,.main>.disc,.main>.positions,.main>.chipstray,.main>.qualitypack,.main>.sortbar,.main>.wrap{max-width:none;margin-left:0;margin-right:0}
   .main>.wrap,.main>.positions,.main>.sortbar,.main>.qualitypack,.main>.chipstray{padding-left:0;padding-right:0}
-  .rail{position:sticky;top:64px;display:flex;flex-direction:column;gap:14px}
+  .rail,.rrail{position:sticky;top:64px;display:flex;flex-direction:column;gap:14px;min-width:0}
+  .rrail>.stats{margin-top:0}
+  @media(max-width:1180px){
+    .layout{grid-template-columns:1fr;grid-template-areas:"lrail" "rrail" "main"}
+    .rail,.rrail{position:static}
+  }
   .rail .sources{max-width:none;margin:0;padding:12px;display:flex;flex-direction:column;gap:5px;align-items:stretch;
     background:linear-gradient(180deg,var(--panel),var(--panel2));border:1px solid var(--line);border-radius:14px}
   .rail-h{font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.6px;
@@ -298,8 +309,6 @@
   <main class="main">
     <div id="wallet" class="wallet"></div>
     <div id="stats" class="stats"></div>
-    <div id="daypnl" class="stats"></div>
-    <div id="drawdown" class="stats"></div>
     <div id="chipstray" class="chipstray"></div>
     <div id="qualitypack" class="qualitypack"></div>
     <div id="discipline" class="disc"></div>
@@ -313,6 +322,10 @@
         Start <span class="mono">python3 server.py</span>, open the channel, hit <b>👀 Watch</b> in the extension.</div>
     </div>
   </main>
+  <aside class="rrail">
+    <div id="daypnl" class="stats"></div>
+    <div id="drawdown" class="stats"></div>
+  </aside>
 </div>
 
 <script>
@@ -578,7 +591,22 @@ function renderDrawdown(dd,acct){
     <div class="dd-gauge"><div class="dd-fill ${tcls}" style="width:${gauge}%"></div></div>
     <div class="dd-tier"><span class="dd-badge ${tcls}">${tier}</span> <span class="dd-rule">−5% caution · −10% cut · −15% A-only · −20% HALT</span></div>`;
 }
-function setDaySort(s){window.dayPnlSort=s;refresh();}
+function setDaySort(s){window.dayPnlSort=s;refresh();if(document.querySelector('.overlay .dp-full'))showDayPnl();}
+function _dayRow(d,max){
+  const pos=d.total>=0, w=Math.max(2,Math.round(Math.abs(d.total)/max*100));
+  const dd=new Date(d.date+'T12:00:00'), lbl=dd.toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric'});
+  return `<div class="dp-row"><span class="dp-d">${lbl}</span>`
+    +`<span class="dp-bar"><span class="dp-fill ${pos?'g':'r'}" style="width:${w}%"></span></span>`
+    +`<span class="dp-v" style="color:${pos?'#22c55e':'#ef4444'}">${pos?'+':'−'}$${Math.abs(Math.round(d.total))}</span>`
+    +`<span class="dp-n">${d.wins}W/${d.losses}L</span></div>`;
+}
+function _daySorted(days){
+  const sort=window.dayPnlSort||'recent'; let ord=days.slice();
+  if(sort==='best') ord.sort((a,b)=>b.total-a.total);
+  else if(sort==='worst') ord.sort((a,b)=>a.total-b.total);
+  else ord.reverse();
+  return ord;
+}
 function renderDayPnl(days){
   const el=document.getElementById('daypnl'); if(!el) return;
   if(!days||!days.length){el.innerHTML='';return;}
@@ -586,24 +614,37 @@ function renderDayPnl(days){
   const max=Math.max(...days.map(d=>Math.abs(d.total)),1);
   const total=days.reduce((a,d)=>a+d.total,0);
   const green=days.filter(d=>d.total>0).length, red=days.filter(d=>d.total<0).length;
-  let ord=days.slice();
-  if(sort==='best') ord.sort((a,b)=>b.total-a.total);
-  else if(sort==='worst') ord.sort((a,b)=>a.total-b.total);
-  else ord.reverse();                            // recent = newest first
-  const rows=ord.map(d=>{
-    const pos=d.total>=0, w=Math.max(2,Math.round(Math.abs(d.total)/max*100));
-    const dd=new Date(d.date+'T12:00:00'), lbl=dd.toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric'});
-    return `<div class="dp-row"><span class="dp-d">${lbl}</span>`
-      +`<span class="dp-bar"><span class="dp-fill ${pos?'g':'r'}" style="width:${w}%"></span></span>`
-      +`<span class="dp-v" style="color:${pos?'#22c55e':'#ef4444'}">${pos?'+':'−'}$${Math.abs(Math.round(d.total))}</span>`
-      +`<span class="dp-n">${d.wins}W/${d.losses}L</span></div>`;
-  }).join('');
+  const CAP=7, ord=_daySorted(days), shown=ord.slice(0,CAP);
+  const more=days.length>CAP?`<div class="dp-more" onclick="showDayPnl()">View all ${days.length} days →</div>`:'';
   const sc=(k,l)=>`<span class="daysort ${sort===k?'on':''}" onclick="setDaySort('${k}')">${l}</span>`;
   el.innerHTML=`<div class="stats-h">📅 Day P&L `
     +`<span style="font-weight:700;color:${total>=0?'#22c55e':'#ef4444'}">${total>=0?'+':'−'}$${Math.abs(Math.round(total))}</span>`
-    +`<span style="color:var(--muted);font-weight:500">${green}🟢 / ${red}🔴</span>`
-    +`<span style="margin-left:auto;display:flex;gap:5px">${sc('recent','Recent')}${sc('best','Best')}${sc('worst','Worst')}</span>`
-    +`</div>${rows}`;
+    +`<span style="color:var(--muted);font-weight:500">${green}🟢/${red}🔴</span></div>`
+    +`<div class="daysorts">${sc('recent','Recent')}${sc('best','Best')}${sc('worst','Worst')}</div>`
+    +shown.map(d=>_dayRow(d,max)).join('')+more;
+}
+function showDayPnl(){
+  const days=(window.STATS&&window.STATS.by_day)||[]; if(!days.length) return;
+  const total=days.reduce((a,d)=>a+d.total,0);
+  const best=days.reduce((a,d)=>d.total>a.total?d:a), worst=days.reduce((a,d)=>d.total<a.total?d:a);
+  const green=days.filter(d=>d.total>0).length, red=days.filter(d=>d.total<0).length;
+  const avg=total/days.length, max=Math.max(...days.map(d=>Math.abs(d.total)),1);
+  const sort=window.dayPnlSort||'recent';
+  const sc=(k,l)=>`<span class="daysort ${sort===k?'on':''}" onclick="setDaySort('${k}')">${l}</span>`;
+  const cell=(l,v,c)=>`<div class="cell"><div class="l">${l}</div><div class="v" style="color:${c||'var(--txt)'}">${v}</div></div>`;
+  const D=d=>new Date(d.date+'T12:00:00').toLocaleDateString(undefined,{month:'short',day:'numeric'});
+  const m=document.getElementById('modal');
+  m.className='overlay'; m.onclick=e=>{if(e.target===m)closeModal();};
+  m.innerHTML=`<div class="modal dp-full"><button class="x" onclick="closeModal()">×</button>
+    <h2>📅 Day P&L — full history</h2>
+    <div class="lf-grid">
+      ${cell('Total',(total>=0?'+':'−')+'$'+Math.abs(Math.round(total)),total>=0?'#22c55e':'#ef4444')}
+      ${cell('Avg/day',(avg>=0?'+':'−')+'$'+Math.abs(Math.round(avg)),avg>=0?'#22c55e':'#ef4444')}
+      ${cell('Best day','+$'+Math.round(best.total)+' ('+D(best)+')','#22c55e')}
+      ${cell('Worst day','−$'+Math.abs(Math.round(worst.total))+' ('+D(worst)+')','#ef4444')}
+    </div>
+    <div class="stats-h" style="margin-top:6px">${days.length} days · ${green}🟢 / ${red}🔴 <span style="margin-left:auto;display:flex;gap:5px">${sc('recent','Recent')}${sc('best','Best')}${sc('worst','Worst')}</span></div>
+    <div style="max-height:52vh;overflow:auto">${_daySorted(days).map(d=>_dayRow(d,max)).join('')}</div></div>`;
 }
 function renderStats(st){
   const el=document.getElementById('stats');
