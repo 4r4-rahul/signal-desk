@@ -657,6 +657,7 @@ function ticketHTML(s){
   h+=`<div class="slive" id="slive-${s.id}">${liveRecoHTML(s.live)}</div>`;   // live move% + reco (patched)
   h+=`<div class="coach" id="coach-${s.id}">${coachHTML(s)}</div>`;            // grade/liq/BE/exit (patched)
   h+=`<div class="greeks" id="greeks-${s.id}">${greeksHTML(s)}</div>`;        // theta/tape/IV/lev/confluence
+  h+=`<div class="wslot" id="wslot-${s.id}">${whipsawHTML(s)}</div>`;         // ⚡ whipsaw guard (patched)
   return h;
 }
 function verdict(s){   // synthesize every chip into one call
@@ -691,6 +692,23 @@ function verdictHTML(s){
   if(!s.ticket||s.ticket.limit==null||s.status!=='NEW') return '';
   const v=verdict(s);
   return `<div class="verdict v-${v.c}">🎯 <b>${v.head}</b> <span class="vr">— ${v.reason}</span><div class="va">→ ${v.act}</div></div>`;
+}
+function whipsawHTML(s){   // violent names shake you out of a tight stop before the move — widen & size down
+  const pl=s.plan||{}, o=s.opt||{}, st=pl.stop_terms||{}, tech=s.tech||{};
+  if(!s.ticket||s.ticket.limit==null||s.status!=='NEW') return '';
+  const EM=st.EM_pct, om=st.Omega, stop=pl.stop_pct||30, rv=tech.rv, iv=o.iv;
+  // whipsaw-prone when the option's 1-day expected move ≥ your stop, vol is high, or the stop is unreliable
+  const risky=(EM!=null&&EM>=stop*0.9)||(rv!=null&&rv>=0.6)||(iv!=null&&iv>=0.7)||(pl.stop_reliable===false);
+  if(!risky) return '';
+  const em=EM!=null?`±${Math.round(EM)}%/day`:(rv!=null?`realized vol ${Math.round(rv*100)}%`:(iv!=null?`IV ${Math.round(iv*100)}%`:'no live vol read — stop is blind'));
+  const wide=Math.min(60,Math.max(stop,Math.round((EM||50)*1.35)));
+  const n=pl.contracts, nWide=n?Math.max(1,Math.floor(n*stop/wide)):null;
+  let uStop='';
+  if(om&&o.mid&&o.delta){ const spot=om*o.mid/Math.abs(o.delta), mv=wide/100/om;
+    const lvl=s.sig.type==='C'?spot*(1-mv):spot*(1+mv);
+    uStop=` · or exit if ${s.sig.ticker} ${s.sig.type==='C'?'<':'>'} $${lvl.toFixed(2)} (stock)`; }
+  return `<div class="verdict v-wait">⚡ <b>WHIPSAW RISK</b> <span class="vr">— swings ${em}, wider than a −${stop}% stop → it’ll shake you out on noise</span>`
+    +`<div class="va">→ widen stop to −${wide}%${nWide?` · cut to ${nWide} lot${nWide>1?'s':''} (same $ risk)`:''}${uStop}</div></div>`;
 }
 function dteFrom(exp,nowIso){                       // days to expiry, in ET
   if(!exp||!nowIso||exp.length<8) return null;
@@ -1017,7 +1035,8 @@ async function refresh(){
     S.forEach(s=>{ const el=document.getElementById('slive-'+s.id); if(el) el.innerHTML=liveRecoHTML(s.live);
       const ce=document.getElementById('coach-'+s.id); if(ce) ce.innerHTML=coachHTML(s);
       const ge=document.getElementById('greeks-'+s.id); if(ge) ge.innerHTML=greeksHTML(s);
-      const ve=document.getElementById('vslot-'+s.id); if(ve) ve.innerHTML=verdictHTML(s); });
+      const ve=document.getElementById('vslot-'+s.id); if(ve) ve.innerHTML=verdictHTML(s);
+      const we=document.getElementById('wslot-'+s.id); if(we) we.innerHTML=whipsawHTML(s); });
   }catch(e){document.getElementById('dot').style.background='var(--red)';}
 }
 refresh(); setInterval(refresh,1500);
