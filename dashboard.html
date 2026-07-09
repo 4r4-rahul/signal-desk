@@ -174,6 +174,15 @@
   .tk.g-hot{border-color:rgba(239,68,68,.4);background:rgba(239,68,68,.09);color:#fca5a5}
   .tk.g-warm{border-color:rgba(245,158,11,.38);background:rgba(245,158,11,.09);color:var(--amber)}
   .tk.g-cool{border-color:rgba(34,197,94,.32);background:rgba(34,197,94,.08);color:#86efac}
+  .chipstray{max-width:1080px;margin:0 auto;padding:0 20px}
+  .chipstray:empty{display:none}
+  .ct-row{display:flex;flex-wrap:wrap;gap:14px;align-items:center;font-size:13px;padding:9px 0 4px}
+  .ct-h{font-weight:800;color:var(--txt)}
+  .ct-b b{color:#c4b5fd} .ct-room{color:var(--muted)} .ct-s{color:var(--muted);font-size:12px}
+  .ct-state{font-size:12.5px;padding:6px 11px;border-radius:9px;border:1px solid;margin-bottom:2px}
+  .ct-state.g{background:rgba(34,197,94,.1);border-color:rgba(34,197,94,.4);color:#86efac}
+  .ct-state.y{background:rgba(245,158,11,.1);border-color:rgba(245,158,11,.4);color:var(--amber)}
+  .ct-state.r{background:rgba(239,68,68,.11);border-color:rgba(239,68,68,.42);color:#fca5a5}
   .verdict{margin:10px 0 2px;padding:8px 12px;border-radius:10px;font-size:13px;border:1px solid}
   .verdict:empty{display:none}
   .verdict b{font-weight:800}
@@ -216,6 +225,7 @@
   <span class="dot" id="dot" title="server live"></span>
   <div class="spacer"></div>
   <div class="chip">Account <b id="acct">$—</b></div>
+  <div class="chip">Today <b id="today">—</b></div>
   <div class="chip">Risk <b id="risk">—</b></div>
   <div class="chip">Signals <b id="n">0</b> · Taken <b id="nt">0</b> · Skipped <b id="ns">0</b></div>
 </header>
@@ -223,6 +233,7 @@
 <div id="wallet" class="wallet"></div>
 <div id="stats" class="stats"></div>
 <div id="sources" class="sources"></div>
+<div id="chipstray" class="chipstray"></div>
 <div id="discipline" class="disc"></div>
 <div id="milestone" class="disc"></div>
 <div id="pending" class="positions"></div>
@@ -348,6 +359,7 @@ function posBody(p){
   const entryLine=`<div class="row">Entry <b>$${p.entry}</b> · <b>${p.qty_remaining}/${p.qty_initial}</b> left (${closedPct}% out) · Realized <b style="color:${rz>=0?'#22c55e':'#ef4444'}">${rz>=0?'+':'−'}$${Math.abs(Math.round(rz))}</b> · Stop $${p.stop??'—'}</div>`;
   const qbar=`<div class="qbar"><div class="f" style="width:${closedPct}%"></div></div>`;
   const liveLine=done?'':`<div class="row" id="live-${p.id}">${liveLineHTML(p)}</div>`;
+  const pv=done?'':`<div id="pv-${p.id}">${posVerdict(p)}</div>`;
   const lv=p.live||{};
   const liveAlert=(!done&&lv.alert)?`<div class="pos-sug" style="background:rgba(239,68,68,.16);border-color:rgba(239,68,68,.5);color:#fecaca">🚨 <b>LIVE:</b> ${lv.alert}</div>`:'';
   const ppo=p.provider_pct_out||0;
@@ -372,7 +384,7 @@ function posBody(p){
     </div>`;
   }
   const ladder=(!done)?`<div class="coachex" style="margin-top:8px">${posExitLadder(p)}</div>`:'';
-  return `<div class="mgmt">${entryLine}${qbar}${liveLine}${liveAlert}${div}${sug}${ladder}${tlineHTML(p)}${actions}</div>`;
+  return `<div class="mgmt">${entryLine}${qbar}${liveLine}${pv}${liveAlert}${div}${sug}${ladder}${tlineHTML(p)}${actions}</div>`;
 }
 
 function posCard(p){   // standalone card for orphan positions (no matching signal, e.g. after restart)
@@ -522,6 +534,38 @@ async function withdraw(amt){
   refresh();
 }
 
+function renderChipsTray(x,acct){
+  const el=document.getElementById('chipstray'); if(!el) return;
+  if(!x||!acct){el.innerHTML='';return;}
+  const R=acct/100;                                   // $ per 1R (1% of account)
+  const budget=(x.eff_budget_R!=null?x.eff_budget_R:x.budget_R)||0;
+  const left=Math.max(0,budget-(x.deployed_R||0));
+  const nA=Math.floor(left/1.5), nB=Math.floor(left/1.0), nC=Math.floor(left/0.5);
+  const rz=x.realized_R||0, rzD=Math.round(rz*R);
+  let dot,state;
+  if(x.blocked){ dot='r'; state=`Done for the day — ${(x.reasons||[]).join(' · ')}. Bank it, back tomorrow.`; }
+  else if((x.consec_losses||0)>=2 || left<1 || rz<=-2){
+    dot='y'; state=`Careful — ${left<1?'budget nearly spent':(x.consec_losses>=2?'2-loss streak':'down on the day')}. One good A/B, then stop.`;
+  } else { dot='g'; state=`${rz>0?'Green day (+$'+rzD+') — ':''}Full budget, hunting. Take A/B, skip the rest.`; }
+  const dotmap={g:'🟢',y:'🟡',r:'🔴'};
+  el.innerHTML=`<div class="ct-row"><span class="ct-h">🍟 Chips today</span>`
+    +`<span class="ct-b">${left.toFixed(1)}R / ${budget}R left <b>($${Math.round(left*R)})</b></span>`
+    +`<span class="ct-room">room: ~${nA} A · ${nB} B · ${nC} C</span>`
+    +`<span class="ct-s">streak ${x.consec_losses||0}/${x.max_consec}</span>`
+    +`<span class="ct-s">today ${rz>=0?'+':''}${rz}R (${rzD>=0?'+':'−'}$${Math.abs(rzD)})</span>`
+    +`${rzD>0?`<button class="take" onclick="bankIt()" title="scoop today's profit to reserve so a drawdown can't take it back">🥤 Bank it</button>`:''}</div>`
+    +`<div class="ct-state ${dot}">${dotmap[dot]} ${state}</div>`;
+}
+async function bankIt(){
+  const g=Math.round(window._todayGain||0);
+  if(g<=0){alert('Nothing to bank yet — bank on green days. 🥤');return;}
+  const amt=prompt(`Bank how much of today's +$${g} to reserve?\n(Protects it from a future drawdown — jar the overflow.)`, Math.max(1,Math.round(g/2)));
+  if(!amt) return;
+  const r=await fetch('/api/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'withdraw',amount:parseFloat(amt)})});
+  const j=await r.json().catch(()=>({}));
+  alert(j&&j.withdrawn?('🥤 Banked $'+Math.round(j.withdrawn)+' to reserve.'):('Could not bank: '+((j&&j.error)||'?')));
+  refresh();
+}
 let BLOCKED=false;
 async function overrideDay(on){
   if(on && !confirm('Trade through today’s day-stop?\n\nThe breaker tripped for a reason (losing streak / risk budget). Only override with a clear edge — size small and honor every stop. It auto-resets tomorrow.')) return;
@@ -748,6 +792,19 @@ function posExitLadder(p){
   const a=Math.max(1,Math.round(n/3)), b=Math.max(1,Math.round(n/3)), c=n-a-b;
   return `🔒 <b>${n} left:</b> sell <b>${a}</b> @ $${t1} · <b>${b}</b> @ $${t2} · run <b>${c}</b> to $${t3} <i>(stop→BE $${be} after 1st)</i>`;
 }
+function posVerdict(p){   // live "what do I do NOW" for a position you're in
+  if(!p||['CLOSED','CUT'].includes(p.state)||!p.live||p.live.pnl_pct==null) return '';
+  const pnl=p.live.pnl_pct, t1=p.tp1_pct||30, stop=p.stop_pct||30;
+  const be=p.stop!=null&&p.avg_entry&&p.stop>=p.avg_entry;
+  const trim=Math.max(1,Math.round((p.qty_remaining||1)/3));
+  let c,txt;
+  if(pnl<=-stop*0.85){ c='skip'; txt=`🔴 ${Math.round(pnl)}% — at/near stop, cut if it breaks $${p.stop}`; }
+  else if(pnl>=t1+35){ c='take'; txt=`🟢 +${Math.round(pnl)}% — past T2! trail the runner, bank into strength`; }
+  else if(pnl>=t1){ c='take'; txt=`🟢 +${Math.round(pnl)}% — at T1: trim ${trim}, move stop→BE $${p.avg_entry}`; }
+  else if(pnl>=0){ c='wait'; txt=`🟡 +${Math.round(pnl)}% — hold, stop $${p.stop}${be?' (at BE — free roll)':''}`; }
+  else { c='wait'; txt=`🟡 ${Math.round(pnl)}% — hold, stop $${p.stop}`; }
+  return `<div class="verdict v-${c}">🎯 <b>${txt}</b></div>`;
+}
 function coachHTML(s){
   if(!s.ticket||s.ticket.limit==null) return '';
   const g=s.grade||grade(s), lq=liqGrade(s), be=breakeven(s), t=s.ticket;
@@ -895,10 +952,20 @@ async function refresh(){
     document.getElementById('acct').innerHTML=`$${Number(d.account).toLocaleString(undefined,{maximumFractionDigits:0})} <span style="color:${grow>=0?'#22c55e':'#ef4444'}">(${grow>=0?'+':''}${grow.toFixed(1)}%)</span>`;
     document.getElementById('risk').textContent=d.risk+'%';
     let S=d.signals||[];
+    // TODAY P&L: realized (from discipline) + live open unrealized
+    const rzToday=((d.discipline&&d.discipline.realized_R)||0)*(d.account/100);
+    window._todayGain=rzToday;
+    let openPnl=0;
+    S.forEach(s=>{ const p=s.pos; if(p&&p.live&&p.live.pnl_pct!=null&&['OPEN','PARTIALLY_TRIMMED','RUNNER'].includes(p.state))
+      openPnl+=(p.live.pnl_pct/100)*(p.avg_entry||p.entry||0)*(p.qty_remaining||0)*100; });
+    const col=v=>v>=0?'#22c55e':'#ef4444';
+    document.getElementById('today').innerHTML=`<span style="color:${col(rzToday)}">${rzToday>=0?'+':'−'}$${Math.abs(Math.round(rzToday))}</span>`
+      +(Math.abs(openPnl)>=1?` <span style="color:var(--muted)">· open <span style="color:${col(openPnl)}">${openPnl>=0?'+':'−'}$${Math.abs(Math.round(openPnl))}</span></span>`:'');
     renderWallet(d);
     renderStats(d.stats);
     renderSources(d.sources,d.now);
     window.DAY_OVERRIDE=d.day_override;
+    renderChipsTray(d.discipline,d.account);
     renderDiscipline(d.discipline,d.sleeve);
     renderMilestone(d.sleeve);
     renderPending(d.pending);
@@ -943,7 +1010,8 @@ async function refresh(){
     }
     // always patch live P&L lines in place (smooth, no card blink)
     S.forEach(s=>{ if(s.pos){ POS[s.pos.id]=s.pos; const el=document.getElementById('live-'+s.pos.id);
-      if(el) el.innerHTML=liveLineHTML(s.pos); } });
+      if(el) el.innerHTML=liveLineHTML(s.pos);
+      const pe=document.getElementById('pv-'+s.pos.id); if(pe) pe.innerHTML=posVerdict(s.pos); } });
     // patch live move% + recommendation, and the coach chips (grade/liq/BE/exit) on un-taken cards
     window.STATS=d.stats; window.NOW=d.now;
     S.forEach(s=>{ const el=document.getElementById('slive-'+s.id); if(el) el.innerHTML=liveRecoHTML(s.live);
