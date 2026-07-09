@@ -15,8 +15,8 @@
     color:var(--txt);font-family:'Inter',system-ui,-apple-system,sans-serif;-webkit-font-smoothing:antialiased}
   .mono{font-family:'JetBrains Mono',ui-monospace,'SF Mono',Menlo,monospace}
   header{position:sticky;top:0;z-index:5;backdrop-filter:blur(12px);
-    background:rgba(10,14,23,.75);border-bottom:1px solid var(--line);
-    display:flex;align-items:center;gap:18px;padding:14px 22px}
+    background:rgba(10,14,23,.75);border-bottom:1px solid var(--line)}
+  .hbar{max-width:1480px;margin:0 auto;display:flex;align-items:center;gap:18px;padding:14px 22px}
   .logo{font-weight:800;font-size:18px;letter-spacing:.3px;display:flex;align-items:center;gap:9px}
   .logo .b{color:var(--blue)}
   .dot{width:9px;height:9px;border-radius:50%;background:var(--green);box-shadow:0 0 0 0 rgba(34,197,94,.5);
@@ -258,36 +258,61 @@
   .lf-sec{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px;margin:14px 0 6px}
   .ledger{font-size:12.5px;color:var(--muted)}
   .ledger div{padding:3px 0;border-bottom:1px solid var(--line)}
+  /* ---- two-column layout: left rail (Listening) + main ---- */
+  .layout{max-width:1480px;margin:14px auto 26px;padding:0 20px;display:grid;grid-template-columns:284px minmax(0,1fr);gap:22px;align-items:start}
+  .main{min-width:0}
+  .main>.wallet,.main>.stats,.main>.disc,.main>.positions,.main>.chipstray,.main>.qualitypack,.main>.sortbar,.main>.wrap{max-width:none;margin-left:0;margin-right:0}
+  .main>.wrap,.main>.positions,.main>.sortbar,.main>.qualitypack,.main>.chipstray{padding-left:0;padding-right:0}
+  .rail{position:sticky;top:64px;display:flex;flex-direction:column;gap:14px}
+  .rail .sources{max-width:none;margin:0;padding:12px;display:flex;flex-direction:column;gap:5px;align-items:stretch;
+    background:linear-gradient(180deg,var(--panel),var(--panel2));border:1px solid var(--line);border-radius:14px}
+  .rail-h{font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.6px;
+    display:flex;align-items:center;gap:8px;margin:2px 2px 6px}
+  .rail-n{margin-left:auto;background:#20293a;border-radius:9px;padding:1px 8px;font-size:10.5px;color:var(--muted);letter-spacing:0}
+  .rail .src{width:100%;box-sizing:border-box;background:transparent;border:none;border-radius:9px;padding:7px 8px;
+    align-items:flex-start;transition:background .12s}
+  .rail .src:hover{background:rgba(255,255,255,.035)}
+  .daysort{cursor:pointer;font-size:10.5px;font-weight:600;letter-spacing:0;text-transform:none;color:var(--muted);
+    padding:2px 8px;border-radius:8px;border:1px solid var(--line)}
+  .daysort.on{background:rgba(56,189,248,.14);border-color:rgba(56,189,248,.4);color:#bfe3fb}
+  @media(max-width:980px){ .layout{grid-template-columns:1fr;gap:14px} .rail{position:static} }
 </style>
 </head>
 <body>
 <header>
-  <div class="logo">⚡ Signal&nbsp;<span class="b">Desk</span></div>
-  <span class="dot" id="dot" title="server live"></span>
-  <div class="spacer"></div>
-  <div class="chip">Account <b id="acct">$—</b></div>
-  <div class="chip">Today <b id="today">—</b></div>
-  <div class="chip">Risk <b id="risk">—</b></div>
-  <div class="chip">Signals <b id="n">0</b> · Taken <b id="nt">0</b> · Skipped <b id="ns">0</b></div>
+  <div class="hbar">
+    <div class="logo">⚡ Signal&nbsp;<span class="b">Desk</span></div>
+    <span class="dot" id="dot" title="server live"></span>
+    <div class="spacer"></div>
+    <div class="chip">Account <b id="acct">$—</b></div>
+    <div class="chip">Today <b id="today">—</b></div>
+    <div class="chip">Risk <b id="risk">—</b></div>
+    <div class="chip">Signals <b id="n">0</b> · Taken <b id="nt">0</b> · Skipped <b id="ns">0</b></div>
+  </div>
 </header>
 
-<div id="wallet" class="wallet"></div>
-<div id="stats" class="stats"></div>
-<div id="daypnl" class="stats"></div>
-<div id="drawdown" class="stats"></div>
-<div id="sources" class="sources"></div>
-<div id="chipstray" class="chipstray"></div>
-<div id="qualitypack" class="qualitypack"></div>
-<div id="discipline" class="disc"></div>
-<div id="milestone" class="disc"></div>
-<div id="pending" class="positions"></div>
-<div id="positions" class="positions"></div>
-<div id="modal"></div>
-
-<div class="sortbar" id="sortbar"></div>
-<div class="wrap" id="feed">
-  <div class="empty"><div class="big">📡</div>Waiting for live signals…<br>
-    Start <span class="mono">python3 server.py</span>, open the channel, hit <b>👀 Watch</b> in the extension.</div>
+<div class="layout">
+  <aside class="rail">
+    <div id="sources" class="sources"></div>
+  </aside>
+  <main class="main">
+    <div id="wallet" class="wallet"></div>
+    <div id="stats" class="stats"></div>
+    <div id="daypnl" class="stats"></div>
+    <div id="drawdown" class="stats"></div>
+    <div id="chipstray" class="chipstray"></div>
+    <div id="qualitypack" class="qualitypack"></div>
+    <div id="discipline" class="disc"></div>
+    <div id="milestone" class="disc"></div>
+    <div id="pending" class="positions"></div>
+    <div id="positions" class="positions"></div>
+    <div id="modal"></div>
+    <div class="sortbar" id="sortbar"></div>
+    <div class="wrap" id="feed">
+      <div class="empty"><div class="big">📡</div>Waiting for live signals…<br>
+        Start <span class="mono">python3 server.py</span>, open the channel, hit <b>👀 Watch</b> in the extension.</div>
+    </div>
+  </main>
 </div>
 
 <script>
@@ -330,18 +355,23 @@ function ago(iso,nowIso){
 function renderSources(src,nowIso){
   const el=document.getElementById('sources');
   const keys=Object.keys(src||{});
-  if(!keys.length){el.innerHTML='<span class="src off"><span class="d" style="background:#5c6b86"></span>Nothing listening — open a channel & hit <b>&nbsp;👀 Watch</b></span>';return;}
-  el.innerHTML='<span style="color:var(--dim);font-size:12px;align-self:center">Listening:</span>'+keys.map(k=>{
-    const s=src[k];
-    const live=((Date.parse(nowIso)-Date.parse(s.last_beat||0))/1000)<70;   // heartbeat ~20s
+  if(!keys.length){el.innerHTML='<div class="rail-h">📡 Listening</div><div style="color:var(--muted);font-size:12px;padding:2px 4px">Nothing listening — open a channel & hit <b>👀 Watch</b> in the extension.</div>';return;}
+  const isLive=k=>((Date.parse(nowIso)-Date.parse(src[k].last_beat||0))/1000)<70;   // heartbeat ~20s
+  const liveN=keys.filter(isLive).length;
+  keys.sort((a,b)=>(isLive(b)-isLive(a))||((src[b].count||0)-(src[a].count||0)));   // live first, then busiest
+  el.innerHTML=`<div class="rail-h">📡 Listening <span class="rail-n">${liveN}/${keys.length} live</span></div>`+keys.map(k=>{
+    const s=src[k], live=isLive(k);
     const hrs=Math.max((Date.parse(nowIso)-Date.parse(s.first||nowIso))/3.6e6,0.05);
     const rate=s.count?(s.count/hrs).toFixed(1):'0';
     const last=s.last_signal?`${ago(s.last_signal_iso,nowIso)} · ${s.last_signal}`:'no signal yet';
     const key=s.provider||k;
-    return `<div class="src ${muted.has(key)?'off':''}" onclick="toggleSrc('${key}')" title="${live?'live — receiving heartbeat':'stale — window not sending (minimized/closed?)'}">
-      <span class="d" style="background:${live?'#22c55e':'#6b7280'}"></span>
-      <div style="line-height:1.35"><b>${s.name||k}</b>${s.provider?` <small style="color:var(--blue)">→${s.provider}</small>`:''}<br>
-      <small>${s.count||0} signals · ${rate}/hr · last ${last}</small></div></div>`;
+    return `<div class="src ${muted.has(key)?'off':''}" onclick="toggleSrc('${key}')" title="${live?'live — receiving heartbeat (click to mute)':'stale — window not sending (minimized/closed?)'}">
+      <span class="d" style="background:${live?'#22c55e':'#6b7280'};margin-top:5px;flex-shrink:0"></span>
+      <div style="line-height:1.4;min-width:0;flex:1">
+        <div style="display:flex;align-items:center;gap:6px"><b style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${s.provider||s.name||k}</b>${live?'':'<small style="color:var(--amber)">stale</small>'}${muted.has(key)?'<small style="color:var(--dim)">muted</small>':''}</div>
+        <small>${s.count||0} signals · ${rate}/hr</small><br>
+        <small style="color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block">last: ${last}</small>
+      </div></div>`;
   }).join('');
 }
 function toggleSrc(k){muted.has(k)?muted.delete(k):muted.add(k);refresh();}
@@ -548,13 +578,19 @@ function renderDrawdown(dd,acct){
     <div class="dd-gauge"><div class="dd-fill ${tcls}" style="width:${gauge}%"></div></div>
     <div class="dd-tier"><span class="dd-badge ${tcls}">${tier}</span> <span class="dd-rule">−5% caution · −10% cut · −15% A-only · −20% HALT</span></div>`;
 }
+function setDaySort(s){window.dayPnlSort=s;refresh();}
 function renderDayPnl(days){
   const el=document.getElementById('daypnl'); if(!el) return;
   if(!days||!days.length){el.innerHTML='';return;}
+  const sort=window.dayPnlSort||'recent';
   const max=Math.max(...days.map(d=>Math.abs(d.total)),1);
   const total=days.reduce((a,d)=>a+d.total,0);
   const green=days.filter(d=>d.total>0).length, red=days.filter(d=>d.total<0).length;
-  const rows=days.slice().reverse().map(d=>{     // most recent day on top
+  let ord=days.slice();
+  if(sort==='best') ord.sort((a,b)=>b.total-a.total);
+  else if(sort==='worst') ord.sort((a,b)=>a.total-b.total);
+  else ord.reverse();                            // recent = newest first
+  const rows=ord.map(d=>{
     const pos=d.total>=0, w=Math.max(2,Math.round(Math.abs(d.total)/max*100));
     const dd=new Date(d.date+'T12:00:00'), lbl=dd.toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric'});
     return `<div class="dp-row"><span class="dp-d">${lbl}</span>`
@@ -562,7 +598,12 @@ function renderDayPnl(days){
       +`<span class="dp-v" style="color:${pos?'#22c55e':'#ef4444'}">${pos?'+':'−'}$${Math.abs(Math.round(d.total))}</span>`
       +`<span class="dp-n">${d.wins}W/${d.losses}L</span></div>`;
   }).join('');
-  el.innerHTML=`<div class="stats-h">📅 Day P&L <span style="margin-left:auto;font-weight:600;color:${total>=0?'#22c55e':'#ef4444'}">${total>=0?'+':'−'}$${Math.abs(Math.round(total))} total</span> <span style="color:var(--muted);font-weight:500">· ${green} green / ${red} red</span></div>${rows}`;
+  const sc=(k,l)=>`<span class="daysort ${sort===k?'on':''}" onclick="setDaySort('${k}')">${l}</span>`;
+  el.innerHTML=`<div class="stats-h">📅 Day P&L `
+    +`<span style="font-weight:700;color:${total>=0?'#22c55e':'#ef4444'}">${total>=0?'+':'−'}$${Math.abs(Math.round(total))}</span>`
+    +`<span style="color:var(--muted);font-weight:500">${green}🟢 / ${red}🔴</span>`
+    +`<span style="margin-left:auto;display:flex;gap:5px">${sc('recent','Recent')}${sc('best','Best')}${sc('worst','Worst')}</span>`
+    +`</div>${rows}`;
 }
 function renderStats(st){
   const el=document.getElementById('stats');
