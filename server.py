@@ -227,6 +227,7 @@ def _looks_mgmt(t):
 # ================= LIVE POSITION MONITOR (IBKR market data) =================
 MONITOR = {}    # pos_id -> {mid, pnl_pct, peak_pct, iv, delta, spread_pct, expiry, alert, fired}
 LIVE_SIG = {}   # card_id -> live quote + move% + recommendation for an un-taken actionable card
+_TAPE_CACHE = {}   # ticker -> (epoch, indicators) — throttled underlying spot+tape for path capture
 DAY_OVERRIDE_DATE = None   # ISO date the day-stop is manually overridden (auto-resets each day)
 
 
@@ -305,6 +306,7 @@ def _check_pos_rules(p, st):
 
 def monitor_loop():
     import market as MK
+    import time
     conn = None
     while True:
         try:
@@ -390,6 +392,37 @@ def monitor_loop():
                 sh["now"] = pct
                 sh["peak"] = round(max(sh.get("peak", 0), pct), 1)
                 sh["trough"] = round(min(sh.get("trough", 0), pct), 1)
+                # --- PATH: snapshot the FULL CONDITIONS at this tick (future ML: what plays behind a peak/reversal)
+                if DB:
+                    tp = _TAPE_CACHE.get(sg["ticker"])
+                    if not tp or time.time() - tp[0] > 180:   # refresh underlying spot+tape every ~3 min
+                        try:
+                            _ind = MK.indicators(MK.get_bars(conn, sg["ticker"])) or {}
+                        except Exception:
+                            _ind = {}
+                        _TAPE_CACHE[sg["ticker"]] = (time.time(), _ind)
+                    ind = _TAPE_CACHE[sg["ticker"]][1]
+                    spot = ind.get("price")
+                    if sh.get("entry_spot") is None and spot:
+                        sh["entry_spot"] = spot
+                    es, prev = sh.get("entry_spot"), sh.get("prev_pct")
+                    mom = ("up" if (prev is not None and pct > prev + 2) else
+                           "down" if (prev is not None and pct < prev - 2) else "flat")
+                    et = datetime.now(ET)
+                    DB.record_tick({
+                        "signal_id": s["id"], "ts_utc": datetime.now(timezone.utc).isoformat(), "phase": "shadow",
+                        "mins": round((datetime.now(timezone.utc)
+                                       - datetime.fromisoformat(sh["start_utc"])).total_seconds() / 60, 1),
+                        "tod_min": et.hour * 60 + et.minute,
+                        "opt_mid": q["mid"], "opt_pct": pct, "bid": q.get("bid"), "ask": q.get("ask"),
+                        "iv": q.get("iv"), "delta": q.get("delta"), "gamma": q.get("gamma"),
+                        "theta": q.get("theta"), "vega": q.get("vega"),
+                        "spot": spot, "spot_pct": (round((spot / es - 1) * 100, 2) if (spot and es) else None),
+                        "rsi": ind.get("rsi"), "vwap": ind.get("vwap"), "ema9": ind.get("ema9"),
+                        "ema21": ind.get("ema21"), "bb_up": ind.get("bb_up"), "bb_low": ind.get("bb_low"),
+                        "momentum": mom, "is_peak": 1 if pct >= sh["peak"] else 0,
+                        "is_trough": 1 if pct <= sh["trough"] else 0})
+                    sh["prev_pct"] = pct
                 if not sh.get("result"):                      # disciplined result = whichever we'd hit FIRST
                     if pct <= -sh["stop_pct"]:
                         sh["result"], sh["result_pct"] = "LOSS", -sh["stop_pct"]

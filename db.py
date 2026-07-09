@@ -62,6 +62,18 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE INDEX IF NOT EXISTS ix_ev_sig  ON events(signal_id);
 CREATE INDEX IF NOT EXISTS ix_ev_kind ON events(kind);
+-- path: the FULL CONDITIONS at every tick through a trade's life (option + underlying + tape + momentum).
+-- For future ML: learn what plays behind a peak, a reversal, a momentum shift. Rich raw; labels derived later.
+CREATE TABLE IF NOT EXISTS path (
+  signal_id TEXT, ts_utc TEXT, phase TEXT, mins REAL, tod_min INTEGER,
+  opt_mid REAL, opt_pct REAL, bid REAL, ask REAL,
+  iv REAL, delta REAL, gamma REAL, theta REAL, vega REAL,
+  spot REAL, spot_pct REAL, rsi REAL, vwap REAL, ema9 REAL, ema21 REAL, bb_up REAL, bb_low REAL,
+  momentum TEXT, is_peak INTEGER, is_trough INTEGER,
+  PRIMARY KEY (signal_id, ts_utc)
+);
+CREATE INDEX IF NOT EXISTS ix_path_sig ON path(signal_id);
+CREATE INDEX IF NOT EXISTS ix_path_peak ON path(is_peak);
 CREATE INDEX IF NOT EXISTS ix_sig_provider ON signals(provider);
 CREATE INDEX IF NOT EXISTS ix_sig_ticker   ON signals(ticker);
 CREATE INDEX IF NOT EXISTS ix_sig_ts       ON signals(ts_utc);
@@ -180,6 +192,17 @@ def record_decision(signal_id, action, qty=None, fill_px=None, ts_utc=None):
         pass
 
 
+def record_tick(row):
+    """One observation in a trade's life — full conditions (option greeks + underlying + tape + momentum).
+    Cheap, idempotent (keyed signal_id/ts_utc). Called from the monitor while shadowing / holding."""
+    try:
+        con = connect()
+        _upsert(con, "path", row, keys=("signal_id", "ts_utc"))
+        con.commit(); con.close()
+    except Exception:
+        pass
+
+
 def _shadow_outcome(e):
     """Would-be outcome of a SKIPPED signal: disciplined result (WIN/LOSS/SCRATCH by our stop/target,
     first hit) PLUS the ultimate peak/trough over its full life (what we truly missed or dodged)."""
@@ -289,6 +312,7 @@ def summary():
     you = q("SELECT COUNT(*) FROM events WHERE source=?", "you")
     prov = q("SELECT COUNT(*) FROM events WHERE source=?", "provider")
     print(f"  events   : {n_ev}  (your trims/cuts {you}, provider exits {prov})")
+    print(f"  path ticks: {q('SELECT COUNT(*) FROM path')}  (peaks {q('SELECT COUNT(*) FROM path WHERE is_peak=1')})")
     print(f"  ml rows w/ label: {labeled}")
     print("\n  by provider (signals / labeled):")
     for prov, n, lab in con.execute(
