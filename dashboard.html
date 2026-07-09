@@ -48,6 +48,13 @@
   .dp-more{margin-top:9px;font-size:12px;color:#7dd3fc;cursor:pointer;font-weight:600}
   .dp-more:hover{text-decoration:underline}
   .lf-grid .cell .l{font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.4px}
+  .hm-wrap{display:flex;gap:3px;padding:2px 0 4px;overflow-x:auto}
+  .hm-wk{display:flex;flex-direction:column;gap:3px}
+  .hm-cell{width:13px;height:13px;border-radius:3px;border:1px solid rgba(255,255,255,.05);flex-shrink:0}
+  .hm-mons{display:flex;gap:3px;margin-bottom:4px}
+  .hm-mon{width:13px;flex-shrink:0;font-size:9.5px;color:var(--dim);white-space:nowrap;overflow:visible}
+  .hm-leg{display:flex;align-items:center;gap:4px;font-size:10.5px;color:var(--muted);margin-top:9px}
+  .hm-leg .hm-cell{width:11px;height:11px}
   #drawdown:empty{display:none}
   .dd-cur{font-size:13px;margin-bottom:5px}
   .dd-max{font-size:12px;color:var(--muted);margin-bottom:9px}
@@ -615,13 +622,45 @@ function renderDayPnl(days){
   const total=days.reduce((a,d)=>a+d.total,0);
   const green=days.filter(d=>d.total>0).length, red=days.filter(d=>d.total<0).length;
   const CAP=7, ord=_daySorted(days), shown=ord.slice(0,CAP);
-  const more=days.length>CAP?`<div class="dp-more" onclick="showDayPnl()">View all ${days.length} days →</div>`:'';
+  const more=`<div class="dp-more" onclick="showDayPnl()">${days.length>CAP?`View all ${days.length} days`:'📅 Calendar view'} →</div>`;
   const sc=(k,l)=>`<span class="daysort ${sort===k?'on':''}" onclick="setDaySort('${k}')">${l}</span>`;
   el.innerHTML=`<div class="stats-h">📅 Day P&L `
     +`<span style="font-weight:700;color:${total>=0?'#22c55e':'#ef4444'}">${total>=0?'+':'−'}$${Math.abs(Math.round(total))}</span>`
     +`<span style="color:var(--muted);font-weight:500">${green}🟢/${red}🔴</span></div>`
     +`<div class="daysorts">${sc('recent','Recent')}${sc('best','Best')}${sc('worst','Worst')}</div>`
     +shown.map(d=>_dayRow(d,max)).join('')+more;
+}
+function _hmColor(d,max){
+  if(!d) return '#141c29';                       // no-trade day
+  if(!d.total) return '#232d3e';                 // scratch
+  const inten=0.28+Math.min(1,Math.abs(d.total)/max)*0.62;
+  return d.total>0?`rgba(34,197,94,${inten})`:`rgba(239,68,68,${inten})`;
+}
+function _heatmap(days){
+  if(!days.length) return '';
+  const byDate={}; days.forEach(d=>byDate[d.date]=d);
+  const max=Math.max(...days.map(d=>Math.abs(d.total)),1);
+  const dts=days.map(d=>d.date).sort();
+  const first=new Date(dts[0]+'T12:00:00'), last=new Date(dts[dts.length-1]+'T12:00:00');
+  const start=new Date(first); start.setDate(start.getDate()-start.getDay());          // back to Sunday
+  const end=new Date(last); end.setDate(end.getDate()+(6-end.getDay()));               // fwd to Saturday
+  const MON=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const weeks=[]; let cur=new Date(start);
+  while(cur<=end){
+    const wk=[];
+    for(let i=0;i<7;i++){
+      const iso=cur.getFullYear()+'-'+String(cur.getMonth()+1).padStart(2,'0')+'-'+String(cur.getDate()).padStart(2,'0');
+      wk.push({iso,d:byDate[iso],mon:cur.getMonth(),dom:cur.getDate()}); cur.setDate(cur.getDate()+1);
+    }
+    weeks.push(wk);
+  }
+  const monRow=weeks.map(wk=>{const f=wk.find(c=>c.dom<=7); return `<span class="hm-mon">${f?MON[f.mon]:''}</span>`;}).join('');
+  const cols=weeks.map(wk=>`<div class="hm-wk">`+wk.map(c=>{
+    const tip=c.d?`${c.iso}: ${c.d.total>=0?'+':'−'}$${Math.abs(Math.round(c.d.total))} · ${c.d.wins}W/${c.d.losses}L`:`${c.iso}: no trades`;
+    return `<div class="hm-cell" style="background:${_hmColor(c.d,max)}" title="${tip}"></div>`;
+  }).join('')+`</div>`).join('');
+  return `<div class="hm-mons">${monRow}</div><div class="hm-wrap">${cols}</div>`
+    +`<div class="hm-leg">loss <span class="hm-cell" style="background:rgba(239,68,68,.85)"></span><span class="hm-cell" style="background:rgba(239,68,68,.4)"></span><span class="hm-cell" style="background:#232d3e"></span><span class="hm-cell" style="background:rgba(34,197,94,.4)"></span><span class="hm-cell" style="background:rgba(34,197,94,.85)"></span> profit</div>`;
 }
 function showDayPnl(){
   const days=(window.STATS&&window.STATS.by_day)||[]; if(!days.length) return;
@@ -643,8 +682,9 @@ function showDayPnl(){
       ${cell('Best day','+$'+Math.round(best.total)+' ('+D(best)+')','#22c55e')}
       ${cell('Worst day','−$'+Math.abs(Math.round(worst.total))+' ('+D(worst)+')','#ef4444')}
     </div>
-    <div class="stats-h" style="margin-top:6px">${days.length} days · ${green}🟢 / ${red}🔴 <span style="margin-left:auto;display:flex;gap:5px">${sc('recent','Recent')}${sc('best','Best')}${sc('worst','Worst')}</span></div>
-    <div style="max-height:52vh;overflow:auto">${_daySorted(days).map(d=>_dayRow(d,max)).join('')}</div></div>`;
+    <div class="lf-sec">Calendar</div>${_heatmap(days)}
+    <div class="stats-h" style="margin-top:12px">${days.length} days · ${green}🟢 / ${red}🔴 <span style="margin-left:auto;display:flex;gap:5px">${sc('recent','Recent')}${sc('best','Best')}${sc('worst','Worst')}</span></div>
+    <div style="max-height:40vh;overflow:auto">${_daySorted(days).map(d=>_dayRow(d,max)).join('')}</div></div>`;
 }
 function renderStats(st){
   const el=document.getElementById('stats');
