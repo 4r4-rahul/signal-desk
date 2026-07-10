@@ -2360,7 +2360,20 @@
     "expiry": "20260713",
     "conf_at_entry": 80,
     "tape_at_entry": "ALIGNED \u2713",
-    "provider_events": [],
+    "provider_events": [
+      {
+        "ts": "2026-07-10T09:31:27.454781-04:00",
+        "type": "PROFIT_UPDATE",
+        "ticker": null,
+        "leg": null,
+        "pct_out": null,
+        "pct_up": 12,
+        "price": null,
+        "stop_ref": null,
+        "estimated": false,
+        "raw": "12% @JMoneyAlerts\ud83d\udd75\ud83c\udffe\u200d\u2642\ufe0f"
+      }
+    ],
     "user_actions": [],
     "live_alerts": [
       {
@@ -2372,7 +2385,15 @@
     "opened": "2026-07-09T13:22:04.751908-04:00",
     "closed": null,
     "journal_id": "131948-SPY755",
-    "suggested": null,
+    "suggested": {
+      "type": "PROFIT_UPDATE",
+      "hint": null,
+      "pct_out": null,
+      "price": null,
+      "stop_ref": null,
+      "estimated": false,
+      "raw": "12% @JMoneyAlerts\ud83d\udd75\ud83c\udffe\u200d\u2642\ufe0f"
+    },
     "entry_msg_id": "chat-messages-990683297451495475-1524827404390895786",
     "provider_pct_out": 0,
     "entry_greeks": {
@@ -3034,6 +3055,142 @@
           "ts_utc": "2026-07-09T19:11:37.773829+00:00"
         }
       ]
+    }
+  },
+  {
+    "id": "1914-0400TSLA",
+    "trade_key": "mike|TSLA|420|C|20260710",
+    "provider": "mike",
+    "ticker": "TSLA",
+    "leg": "420C",
+    "entry": 0.67,
+    "avg_entry": 0.67,
+    "qty_initial": 3,
+    "qty_remaining": 3,
+    "stop": 0.49,
+    "initial_stop": 0.49,
+    "tp1": 0.9,
+    "tp2": 1.14,
+    "state": "OPEN",
+    "realized": 0.0,
+    "peak_pct": 3.0,
+    "is_runner": false,
+    "expiry": "20260710",
+    "conf_at_entry": 46,
+    "tape_at_entry": "no data",
+    "provider_events": [
+      {
+        "ts": "2026-07-10T09:50:39.806145-04:00",
+        "type": "CUT",
+        "ticker": "MSFT",
+        "leg": null,
+        "pct_out": null,
+        "pct_up": null,
+        "price": null,
+        "stop_ref": null,
+        "estimated": false,
+        "raw": "cutting MSFT .15  @Options Day Trade Alerts"
+      }
+    ],
+    "user_actions": [],
+    "live_alerts": [],
+    "resigned_events": [],
+    "opened": "2026-07-10T09:46:33.941924-04:00",
+    "closed": null,
+    "journal_id": "093803-TSLA420",
+    "suggested": {
+      "type": "CUT",
+      "hint": "\u26a0 CUT (loss)",
+      "pct_out": null,
+      "price": null,
+      "stop_ref": null,
+      "estimated": false,
+      "raw": "cutting MSFT .15  @Options Day Trade Alerts"
+    },
+    "entry_msg_id": "chat-messages-1337877131975463085-1525133979152289842",
+    "provider_pct_out": 0,
+    "entry_greeks": {
+      "expiry": "20260710",
+      "bid": 0.71,
+      "ask": 0.72,
+      "last": 0.71,
+      "mid": 0.71,
+      "spread_pct": 1.4,
+      "iv": 0.897,
+      "delta": 0.151,
+      "gamma": 0.0237,
+      "theta": -0.7706,
+      "vega": 0.0244
+    },
+    "entry_stop": {
+      "stop": 0.49,
+      "stop_pct": 30,
+      "terms": null,
+      "dynamic": false
+    },
+    "origin": {
+      "ts": "2026-07-10T09:38:03.057951-04:00",
+      "ts_utc": "2026-07-10T13:38:03.057951+00:00",
+      "raw": "TSLA 420C @ .7 @Options Day Trade Alerts",
+      "sig": {
+        "provider": "mike",
+        "ticker": "TSLA",
+        "strike": "420",
+        "type": "C",
+        "dte": null,
+        "expiry": null,
+        "premium": 0.7,
+        "lotto": false,
+        "assumed_call": false,
+        "stated_stop": null,
+        "watch": false
+      },
+      "score": 46,
+      "tier": "LOW",
+      "conviction": 1.0,
+      "size_mult": 0.0,
+      "reasons": [
+        "provider mike (+33)",
+        "ticker TSLA (+3)",
+        "call (+3)",
+        "premium normal for mike (z-1.1, +4)",
+        "tape no data (+3)",
+        "option ok \u2713 (+3)"
+      ],
+      "verified": true,
+      "recommendation": "MANUAL 1-LOT \u00b7 ENTRY-ONLY",
+      "plan": {
+        "ok": true,
+        "contracts": 1,
+        "capital": 70,
+        "risk": 70,
+        "risk_pct": 0.45,
+        "sized_at": 1.0,
+        "risk_R": 0.45,
+        "notional_capped": true,
+        "min_position": false,
+        "risk_frac": 1.0,
+        "risk_basis": "full premium (lotto/gap)",
+        "entry": 0.7,
+        "stop": 0.49,
+        "tp1": 0.9,
+        "tp2": 1.14,
+        "tp3": 1.42,
+        "tp1_pct": 28,
+        "tp2_pct": 63,
+        "tp3_pct": 103,
+        "trail_pct": 15,
+        "stop_pct": 30,
+        "stop_dynamic": false,
+        "stop_reliable": true,
+        "stop_terms": null,
+        "follow_exits": false,
+        "sold": 1,
+        "runner": 0,
+        "account": 15576.0,
+        "manual": true
+      },
+      "cosign": null
     }
   }
 ]

@@ -412,56 +412,62 @@ def monitor_loop():
                 try: conn.reqMarketDataType(int(MK.env("IBKR_MARKET_DATA_TYPE", "2")))
                 except Exception: pass
             for p in M.open_positions():
-                leg = p.get("leg") or ""
-                if not p.get("ticker") or len(leg) < 2:
+                try:
+                    leg = p.get("leg") or ""
+                    if not p.get("ticker") or len(leg) < 2:
+                        continue
+                    st = MONITOR.setdefault(p["id"], {"fired": set()})
+                    if "expiry" not in st and p.get("expiry"):     # price the position's REAL expiry, not nearest
+                        st["expiry"] = p["expiry"]
+                    q = MK.option_quote(p["ticker"], leg[:-1], leg[-1], expiry=st.get("expiry"), ib=conn)
+                    if not q or q.get("error") or not q.get("mid"):
+                        continue
+                    entry = p.get("avg_entry") or p.get("entry") or 0
+                    pnl = (q["mid"] / entry - 1) * 100 if entry else 0
+                    st.update(expiry=q.get("expiry", st.get("expiry")), mid=q["mid"], pnl_pct=round(pnl, 1),
+                              iv=q.get("iv"), delta=q.get("delta"), spread_pct=q.get("spread_pct"))
+                    st["peak_pct"] = round(max(st.get("peak_pct", pnl), pnl), 1)
+                    M.update_peak(p["id"], st["peak_pct"])       # persist the market high
+                    _path_tick(p.get("journal_id"), "position", q, p["ticker"], entry, st,
+                               p.get("opened_utc") or p.get("opened"), conn)   # full conditions of the LIVE trade
+                    _check_pos_rules(p, st)
+                    conn.sleep(1)
+                except Exception:
                     continue
-                st = MONITOR.setdefault(p["id"], {"fired": set()})
-                if "expiry" not in st and p.get("expiry"):     # price the position's REAL expiry, not nearest
-                    st["expiry"] = p["expiry"]
-                q = MK.option_quote(p["ticker"], leg[:-1], leg[-1], expiry=st.get("expiry"), ib=conn)
-                if not q or q.get("error") or not q.get("mid"):
-                    continue
-                entry = p.get("avg_entry") or p.get("entry") or 0
-                pnl = (q["mid"] / entry - 1) * 100 if entry else 0
-                st.update(expiry=q.get("expiry", st.get("expiry")), mid=q["mid"], pnl_pct=round(pnl, 1),
-                          iv=q.get("iv"), delta=q.get("delta"), spread_pct=q.get("spread_pct"))
-                st["peak_pct"] = round(max(st.get("peak_pct", pnl), pnl), 1)
-                M.update_peak(p["id"], st["peak_pct"])       # persist the market high
-                _path_tick(p.get("journal_id"), "position", q, p["ticker"], entry, st,
-                           p.get("opened_utc") or p.get("opened"), conn)   # full conditions of the LIVE trade
-                _check_pos_rules(p, st)
-                conn.sleep(1)
             # live-quote the ACTIONABLE un-taken cards -> live move% + recommendation on the card
             act = [s for s in SIGNALS if s.get("status") in ("NEW", "WATCHING") and s.get("verified")
                    and (not s.get("paper") or s.get("manual_override")) and (s.get("sig") or {}).get("premium")]
-            for s in act[-12:]:                              # cap: 12 most-recent actionable cards
-                sg = s["sig"]
-                exp = _resolve_expiry(sg) or (s.get("opt") or {}).get("expiry")   # SIGNAL'S expiry wins
-                q = MK.option_quote(sg["ticker"], str(sg["strike"]).split(".")[0], sg["type"],
-                                    expiry=exp, ib=conn)
-                if not q or q.get("error") or q.get("mid") is None:
+            for s in act[-20:]:                              # cap: 20 most-recent actionable cards
+                try:                                          # one bad/ambiguous contract must NOT kill the cycle
+                    sg = s["sig"]
+                    exp = _resolve_expiry(sg) or (s.get("opt") or {}).get("expiry")   # SIGNAL'S expiry wins
+                    q = MK.option_quote(sg["ticker"], str(sg["strike"]).split(".")[0], sg["type"],
+                                        expiry=exp, ib=conn)
+                    if not q or q.get("error") or q.get("mid") is None:
+                        continue
+                    if (s.get("opt") or {}).get("expiry") != q.get("expiry"):   # heal a wrong-expiry snapshot
+                        s["opt"] = q
+                        _pl = s.get("plan") or {}
+                        _e = _pl.get("entry") or sg.get("premium") or 0
+                        _t2f = (_pl["tp2"] / _e - 1) if (_e and _pl.get("tp2")) else 0.70
+                        s["ticket"] = E.order_ticket(q, sg.get("premium"), _pl.get("stop_pct") or 30,
+                                                     (_pl.get("tp1_pct") or 35) / 100.0, _t2f)
+                        save_signals()
+                    r = _live_reco(sg.get("premium"), q["mid"], q.get("ask"), q.get("spread_pct"))
+                    if r:
+                        prev = LIVE_SIG.get(s["id"], {}).get("level")
+                        green = {"go", "better"}
+                        if r["level"] in green and prev not in green:      # flipped INTO the buy zone -> ping once
+                            tk = s.get("ticket") or {}
+                            leg = f'{sg["ticker"]} {sg["strike"]}{sg["type"]}'
+                            zone = "buy zone" if r["level"] == "go" else "below signal (cheaper)"
+                            _alert(f"✅ {s['provider']}: {leg} entered the {zone} ({r['chase_pct']:+d}% vs signal) — "
+                                   f"enter ~${q.get('ask') or r['mid']}, set stop ${tk.get('stop', '?')} · "
+                                   f"T1 ${tk.get('t1','?')} / T2 ${tk.get('t2','?')}", "Signal Desk — Buy zone ✅")
+                        LIVE_SIG[s["id"]] = r
+                    conn.sleep(1)
+                except Exception:
                     continue
-                if (s.get("opt") or {}).get("expiry") != q.get("expiry"):   # heal a wrong-expiry snapshot
-                    s["opt"] = q
-                    _pl = s.get("plan") or {}
-                    _e = _pl.get("entry") or sg.get("premium") or 0
-                    _t2f = (_pl["tp2"] / _e - 1) if (_e and _pl.get("tp2")) else 0.70
-                    s["ticket"] = E.order_ticket(q, sg.get("premium"), _pl.get("stop_pct") or 30,
-                                                 (_pl.get("tp1_pct") or 35) / 100.0, _t2f)
-                    save_signals()
-                r = _live_reco(sg.get("premium"), q["mid"], q.get("ask"), q.get("spread_pct"))
-                if r:
-                    prev = LIVE_SIG.get(s["id"], {}).get("level")
-                    green = {"go", "better"}
-                    if r["level"] in green and prev not in green:      # flipped INTO the buy zone -> ping once
-                        tk = s.get("ticket") or {}
-                        leg = f'{sg["ticker"]} {sg["strike"]}{sg["type"]}'
-                        zone = "buy zone" if r["level"] == "go" else "below signal (cheaper)"
-                        _alert(f"✅ {s['provider']}: {leg} entered the {zone} ({r['chase_pct']:+d}% vs signal) — "
-                               f"enter ~${q.get('ask') or r['mid']}, set stop ${tk.get('stop', '?')} · "
-                               f"T1 ${tk.get('t1','?')} / T2 ${tk.get('t2','?')}", "Signal Desk — Buy zone ✅")
-                    LIVE_SIG[s["id"]] = r
-                conn.sleep(1)
             for k in list(LIVE_SIG):                          # drop stale ids no longer in the feed
                 if k not in {s["id"] for s in SIGNALS}:
                     LIVE_SIG.pop(k, None)
@@ -473,36 +479,39 @@ def monitor_loop():
             now_utc = datetime.now(timezone.utc).isoformat()
             dirty = False
             for s in shadows[-20:]:
-                sh, sg = s["shadow"], s["sig"]
-                if sh.get("state") in ("WIN", "LOSS"):        # migrate old resolved -> keep tracking the full life
-                    sh["result"], sh["state"] = sh.get("result") or sh["state"], "live"
-                exp = sh.get("expiry") or _resolve_expiry(sg) or (s.get("opt") or {}).get("expiry")
-                if exp and exp < today:                       # contract expired -> END its life
-                    sh["state"], sh["ended_utc"] = "ended", now_utc
-                    if not sh.get("result"):
-                        sh["result"] = ("WIN" if sh.get("peak", 0) >= sh["t1_pct"]
-                                        else "LOSS" if sh.get("trough", 0) <= -sh["stop_pct"] else "SCRATCH")
+                try:
+                    sh, sg = s["shadow"], s["sig"]
+                    if sh.get("state") in ("WIN", "LOSS"):        # migrate old resolved -> keep tracking the full life
+                        sh["result"], sh["state"] = sh.get("result") or sh["state"], "live"
+                    exp = sh.get("expiry") or _resolve_expiry(sg) or (s.get("opt") or {}).get("expiry")
+                    if exp and exp < today:                       # contract expired -> END its life
+                        sh["state"], sh["ended_utc"] = "ended", now_utc
+                        if not sh.get("result"):
+                            sh["result"] = ("WIN" if sh.get("peak", 0) >= sh["t1_pct"]
+                                            else "LOSS" if sh.get("trough", 0) <= -sh["stop_pct"] else "SCRATCH")
+                        dirty = True
+                        continue
+                    q = MK.option_quote(sg["ticker"], str(sg["strike"]).split(".")[0], sg["type"], expiry=exp, ib=conn)
+                    if not q or q.get("error") or q.get("mid") is None:
+                        continue
+                    pct = round((q["mid"] / sh["ref"] - 1) * 100, 1)
+                    sh["now"] = pct
+                    sh["peak"] = round(max(sh.get("peak", 0), pct), 1)
+                    sh["trough"] = round(min(sh.get("trough", 0), pct), 1)
+                    _path_tick(s["id"], "shadow", q, sg["ticker"], sh["ref"], sh, sh.get("start_utc"), conn)
+                    if not sh.get("result"):                      # disciplined result = whichever we'd hit FIRST
+                        if pct <= -sh["stop_pct"]:
+                            sh["result"], sh["result_pct"] = "LOSS", -sh["stop_pct"]
+                        elif pct >= sh["t1_pct"]:
+                            sh["result"], sh["result_pct"] = "WIN", sh["t1_pct"]
+                    if q["mid"] <= 0.02:                          # decayed to ~worthless -> END its life
+                        sh["state"], sh["ended_utc"] = "ended", now_utc
+                        if not sh.get("result"):
+                            sh["result"] = "LOSS" if sh.get("trough", 0) <= -sh["stop_pct"] else "SCRATCH"
                     dirty = True
+                    conn.sleep(1)
+                except Exception:
                     continue
-                q = MK.option_quote(sg["ticker"], str(sg["strike"]).split(".")[0], sg["type"], expiry=exp, ib=conn)
-                if not q or q.get("error") or q.get("mid") is None:
-                    continue
-                pct = round((q["mid"] / sh["ref"] - 1) * 100, 1)
-                sh["now"] = pct
-                sh["peak"] = round(max(sh.get("peak", 0), pct), 1)
-                sh["trough"] = round(min(sh.get("trough", 0), pct), 1)
-                _path_tick(s["id"], "shadow", q, sg["ticker"], sh["ref"], sh, sh.get("start_utc"), conn)
-                if not sh.get("result"):                      # disciplined result = whichever we'd hit FIRST
-                    if pct <= -sh["stop_pct"]:
-                        sh["result"], sh["result_pct"] = "LOSS", -sh["stop_pct"]
-                    elif pct >= sh["t1_pct"]:
-                        sh["result"], sh["result_pct"] = "WIN", sh["t1_pct"]
-                if q["mid"] <= 0.02:                          # decayed to ~worthless -> END its life
-                    sh["state"], sh["ended_utc"] = "ended", now_utc
-                    if not sh.get("result"):
-                        sh["result"] = "LOSS" if sh.get("trough", 0) <= -sh["stop_pct"] else "SCRATCH"
-                dirty = True
-                conn.sleep(1)
             if dirty:
                 save_signals()
             if DB:

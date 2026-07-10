@@ -1,0 +1,8 @@
+Error 200, reqId 12593: No security definition has been found for the request, contract: Option(symbol='MSFT', lastTradeDateOrContractMonth='20260710', strike=397.0, right='C', exchange='SMART')
+Unknown contract: Option(symbol='MSFT', lastTradeDateOrContractMonth='20260710', strike=397.0, right='C', exchange='SMART')
+💹 Compounding: allocation sleeve — start $15,000 → now $15,576.00
+🟢 Signal Desk → http://localhost:8787   (account $15,576, 1.0% risk, 20 tickers loaded)
+   Open that URL, then turn on 'Watch' in the extension. Ctrl+C to stop.
+📡 Live position monitor started (IBKR option prices + Greeks).
+
+⚡ 09:57:19 sulker  SPY 753C  conf 58/100 LOW
