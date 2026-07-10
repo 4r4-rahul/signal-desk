@@ -1021,10 +1021,23 @@ function breakeven(s){
   if(st&&st.n>=5&&st.win_rate!=null) cmp=st.win_rate>=be?` · you ${st.win_rate}% ✅`:` · you ${st.win_rate}% ⚠`;
   return {be, cmp};
 }
-function exitLadder(n,t){
+function roundTrip(s){   // gamma-heavy setups that spike then give it ALL back (lotto / far-OTM / chased)
+  const sg=s.sig||{}, o=s.opt||{}, t=s.ticket||{}, L=s.live;
+  if(sg.lotto) return true;
+  if(o.delta!=null && Math.abs(o.delta)<0.30) return true;
+  return (L?L.chase_pct:(t.chasing_pct||0))>=15;
+}
+function posRoundTrip(p){
+  const sg=(p.origin||{}).sig||{}, dl=(p.entry_greeks||{}).delta;
+  return !!sg.lotto || (dl!=null && Math.abs(dl)<0.30);
+}
+function exitLadder(n,t,rt){
   n=Math.max(1,Math.round(n||1));
-  const t3=t.t3||t.t2;
-  if(n===1) return `🔒 <b>1 lot:</b> run to $${t3}; if it tags $${t.t1}, slide stop→BE $${t.limit}`;
+  const t3=t.t3||t.t2, tag=rt?' <span style="color:var(--amber)">⚡ round-trips — bank hard!</span>':'';
+  if(n===1) return (rt?`🔒 <b>1 lot:</b> take the pop — sell into +${t.t1_pct||30}% at $${t.t1} (these give it back)`
+                       :`🔒 <b>1 lot:</b> run to $${t3}; if it tags $${t.t1}, slide stop→BE $${t.limit}`)+tag;
+  if(rt){ const a=Math.max(1,Math.round(n*2/3)), run=n-a;
+    return `🔒 <b>Exit ${n} lots:</b> sell <b>${a}</b> @ $${t.t1} <b>(bank ⅔)</b> → stop→BE $${t.limit} → run <b>${run}</b> to $${t.t2}${tag}`; }
   if(n===2) return `🔒 <b>Exit 2 lots:</b> sell <b>1</b> @ $${t.t1} → stop→BE $${t.limit} → run <b>1</b> to $${t3}`;
   const a=Math.max(1,Math.round(n/3)), b=Math.max(1,Math.round(n/3)), c=n-a-b;   // thirds across T1/T2/T3
   return `🔒 <b>Exit ${n} lots:</b> sell <b>${a}</b> @ $${t.t1} · <b>${b}</b> @ $${t.t2} · run <b>${c}</b> to $${t3} <i>(stop→BE $${t.limit} after 1st)</i>`;
@@ -1043,7 +1056,11 @@ function posExitLadder(p){
   const t1p=p.tp1_pct||30, t2p=t1p+35, t3p=t1p+75;
   const t1=+(p.entry*(1+t1p/100)).toFixed(2), t2=+(p.entry*(1+t2p/100)).toFixed(2),
         t3=+(p.entry*(1+t3p/100)).toFixed(2), be=+(+p.entry).toFixed(2);
-  if(n===1) return `🔒 <b>1 left:</b> run to $${t3} (+${t3p}%); if it tags $${t1}, move stop→BE $${be}`;
+  const rt=posRoundTrip(p), tag=rt?' <span style="color:var(--amber)">⚡ round-trips — bank hard!</span>':'';
+  if(n===1) return (rt?`🔒 <b>1 left:</b> take the pop — sell into +${t1p}% at $${t1} (gives it back)`
+                       :`🔒 <b>1 left:</b> run to $${t3} (+${t3p}%); if it tags $${t1}, move stop→BE $${be}`)+tag;
+  if(rt){ const a=Math.max(1,Math.round(n*2/3)), run=n-a;
+    return `🔒 <b>${n} left:</b> sell <b>${a}</b> @ $${t1} <b>(bank ⅔)</b> → stop→BE $${be} → run <b>${run}</b> to $${t3}${tag}`; }
   if(n===2) return `🔒 <b>2 left:</b> sell <b>1</b> @ $${t1} → stop→BE $${be} → run <b>1</b> to $${t3}`;
   const a=Math.max(1,Math.round(n/3)), b=Math.max(1,Math.round(n/3)), c=n-a-b;
   return `🔒 <b>${n} left:</b> sell <b>${a}</b> @ $${t1} · <b>${b}</b> @ $${t2} · run <b>${c}</b> to $${t3} <i>(stop→BE $${be} after 1st)</i>`;
@@ -1071,8 +1088,10 @@ function coachHTML(s){
   h+=`<span class="tk">💧 ${lq.emoji} <b>${lq.word}</b> <i>${lq.txt}</i></span>`;
   h+=`<span class="tk">🧮 Break-even <b>${be.be}%</b><i>${be.cmp}</i></span>`;
   if(s.grade&&s.grade.mult&&s.grade.mult!==1) h+=`<span class="tk gr-${g.g}">📦 size ${s.grade.mult}×</span>`;
+  const rt=roundTrip(s);
+  if(rt) h+=`<span class="tk g-warm">⚡ round-trips — bank the pop</span>`;
   h+='</div>';
-  h+=`<div class="coachex">${exitLadder(n,t)}</div>`;
+  h+=`<div class="coachex">${exitLadder(n,t,rt)}</div>`;
   return h;
 }
 function liveRecoHTML(l){

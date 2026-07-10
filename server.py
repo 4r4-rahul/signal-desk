@@ -387,11 +387,21 @@ def _pos_alert(p, st, key, text):
            "Signal Desk — LIVE EXIT")
 
 
+def _round_trip_setup(p):
+    """Gamma-heavy setups that spike then ROUND-TRIP to a loss (data: 4/5 whipsaws were these):
+    a lotto, or a far-OTM low-delta contract. Bank the pop hard on these."""
+    sg = (p.get("origin") or {}).get("sig") or {}
+    dl = (p.get("entry_greeks") or {}).get("delta")
+    return bool(sg.get("lotto")) or (dl is not None and abs(dl) < 0.30)
+
+
 def _check_pos_rules(p, st):
     from datetime import datetime
     pnl, peak = st.get("pnl_pct", 0), st.get("peak_pct", 0)
     if pnl <= -45:
         _pos_alert(p, st, "stop", "🛑 STOP −45% hit — exit now")
+    elif _round_trip_setup(p) and peak >= 35 and p["state"] == "OPEN":
+        _pos_alert(p, st, "bankpop", f"⚡ +{peak:.0f}% on a lotto/far-OTM — BANK PARTIAL NOW, these round-trip to a loss!")
     elif pnl >= 40 and p["state"] == "OPEN":
         _pos_alert(p, st, "tp1", "🎯 +40% — scale out / take profits")
     if p["state"] == "RUNNER" and peak >= 30 and pnl <= peak - 25:
