@@ -170,7 +170,7 @@ def _resolve_ticker(text, mstart, provider, strike):
 
 def _parse_expiry(text):
     low = text.lower()
-    if re.search(r'\bd0te\b|\b0\s*dte\b|today expiry|expires?\s+today|exp\s+today', low):
+    if re.search(r'\bd0te\b|\b0\s*dte\b|today expiry|expir\w*\s+today|exp\w*\s+today', low):
         return 0, "0DTE"
     m = re.search(r'\b(\d)\s*dte\b', low)
     if m:
@@ -192,9 +192,11 @@ def _parse_expiry(text):
 
 def _parse_premium(text, pos):
     for scope in (text[pos:pos + 42], text):
-        m = re.search(r'@?\s*(\d{0,3}\.[ \t]?\d{1,2})', scope)       # decimal (opt. space, NOT newline)
+        # decimal premium: optional integer part + dot + 1-2 fractional, digits IMMEDIATELY after the dot
+        # (no space) — otherwise a sentence period like "today. 1.35" is misread as ".1" = 0.10.
+        m = re.search(r'@?\s*((?:\d{1,3})?\.\d{1,2})\b', scope)
         if m:
-            v = float(re.sub(r'\s', '', m.group(1)))
+            v = float(m.group(1))
             if 0.03 <= v <= 60:
                 return v
         m = re.search(r'@\s*(\d{1,2})(?!\d)', scope)                 # integer premium after @
