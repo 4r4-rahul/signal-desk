@@ -1,0 +1,6 @@
+Error 200, reqId 12593: No security definition has been found for the request, contract: Option(symbol='TSLA', strike=417.0, right='C', exchange='SMART')
+Error 200, reqId 12594: No security definition has been found for the request, contract: Option(symbol='META', strike=672.0, right='C', exchange='SMART')
+Error 200, reqId 12623: No security definition has been found for the request, contract: Option(symbol='TSLA', strike=417.0, right='C', exchange='SMART')
+Error 200, reqId 12624: No security definition has been found for the request, contract: Option(symbol='META', strike=672.0, right='C', exchange='SMART')
+Error 200, reqId 12651: No security definition has been found for the request, contract: Option(symbol='TSLA', strike=417.0, right='C', exchange='SMART')
+Error 200, reqId 12652: No security definition has been found for the request, contract: Option(symbol='META', strike=672.0, right='C', exchange='SMART')

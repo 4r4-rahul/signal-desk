@@ -1,34 +1,190 @@
 {
   "as_of": "2026-07-02",
   "prior_source": "3-way reconciled: heuristic guess (contradicted, rho=-0.67), thread reconstruction (supported, rho=+0.87), rigorous ML+options-SME referee.",
-  "note": "PROVISIONAL priors. Target is providers' SELF-REPORTED exits (unverified) — absolute EV% is NOT trustworthy; only the ROBUSTNESS RANKING is. Trust is conservative/compressed (33-58, no provider earns HIGH on trust alone — naive copy is ~breakeven-minus after slippage). Order = prince_small>=jmt>prince>sulker>optionking>mike, validated across every silent-loser assumption. Mike integrity-capped (recap 82% win vs ~20% real). Per-ticker & timing knobs REMOVED (ML: noise, R2=-0.22). Next real upgrade: reprice every trade from market.py to end the self-report dependency. Will re-fit from YOUR closed_trades.jsonl as real fills accumulate.",
+  "note": "PROVISIONAL priors. Target is providers' SELF-REPORTED exits (unverified) \u2014 absolute EV% is NOT trustworthy; only the ROBUSTNESS RANKING is. Trust is conservative/compressed (33-58, no provider earns HIGH on trust alone \u2014 naive copy is ~breakeven-minus after slippage). Order = prince_small>=jmt>prince>sulker>optionking>mike, validated across every silent-loser assumption. Mike integrity-capped (recap 82% win vs ~20% real). Per-ticker & timing knobs REMOVED (ML: noise, R2=-0.22). Next real upgrade: reprice every trade from market.py to end the self-report dependency. Will re-fit from YOUR closed_trades.jsonl as real fills accumulate.",
   "providers": {
-    "jmt":          {"trust": 58, "robust": true,  "size_mult": 1.00, "mode": "LIVE",  "premium_median": 1.54, "premium_mad": 0.34, "silent_rate": 0.30},
-    "prince_small": {"trust": 56, "robust": true,  "size_mult": 0.50, "mode": "LIVE",  "premium_median": 0.97, "premium_mad": 0.28, "silent_rate": 0.30, "thin_sample": true},
-    "prince":       {"trust": 52, "robust": false, "size_mult": 0.40, "mode": "LIVE",  "premium_median": 1.49, "premium_mad": 0.49, "silent_rate": 0.53},
-    "sulker":       {"trust": 47, "robust": false, "size_mult": 0.10, "mode": "LIVE",  "premium_median": 0.52, "premium_mad": 0.24, "silent_rate": 0.66, "liquid_only": true},
-    "optionking":   {"trust": 40, "robust": false, "size_mult": 0.00, "mode": "PAPER", "manual_override": true, "manual_max": 1, "premium_median": 1.00, "premium_mad": 0.50, "silent_rate": 0.76},
-    "mike":         {"trust": 33, "robust": false, "size_mult": 0.00, "mode": "PAPER", "manual_override": true, "manual_max": 1, "premium_median": 1.41, "premium_mad": 0.64, "silent_rate": 0.67, "integrity_capped": true, "liquid_only": true}
+    "jmt": {
+      "trust": 58,
+      "robust": true,
+      "size_mult": 3.0,
+      "mode": "LIVE",
+      "premium_median": 1.54,
+      "premium_mad": 0.34,
+      "silent_rate": 0.3
+    },
+    "prince_small": {
+      "trust": 56,
+      "robust": true,
+      "size_mult": 1.1,
+      "mode": "LIVE",
+      "premium_median": 0.97,
+      "premium_mad": 0.28,
+      "silent_rate": 0.3,
+      "thin_sample": true
+    },
+    "prince": {
+      "trust": 52,
+      "robust": false,
+      "size_mult": 1.1,
+      "mode": "LIVE",
+      "premium_median": 1.49,
+      "premium_mad": 0.49,
+      "silent_rate": 0.53
+    },
+    "sulker": {
+      "trust": 47,
+      "robust": false,
+      "size_mult": 0.0,
+      "mode": "LIVE",
+      "premium_median": 0.52,
+      "premium_mad": 0.24,
+      "silent_rate": 0.66,
+      "liquid_only": true,
+      "disabled": true
+    },
+    "optionking": {
+      "trust": 40,
+      "robust": false,
+      "size_mult": 0.0,
+      "mode": "PAPER",
+      "manual_override": true,
+      "manual_max": 1,
+      "premium_median": 1.0,
+      "premium_mad": 0.5,
+      "silent_rate": 0.76
+    },
+    "mike": {
+      "trust": 33,
+      "robust": false,
+      "size_mult": 0.0,
+      "mode": "PAPER",
+      "manual_override": true,
+      "manual_max": 1,
+      "premium_median": 1.41,
+      "premium_mad": 0.64,
+      "silent_rate": 0.67,
+      "integrity_capped": true,
+      "liquid_only": true,
+      "disabled": true
+    }
   },
   "provider_ticker": {},
-  "timing": {"enabled": false, "buckets": {}},
-  "exit_rule": {"scale_pct": 35, "scale_fraction": 0.6, "trail_off_peak_pct": 25, "give_back_pct": 17,
-                "note": "VERIFIED across all 6: winners give back ~15-19% of premium from peak to exit. Scale ~60% at +30-40%, trail rest 25% off peak."},
+  "timing": {
+    "enabled": false,
+    "buckets": {}
+  },
+  "exit_rule": {
+    "scale_pct": 35,
+    "scale_fraction": 0.6,
+    "trail_off_peak_pct": 25,
+    "give_back_pct": 17,
+    "note": "VERIFIED across all 6: winners give back ~15-19% of premium from peak to exit. Scale ~60% at +30-40%, trail rest 25% off peak."
+  },
   "exit_by_provider": {
-    "_note": "ML: a hard mechanical stop HELPS high-silent fire-hose books (mike +37, ok +26, sulker +6 pts/trade) but HURTS the managed ones (jmt -5.6, prince -3.2, p_small -22) — a tight stop clips their real winners. So stop style is PER-PROVIDER. follow_loose=lean on THEIR trims + a loose safety stop; own_hard=YOUR tight stop is the edge; underlying=stop on the STOCK level (swings).",
-    "jmt":          {"stop_style": "follow_loose", "stop_pct": 38, "follow_exits": true,  "scale_pct": 30, "trail_pct": 20},
-    "prince_small": {"stop_style": "follow_loose", "stop_pct": 35, "follow_exits": true,  "scale_pct": 40, "trail_pct": 25},
-    "prince":       {"stop_style": "underlying",   "stop_pct": 35, "follow_exits": true,  "scale_pct": 40, "trail_pct": 25},
-    "sulker":       {"stop_style": "own_hard",     "stop_pct": 25, "follow_exits": false, "scale_pct": 28, "trail_pct": 15},
-    "optionking":   {"stop_style": "own_hard",     "stop_pct": 25, "follow_exits": false, "scale_pct": 28, "trail_pct": 15},
-    "mike":         {"stop_style": "own_hard",     "stop_pct": 25, "follow_exits": false, "scale_pct": 28, "trail_pct": 15}
+    "_note": "ML: a hard mechanical stop HELPS high-silent fire-hose books (mike +37, ok +26, sulker +6 pts/trade) but HURTS the managed ones (jmt -5.6, prince -3.2, p_small -22) \u2014 a tight stop clips their real winners. So stop style is PER-PROVIDER. follow_loose=lean on THEIR trims + a loose safety stop; own_hard=YOUR tight stop is the edge; underlying=stop on the STOCK level (swings).",
+    "jmt": {
+      "stop_style": "follow_loose",
+      "stop_pct": 38,
+      "follow_exits": true,
+      "scale_pct": 30,
+      "trail_pct": 20
+    },
+    "prince_small": {
+      "stop_style": "follow_loose",
+      "stop_pct": 35,
+      "follow_exits": true,
+      "scale_pct": 40,
+      "trail_pct": 25
+    },
+    "prince": {
+      "stop_style": "underlying",
+      "stop_pct": 35,
+      "follow_exits": true,
+      "scale_pct": 40,
+      "trail_pct": 25
+    },
+    "sulker": {
+      "stop_style": "own_hard",
+      "stop_pct": 25,
+      "follow_exits": false,
+      "scale_pct": 28,
+      "trail_pct": 15
+    },
+    "optionking": {
+      "stop_style": "own_hard",
+      "stop_pct": 25,
+      "follow_exits": false,
+      "scale_pct": 28,
+      "trail_pct": 15
+    },
+    "mike": {
+      "stop_style": "own_hard",
+      "stop_pct": 25,
+      "follow_exits": false,
+      "scale_pct": 28,
+      "trail_pct": 15
+    }
   },
   "behavior": {
-    "jmt":          {"entries_per_day": 3,  "lotto_pct": 1,  "updates_per_entry": 1.72, "manages": true,  "cuts_losers": false, "best_hours": "9:30-11:00 ET", "recommendation": "FOLLOW (CORE)", "note": "Most robust usable provider: SPY-only (priceable, tight spreads), lowest silent rate, well narrated. Marginal +EV even under stress. Pre-set your own stop — he goes quiet on losers."},
-    "prince_small": {"entries_per_day": 2,  "lotto_pct": 1,  "updates_per_entry": 2.28, "manages": true,  "cuts_losers": true,  "best_hours": "10:00 ET", "recommendation": "FOLLOW / LEARN", "note": "Only book that stays positive if ALL silent trades are total losses — but THIN (n~300) and low volume. Best hand-holding (2.3 updates/trade), states stops. Directional, not a primary engine."},
-    "prince":       {"entries_per_day": 2,  "lotto_pct": 3,  "updates_per_entry": 0.97, "manages": true,  "cuts_losers": true,  "best_hours": "9:30-11:00 ET", "recommendation": "FOLLOW (SWING)", "note": "Actually cuts losers (least hidden-loss bias). Diversified liquid stocks, swing horizon. Positive but not robust to worst-case; size for his $1.50+ premiums."},
-    "sulker":       {"entries_per_day": 12, "lotto_pct": 26, "updates_per_entry": 0.52, "manages": true,  "cuts_losers": false, "best_hours": "9:30-11:00 ET", "recommendation": "LIQUID SLICE ONLY", "note": "~Breakeven overall; median trade is a $0.52 lotto (66% silent). Honest recaps + manages, but only his LIQUID IWM/SPX calls are worth copying — skip the cheap lottos."},
-    "optionking":   {"entries_per_day": 8,  "lotto_pct": 26, "updates_per_entry": 0.28, "manages": false, "cuts_losers": false, "best_hours": "9:00-10:30 ET", "recommendation": "STOPS YOURSELF / FILTER", "note": "Zero-to-negative live EV, 76% silent, 3 cuts / 2981 entries. Only usable if YOU enforce hard stops on his single-stock entries."},
-    "mike":         {"entries_per_day": 23, "lotto_pct": 31, "updates_per_entry": 0.30, "manages": false, "cuts_losers": false, "best_hours": "spread; 15:00 spike", "recommendation": "MANUAL 1-LOT · ENTRY-ONLY", "note": "INTEGRITY-CAPPED: recap claims 82% win, reality ~20% — NEVER trust his exits/recaps/targets, they may be fabricated. Discretionary 1-lot only, YOUR hard stop (25%) is the sole exit. Filter to liquid SPX/index names; skip the cheap lottos (31%). Auto-killed if last-20 real EV turns negative."}
+    "jmt": {
+      "entries_per_day": 3,
+      "lotto_pct": 1,
+      "updates_per_entry": 1.72,
+      "manages": true,
+      "cuts_losers": false,
+      "best_hours": "9:30-11:00 ET",
+      "recommendation": "FOLLOW (CORE)",
+      "note": "Most robust usable provider: SPY-only (priceable, tight spreads), lowest silent rate, well narrated. Marginal +EV even under stress. Pre-set your own stop \u2014 he goes quiet on losers."
+    },
+    "prince_small": {
+      "entries_per_day": 2,
+      "lotto_pct": 1,
+      "updates_per_entry": 2.28,
+      "manages": true,
+      "cuts_losers": true,
+      "best_hours": "10:00 ET",
+      "recommendation": "FOLLOW / LEARN",
+      "note": "Only book that stays positive if ALL silent trades are total losses \u2014 but THIN (n~300) and low volume. Best hand-holding (2.3 updates/trade), states stops. Directional, not a primary engine."
+    },
+    "prince": {
+      "entries_per_day": 2,
+      "lotto_pct": 3,
+      "updates_per_entry": 0.97,
+      "manages": true,
+      "cuts_losers": true,
+      "best_hours": "9:30-11:00 ET",
+      "recommendation": "FOLLOW (SWING)",
+      "note": "Actually cuts losers (least hidden-loss bias). Diversified liquid stocks, swing horizon. Positive but not robust to worst-case; size for his $1.50+ premiums."
+    },
+    "sulker": {
+      "entries_per_day": 12,
+      "lotto_pct": 26,
+      "updates_per_entry": 0.52,
+      "manages": true,
+      "cuts_losers": false,
+      "best_hours": "9:30-11:00 ET",
+      "recommendation": "LIQUID SLICE ONLY",
+      "note": "~Breakeven overall; median trade is a $0.52 lotto (66% silent). Honest recaps + manages, but only his LIQUID IWM/SPX calls are worth copying \u2014 skip the cheap lottos."
+    },
+    "optionking": {
+      "entries_per_day": 8,
+      "lotto_pct": 26,
+      "updates_per_entry": 0.28,
+      "manages": false,
+      "cuts_losers": false,
+      "best_hours": "9:00-10:30 ET",
+      "recommendation": "STOPS YOURSELF / FILTER",
+      "note": "Zero-to-negative live EV, 76% silent, 3 cuts / 2981 entries. Only usable if YOU enforce hard stops on his single-stock entries."
+    },
+    "mike": {
+      "entries_per_day": 23,
+      "lotto_pct": 31,
+      "updates_per_entry": 0.3,
+      "manages": false,
+      "cuts_losers": false,
+      "best_hours": "spread; 15:00 spike",
+      "recommendation": "MANUAL 1-LOT \u00b7 ENTRY-ONLY",
+      "note": "INTEGRITY-CAPPED: recap claims 82% win, reality ~20% \u2014 NEVER trust his exits/recaps/targets, they may be fabricated. Discretionary 1-lot only, YOUR hard stop (25%) is the sole exit. Filter to liquid SPX/index names; skip the cheap lottos (31%). Auto-killed if last-20 real EV turns negative."
+    }
   }
 }
