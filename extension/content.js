@@ -239,32 +239,38 @@ if (!window.__chatScraper) {
 
   // ---------------------------------------------------------- LIVE WATCH
   // Detect NEW signal messages and relay them to the local server (localhost:8787).
-  S.watchSeen = new Set();
+  S.watchSeen = new Map();   // msg_id -> last-relayed text (so an EDIT re-relays; not just a Set of ids)
   function startWatch() {
     if (S.watching) { setStatus('👀 already watching'); return; }
     const list = document.querySelector('[data-list-id="chat-messages"]');
     if (!list) { setStatus('❌ Open the channel first, then Watch.'); return; }
     const scan = (li) => {
-      if (!li.id || !li.id.startsWith('chat-messages-') || S.watchSeen.has(li.id)) return;
-      const timeEl = li.querySelector('time[datetime]');
-      if (timeEl) {   // only fresh posts (< 10 min old) — ignore history rendered on scroll
-        const age = (Date.now() - new Date(timeEl.getAttribute('datetime')).getTime()) / 60000;
-        if (age > 10) return;
+      if (!li.id || !li.id.startsWith('chat-messages-')) return;
+      const contentEl = li.querySelector('[id^="message-content-"]');
+      let text = contentEl ? contentEl.innerText.trim() : '';
+      text = text.replace(/\s*\(edited\)\s*$/i, '').trim();   // ignore the "(edited)" marker itself
+      if (!text) return;
+      const prev = S.watchSeen.get(li.id);
+      if (prev === text) return;                    // unchanged — already relayed this exact content
+      const isEdit = prev !== undefined;            // seen before with DIFFERENT text -> provider edited it
+      if (!isEdit) {                                // NEW message: apply the age + signal/mgmt filters
+        const timeEl = li.querySelector('time[datetime]');
+        if (timeEl) {
+          const age = (Date.now() - new Date(timeEl.getAttribute('datetime')).getTime()) / 60000;
+          if (age > 10) return;                     // ignore old history rendered on scroll
+        }
+        const isSignal = /\b\d{2,5}(?:\.\d)?\s*(?:[cp]\b|call|put)/i.test(text);
+        const isMgmt = /\d|half|trim|out\b|cut|stop|runner|secure|lock|flat|close|exit|sold|off\b/i.test(text);
+        const replyPeek = li.querySelector('[id^="message-reply-context-"], [class*="repliedText"], [class*="repliedMessage"], [class*="replyContext"]');
+        if (!isSignal && !isMgmt && !replyPeek) return;
       }
       const userEl = li.querySelector('[class*="username"]');
       if (userEl) lastAuthor = userEl.textContent.trim();
-      const contentEl = li.querySelector('[id^="message-content-"]');
-      const text = contentEl ? contentEl.innerText.trim() : '';
-      // capture the reply preview (parent's full text) + this message's id — for cross-day tagging
       const replyEl = li.querySelector('[id^="message-reply-context-"], [class*="repliedText"], [class*="repliedMessage"], [class*="replyContext"]');
       const replyTo = replyEl ? replyEl.innerText.trim() : null;
-      // relay if it looks like a signal OR it's a reply/management update (don't drop "+30% trim half")
-      const isSignal = /\b\d{2,5}(?:\.\d)?\s*(?:[cp]\b|call|put)/i.test(text);
-      const isMgmt = !!replyTo || /\d|half|trim|out\b|cut|stop|runner|secure|lock|flat|close|exit|sold|off\b/i.test(text);
-      if (!isSignal && !isMgmt) return;
-      S.watchSeen.add(li.id);
-      try { chrome.runtime.sendMessage({ relay: { author: lastAuthor, text, reply_to: replyTo, msg_id: li.id, channel: channelKey(), name: channelDisplay() } }); } catch (e) {}
-      setStatus('⚡ routed: ' + text.slice(0, 42));
+      S.watchSeen.set(li.id, text);
+      try { chrome.runtime.sendMessage({ relay: { author: lastAuthor, text, reply_to: replyTo, msg_id: li.id, channel: channelKey(), name: channelDisplay(), edited: isEdit } }); } catch (e) {}
+      setStatus((isEdit ? '✏️ edit routed: ' : '⚡ routed: ') + text.slice(0, 42));
     };
     S.observer = new MutationObserver((muts) => {
       muts.forEach((m) => m.addedNodes.forEach((nd) => {
@@ -278,12 +284,18 @@ if (!window.__chatScraper) {
     // SAFETY RE-SCAN: the observer can miss a message if the tab was momentarily occluded/frozen,
     // scrolled up, or the post was an edit. Re-scan the last ~25 visible messages each heartbeat;
     // scan()'s <10-min age filter + watchSeen dedupe mean only genuinely-missed recent ones relay.
-    const rescan = () => {
+    // heartbeat so the dashboard shows this window as "listening" even before a signal.
+    // It ALSO reports scrape HEALTH: did we find Discord's message list and does it hold messages?
+    // If Discord re-renders/breaks the DOM, the tab stays open (heartbeat fires) but healthy=false —
+    // so the dashboard dot can go amber "not reading" instead of a green dot that's lying.
+    const beat = () => {
       const el = document.querySelector('[data-list-id="chat-messages"]');
-      if (el) Array.from(el.querySelectorAll('li[id^="chat-messages-"]')).slice(-25).forEach(scan);
+      const lis = el ? el.querySelectorAll('li[id^="chat-messages-"]') : [];
+      const healthy = !!el && lis.length > 0;              // container found AND it has messages
+      if (el) Array.from(lis).slice(-25).forEach(scan);    // safety re-scan of the last ~25
+      try { chrome.runtime.sendMessage({ relay: { watching: true, channel: channelKey(),
+        name: channelDisplay(), healthy: healthy, seen: lis.length } }); } catch (e) {}
     };
-    // heartbeat so the dashboard shows this window as "listening" even before a signal
-    const beat = () => { rescan(); try { chrome.runtime.sendMessage({ relay: { watching: true, channel: channelKey(), name: channelDisplay() } }); } catch (e) {} };
     beat();
     S.beat = setInterval(beat, 20000);
     setStatus('👀 Watching ' + channelDisplay() + ' — new signals route to localhost:8787');

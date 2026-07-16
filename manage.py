@@ -67,7 +67,7 @@ def classify(text):
             pct_out, est = 70, True
         elif has("half out", "sold half", "selling half", "trim half", "trimmed half"):
             pct_out, est = 50, True
-        elif re.search(r"a little|some\b|trim|took (some|one|a few)|taking (some|one|a few)|moar out|more out|secure some", low):
+        elif re.search(r"a little|some\b|trim|took (some|a few)|taking (some|a few)|moar out|more out|secure some", low):
             pct_out, est = 25, True
 
     # fill price: "at X", "@ X", after an action verb, "X now", ">Y"  (@ has no \b — it's non-word)
@@ -97,8 +97,11 @@ def classify(text):
                  "leaving a few", "leave rest", "let it ride", "ride")
     full = has("all out", "fully out", "completely out", "out rest", "out the rest", "closing rest",
                "closing the rest", "sold out", "sold the rest", "im out", "i'm out", " out here", "flat ")
+    # NOTE: "taking one"/"took one" mean BUYING a starter lot (an ENTRY), not trimming — Mike posts
+    # entries like "mu 1000c 2.75 taking one". The real-trim variants ("taking one off", "took some")
+    # are still caught by " off" / "taking some" / "took some".
     sell = (pct_out is not None) or has("de-risk", "derisk", "trim", "sold", "selling", " off", "scaled",
-            "scaling", "secure", "taking some", "taking one", "took some", "took one", "moar out", "more out",
+            "scaling", "secure", "taking some", "took some", "moar out", "more out",
             "half out", "most out", "let ") or full
 
     if (has("cutting", "cut this", "i cut", "cut here", "cut rest", "cut half", "already cut", "just cut",

@@ -55,6 +55,19 @@ def equity(ib=None):
             except Exception: pass
 
 
+def _pick_standard(contracts, tk):
+    """From candidate option contracts (same strike/right/expiry), pick the STANDARD listing and
+    skip corporate-action adjusted classes. The standard equity option class equals the root symbol
+    (NVDA), trades 100 shares/contract; adjusted classes look like 2NVDA / NVDA1 with odd multipliers."""
+    if not contracts:
+        return None
+    def rank(c):
+        std_class = (c.tradingClass or "").upper() == tk        # standard class == root symbol
+        std_mult = str(c.multiplier or "100") in ("100", "")    # normal 100-share deliverable
+        return (not std_class, not std_mult, len(c.tradingClass or ""))  # lower is better
+    return sorted(contracts, key=rank)[0]
+
+
 def option_quote(ticker, strike, right, expiry=None, ib=None):
     """Live option price + Greeks from IBKR for a specific contract."""
     own = ib is None
@@ -66,17 +79,25 @@ def option_quote(ticker, strike, right, expiry=None, ib=None):
         tk = ticker.upper()
         exch = "CBOE" if tk in ("SPX", "SPXW", "VIX", "NDX", "RUT") else "SMART"
         tclass = "SPXW" if tk == "SPX" else ""
+        from datetime import datetime, timezone, timedelta
+        today = datetime.now(timezone(timedelta(hours=-4))).strftime("%Y%m%d")
+        # Pull ALL contract details for this strike/right, then pick the STANDARD class ourselves.
+        # A stock that had a corporate action (split, special dividend) carries an adjusted option
+        # class like "2NVDA"/"NVDA1" alongside the standard "NVDA" one. Qualifying with a blank
+        # tradingClass makes IBKR return both and either error (ambiguous) or pick the odd lot.
+        base = Option(tk, expiry or "", float(strike), r, exchange=exch, tradingClass=tclass)
+        cds = [cd.contract for cd in ib.reqContractDetails(base)]
+        if not cds:
+            return {"error": "contract not found at IBKR"}
         if not expiry:                              # resolve nearest NON-expired expiry
-            from datetime import datetime, timezone, timedelta
-            today = datetime.now(timezone(timedelta(hours=-4))).strftime("%Y%m%d")
-            base = Option(tk, "", float(strike), r, exchange=exch, tradingClass=tclass)
-            cds = ib.reqContractDetails(base)
-            exps = sorted(e for e in {cd.contract.lastTradeDateOrContractMonth for cd in cds} if e >= today)
+            exps = sorted(e for e in {c.lastTradeDateOrContractMonth for c in cds} if e >= today)
             if not exps:
                 return {"error": "no valid expiries found"}
             expiry = exps[0]
-        opt = Option(tk, expiry, float(strike), r, exchange=exch, tradingClass=tclass)
-        ib.qualifyContracts(opt)
+        cands = [c for c in cds if c.lastTradeDateOrContractMonth == expiry]
+        opt = _pick_standard(cands, tk) or (cands[0] if cands else None)
+        if opt is None:
+            return {"error": "contract not found at IBKR"}
         t = ib.reqMktData(opt, "", False, False)
         ib.sleep(2.5)
         bid, ask, last = t.bid, t.ask, (t.last if t.last == t.last else t.close)
@@ -108,6 +129,30 @@ def _contract(ticker):
     if t in ("SPY", "QQQ", "IWM", "DIA"):
         return Stock(t, "ARCA", "USD")
     return Stock(t, "SMART", "USD")
+
+
+def spot_quote(ticker, ib=None):
+    """FAST last-price snapshot of the UNDERLYING (reqMktData) for real-time stop-watching + card
+    display. Far lighter than get_bars/indicators — no history request, just the current print.
+    Returns a rounded float or None."""
+    own = ib is None
+    try:
+        if ib is None:
+            ib = connect()
+        c = _contract(ticker)
+        ib.qualifyContracts(c)
+        t = ib.reqMktData(c, "", False, False)
+        ib.sleep(1.0)
+        px = t.last if (t.last == t.last and t.last and t.last > 0) else (t.close if t.close == t.close else None)
+        try: ib.cancelMktData(c)
+        except Exception: pass
+        return round(px, 2) if px else None
+    except Exception:
+        return None
+    finally:
+        if own and ib is not None:
+            try: ib.disconnect()
+            except Exception: pass
 
 
 def get_bars(ib, ticker, duration="1 D", size="5 mins"):
@@ -180,6 +225,50 @@ def technical(sig_type, ind):
     return max(-15, min(15, sc)), label, notes
 
 
+def tape_strength(sig_type, ind):
+    """Grade HOW STRONGLY the tape backs this direction — MAGNITUDE, not just yes/no. The binary
+    ALIGNED ✓ can't tell 'barely above VWAP, RSI 51' (weak) from 'price well past VWAP, EMAs fanned,
+    RSI 63, room to run' (strong). This can. Returns
+    {score:0-100|None, grade:'strong'|'moderate'|'weak'|'against'|'no-data', icon, bars, components:[...]}.
+    Composes with the ALIGNED/MIXED/AGAINST direction, e.g. 'ALIGNED · ⚪ Weak'."""
+    if not ind or ind.get("rsi") is None or not ind.get("vwap") or not ind.get("price"):
+        return {"score": None, "grade": "no-data", "icon": "·", "bars": "", "components": []}
+    call = (sig_type or "C") == "C"
+    p, vwap, rsi = ind["price"], ind["vwap"], ind["rsi"]
+    e9, e21, bbu, bbl = ind.get("ema9"), ind.get("ema21"), ind.get("bb_up"), ind.get("bb_low")
+    cl = lambda x: max(-1.0, min(1.0, x))
+    comps = []
+    # 1) VWAP distance IN THE TRADE'S FAVOR, % of price (full strength ~0.6% beyond)
+    vfav = ((p - vwap) / vwap * 100) * (1 if call else -1)
+    v = cl(vfav / 0.6)
+    comps.append({"k": "VWAP", "s": round(v, 2), "t": f"{vfav:+.2f}% {'past VWAP' if vfav >= 0 else 'wrong side of VWAP'}"})
+    # 2) EMA9-vs-EMA21 separation, % of price, in favor (full ~0.5%)
+    efav = (((e9 - e21) / p * 100) * (1 if call else -1)) if (e9 and e21 and p) else 0.0
+    e = cl(efav / 0.5)
+    comps.append({"k": "EMA", "s": round(e, 2), "t": f"EMA9 {'>' if (e9 or 0) > (e21 or 0) else '<'} EMA21 ({efav:+.2f}%)"})
+    # 3) RSI momentum toward the trade — into the healthy band, penalize exhaustion
+    r = ((rsi - 50) / 16 if rsi <= 72 else (72 - rsi) / 8) if call else ((50 - rsi) / 16 if rsi >= 28 else (rsi - 28) / 8)
+    r = cl(r)
+    comps.append({"k": "RSI", "s": round(r, 2), "t": f"RSI {rsi:.0f}"})
+    # 4) Bollinger room to run toward the trade (mid-channel best; pinned at the far band = extended)
+    if bbu and bbl and bbu > bbl:
+        pos = (p - bbl) / (bbu - bbl)                          # 0 at lower band .. 1 at upper
+        room = 1 - max(0.0, (pos - 0.5) * 2) if call else 1 - max(0.0, (0.5 - pos) * 2)
+        rm = cl(room * 2 - 1)
+        comps.append({"k": "room", "s": round(rm, 2), "t": ("room to run" if rm > -0.2 else ("pinned at upper BB" if call else "pinned at lower BB"))})
+    else:
+        rm = 0.0
+    raw = 0.35 * v + 0.25 * e + 0.25 * r + 0.15 * rm           # -1..+1
+    score = round((raw + 1) / 2 * 100)                          # 0..100
+    if raw < -0.05:    grade, icon = "against", "🔴"
+    elif score >= 74:  grade, icon = "strong", "🟢"
+    elif score >= 62:  grade, icon = "moderate", "🟡"
+    else:              grade, icon = "weak", "⚪"
+    filled = max(0, min(5, round(score / 20)))
+    return {"score": score, "grade": grade, "icon": icon,
+            "bars": "▮" * filled + "▯" * (5 - filled), "components": comps}
+
+
 def option_score(q):
     """Fold live option QUALITY (bid/ask spread + delta + IV) into confidence.
     Returns (adj[-12..+10], label, notes[]). Spread/delta are live from IBKR; IV shown, not ranked."""
@@ -226,13 +315,14 @@ def context(ticker, sig_type, ib=None, strike=None, expiry=None):
         ind = indicators(bars)
         rv = realized_vol(bars)
         adj, label, notes = technical(sig_type, ind)
+        strength = tape_strength(sig_type, ind)           # graded conviction of the aligned tape
         q, oadj, olabel = None, 0, None
         if strike:                                        # live option Greeks -> quality adjustment
             q = option_quote(ticker, strike, sig_type, expiry=expiry, ib=ib)
             oadj, olabel, onotes = option_score(q)
             adj += oadj; notes = notes + onotes
-        return {"ok": True, "ind": ind, "rv": rv, "adj": adj, "label": label, "notes": notes, "equity": eq,
-                "opt": q, "opt_adj": oadj, "opt_label": olabel}
+        return {"ok": True, "ind": ind, "rv": rv, "adj": adj, "label": label, "strength": strength,
+                "notes": notes, "equity": eq, "opt": q, "opt_adj": oadj, "opt_label": olabel}
     except Exception as e:
         return {"ok": False, "error": str(e)}
     finally:

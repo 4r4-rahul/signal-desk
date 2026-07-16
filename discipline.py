@@ -61,8 +61,11 @@ def _cluster_key(ticker, typ):
 # Per-provider sub-budgets (compose UNDER the global caps via min(); scale with robustness ranking).
 # Env override: PROVIDER_CAPS_JSON='{"jmt":[2,2],...}'  -> {prov: [daily_R, max_concurrent]}
 import json as _json
+# [daily_R (% of acct), max_concurrent]. JMT raised 2026-07-14 to [9,3]: his per-trade size is ~3%
+# (3-contract floor), so a 2R cap let ONE trade max the day and block every later signal — a config
+# mismatch, not discipline. 9R/3 = up to three 3% JMT trades/day. Trusted low-freq engine; user's call.
 PROVIDER_CAPS = _json.loads(os.environ.get("PROVIDER_CAPS_JSON", "{}")) or {
-    "jmt": [2.0, 2], "prince": [1.0, 1], "prince_small": [1.0, 1],
+    "jmt": [9.0, 3], "prince": [1.0, 1], "prince_small": [1.0, 1],
     "sulker": [0.5, 1], "optionking": [0.0, 0], "mike": [0.0, 0]}
 
 

@@ -117,6 +117,7 @@
   .sig{font-size:20px;font-weight:700;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
   .badge{font-size:11px;font-weight:700;padding:3px 8px;border-radius:6px;text-transform:uppercase;letter-spacing:.4px}
   .badge.prov{background:rgba(56,189,248,.14);color:var(--blue)}
+  .badge.paper{background:rgba(245,158,11,.14);color:var(--amber);margin-left:5px}
   .badge.lotto{background:rgba(239,68,68,.15);color:var(--red)}
   .badge.tier{background:var(--tierbg);color:var(--tier)}
   .sub{color:var(--muted);font-size:12.5px;margin-top:5px}
@@ -168,7 +169,19 @@
   .fchip.on .cnt{background:rgba(56,189,248,.22);color:#bfe3fb}
   .fchip.all{font-weight:600}
   .fchip.dim{opacity:.5}
+  .card.junk{border-color:rgba(239,68,68,.5)!important}
+  .junkblock{margin:11px 0 3px;padding:11px 13px;border:1px solid rgba(239,68,68,.4);border-radius:9px;background:rgba(239,68,68,.08)}
+  .junkblock.warn{border-color:rgba(245,158,11,.45);background:rgba(245,158,11,.08)}
+  .junkhdr{font-weight:800;color:#ef4444;letter-spacing:.3px;font-size:14px}
+  .junkreasons{margin:7px 0 6px;padding-left:20px;color:var(--fg);font-size:12.5px}
+  .junkreasons li{margin:2px 0}
+  .junknote{font-size:12px;color:var(--muted)}
+  .jmtplay{margin:9px 0 3px;padding:8px 11px;border:1px solid rgba(56,189,248,.28);border-radius:8px;background:rgba(56,189,248,.06);font-size:12.5px}
+  .jmtsize{margin:9px 0 5px;padding:9px 13px;border-radius:9px;background:rgba(34,197,94,.12);border:1px solid rgba(34,197,94,.4);font-size:15px;font-weight:800;letter-spacing:.3px;color:#22c55e}
+  .jmtsize b{font-size:19px}
+  .jmtsize .jmtsub{font-size:12px;font-weight:500;color:var(--muted);letter-spacing:0}
   .ticket{display:flex;flex-wrap:wrap;gap:7px;margin:11px 0 3px}
+  .ticket.fallback .tk{opacity:.82;border-style:dashed}
   .tk{display:inline-flex;align-items:center;gap:5px;background:#141c2a;border:1px solid var(--line);
     border-radius:999px;padding:5px 11px;font-size:12px;color:var(--muted);
     font-family:'JetBrains Mono',ui-monospace,monospace;white-space:nowrap}
@@ -294,6 +307,36 @@
     padding:2px 8px;border-radius:8px;border:1px solid var(--line)}
   .daysort.on{background:rgba(56,189,248,.14);border-color:rgba(56,189,248,.4);color:#bfe3fb}
   @media(max-width:980px){ .layout{grid-template-columns:1fr;gap:14px} .rail{position:static} }
+  /* ── Re-entry Analysis ── */
+  .reentry-arm{margin-top:9px;display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+  .reentry-btn{background:rgba(56,189,248,.14);color:#bfe3fb;border:1px solid rgba(56,189,248,.4);
+    border-radius:9px;padding:6px 12px;font-size:12.5px;font-weight:600;cursor:pointer}
+  .reentry-btn:hover{background:rgba(56,189,248,.24)}
+  .reentry-panel{margin-top:10px;border:1px solid var(--dim);border-left-width:3px;border-radius:11px;
+    padding:11px 13px;background:rgba(255,255,255,.02);font-size:12.5px;line-height:1.5}
+  .reentry-panel.amber{border-color:var(--amber)}
+  .re-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:7px;font-size:12.5px}
+  .strike-step{display:inline-flex;align-items:center;gap:6px;background:rgba(255,255,255,.04);
+    border-radius:8px;padding:2px 7px}
+  .strike-step button,.cp-flip,.re-x{background:rgba(255,255,255,.06);border:1px solid var(--line);
+    color:var(--fg);border-radius:6px;cursor:pointer;font-size:11px;padding:1px 7px;line-height:1.4}
+  .strike-step button:hover,.cp-flip:hover{background:rgba(56,189,248,.2)}
+  .cp-flip{font-weight:600;letter-spacing:.4px}
+  .re-x{margin-left:auto;color:var(--muted)}
+  .re-verdict{font-size:13.5px;margin:3px 0 7px;font-weight:600}
+  .re-row{margin:2px 0;color:var(--fg)}
+  .re-bullet{margin:1px 0 1px 6px;font-size:12px;color:var(--muted)}
+  .re-trigger{margin-top:8px;padding:7px 10px;border:1px solid var(--dim);border-left-width:3px;
+    border-radius:8px;background:rgba(255,255,255,.03);font-size:12.5px}
+  .re-actions{margin-top:9px;display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+  .reenter-go{background:var(--green);color:#04210f;border:none;border-radius:9px;padding:7px 14px;
+    font-size:12.5px;font-weight:700;cursor:pointer}
+  .reenter-go:hover{filter:brightness(1.08)}
+  .reenter-go.danger{background:rgba(239,68,68,.2);color:#fecaca;border:1px solid rgba(239,68,68,.5)}
+  .re-updated{margin-top:7px;font-size:11px;color:var(--dim)}
+  .entry-verdict{margin:6px 0;padding:7px 11px;border:1px solid var(--dim);border-left-width:3px;
+    border-radius:9px;font-size:12.5px;line-height:1.5;display:block}
+  .entry-trig{margin-top:3px;font-size:12px;color:var(--fg)}
 </style>
 </head>
 <body>
@@ -305,6 +348,7 @@
     <div class="chip">Account <b id="acct">$—</b></div>
     <div class="chip">Today <b id="today">—</b></div>
     <div class="chip">Risk <b id="risk">—</b></div>
+    <div class="chip" id="ttchip" style="display:none">🍒 tastytrade <b id="ttbal">—</b> <span id="ttenv" style="color:var(--amber);font-size:11px"></span></div>
     <div class="chip">Signals <b id="n">0</b> · Taken <b id="nt">0</b> · Skipped <b id="ns">0</b></div>
   </div>
 </header>
@@ -332,6 +376,9 @@
   <aside class="rrail">
     <div id="daypnl" class="stats"></div>
     <div id="drawdown" class="stats"></div>
+    <div id="calibration" class="stats"></div>
+    <div id="exitquality" class="stats"></div>
+    <div id="provideredge" class="stats"></div>
   </aside>
 </div>
 
@@ -343,6 +390,7 @@ const muted=new Set(); // providers toggled off in the filter
 
 // ---- feed sections + the top sorting/filter bar ----
 function secOf(s){const st=s.pos&&s.pos.state;
+  if(s.reentry&&s.reentry.armed)return 'watch';   // an ACTIVE re-entry watch belongs up in Watching, not buried in Closed
   if(st==='OPEN'||st==='PARTIALLY_TRIMMED'||st==='RUNNER')return 'live';
   if(st==='CLOSED'||st==='CUT'||s.status==='CLOSED')return 'closed';
   if(s.status==='TAKEN')return 'live';
@@ -377,18 +425,29 @@ function renderSources(src,nowIso){
   const keys=Object.keys(src||{});
   if(!keys.length){el.innerHTML='<div class="rail-h">📡 Listening</div><div style="color:var(--muted);font-size:12px;padding:2px 4px">Nothing listening — open a channel & hit <b>👀 Watch</b> in the extension.</div>';return;}
   const isLive=k=>((Date.parse(nowIso)-Date.parse(src[k].last_beat||0))/1000)<70;   // heartbeat ~20s
-  const liveN=keys.filter(isLive).length;
-  keys.sort((a,b)=>(isLive(b)-isLive(a))||((src[b].count||0)-(src[a].count||0)));   // live first, then busiest
+  // health = the extension actually FOUND & read Discord's message list this tick (undefined on older
+  // extensions -> treat as healthy so nothing regresses). green = heartbeat AND reading; amber = tab open
+  // but blind (scrape broke — the "green dot lying" case); gray = no heartbeat (tab minimized/closed).
+  const isHealthy=k=>src[k].healthy!==false;
+  const stateOf=k=>!isLive(k)?'stale':(isHealthy(k)?'live':'blind');
+  const liveN=keys.filter(k=>stateOf(k)==='live').length;   // truly RECEIVING, not just tab-open
+  const RANK={live:2,blind:1,stale:0}, DOT={live:'#22c55e',blind:'#f59e0b',stale:'#6b7280'};
+  keys.sort((a,b)=>(RANK[stateOf(b)]-RANK[stateOf(a)])||((src[b].count||0)-(src[a].count||0)));
   el.innerHTML=`<div class="rail-h">📡 Listening <span class="rail-n">${liveN}/${keys.length} live</span></div>`+keys.map(k=>{
-    const s=src[k], live=isLive(k);
+    const s=src[k], stt=stateOf(k);
     const hrs=Math.max((Date.parse(nowIso)-Date.parse(s.first||nowIso))/3.6e6,0.05);
     const rate=s.count?(s.count/hrs).toFixed(1):'0';
     const last=s.last_signal?`${ago(s.last_signal_iso,nowIso)} · ${s.last_signal}`:'no signal yet';
     const key=s.provider||k;
-    return `<div class="src ${muted.has(key)?'off':''}" onclick="toggleSrc('${key}')" title="${live?'live — receiving heartbeat (click to mute)':'stale — window not sending (minimized/closed?)'}">
-      <span class="d" style="background:${live?'#22c55e':'#6b7280'};margin-top:5px;flex-shrink:0"></span>
+    const tip={live:'live — receiving & reading Discord (click to mute)',
+               blind:'⚠ tab is open but NOT reading Discord — scrape broke, reload the channel',
+               stale:'stale — window not sending (minimized/closed?)'}[stt];
+    const tag={live:'',blind:'<small style="color:var(--amber)">not reading</small>',
+               stale:'<small style="color:var(--amber)">stale</small>'}[stt];
+    return `<div class="src ${muted.has(key)?'off':''}" onclick="toggleSrc('${key}')" title="${tip}">
+      <span class="d" style="background:${DOT[stt]};margin-top:5px;flex-shrink:0"></span>
       <div style="line-height:1.4;min-width:0;flex:1">
-        <div style="display:flex;align-items:center;gap:6px"><b style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${s.provider||s.name||k}</b>${live?'':'<small style="color:var(--amber)">stale</small>'}${muted.has(key)?'<small style="color:var(--dim)">muted</small>':''}</div>
+        <div style="display:flex;align-items:center;gap:6px"><b style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${s.provider||s.name||k}</b>${tag}${muted.has(key)?'<small style="color:var(--dim)">muted</small>':''}</div>
         <small>${s.count||0} signals · ${rate}/hr</small><br>
         <small style="color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block">last: ${last}</small>
       </div></div>`;
@@ -406,10 +465,34 @@ function fmtdur(s){if(s==null)return'—';if(s<60)return s+'s';if(s<3600)return 
 // live P&L line — patched in place each poll (id=live-<pid>) so it updates without blinking the card
 function liveLineHTML(p){
   const lv=p.live||{};
+  if(lv.mismatch) return `<span style="color:var(--amber)">⚠ live $${lv.mismatch.live} ≠ entry $${lv.mismatch.entry} — <b>contract mismatch</b>, P&L hidden. The provider's price doesn't match this strike/expiry — verify before acting.</span>`;
   if(lv.mid==null) return '<span style="color:var(--dim)">📡 waiting for live quote…</span>';
   const c=lv.pnl_pct>=0?'#22c55e':'#ef4444';
+  const isC=(p.leg||'').slice(-1).toUpperCase()!=='P', sp=lv.spot;
+  // LIVE UNDERLYING (stock) price + how it's moving: a tick-direction arrow, and net move since your
+  // entry labelled by what it means for THIS trade (a call wants spot up, a put wants spot down).
+  let stk='';
+  if(sp!=null){
+    const arrow=lv.spot_dir==='up'?'▲':lv.spot_dir==='down'?'▼':'▬';
+    const ac=lv.spot_dir==='up'?'#22c55e':lv.spot_dir==='down'?'#ef4444':'var(--dim)';
+    let since='';
+    if(lv.entry_spot){
+      const d=sp-lv.entry_spot, pc=d/lv.entry_spot*100, fav=isC?d>=0:d<=0;
+      since=` · <span style="color:${fav?'#22c55e':'#ef4444'}">${d>=0?'+':''}${d.toFixed(2)} (${d>=0?'+':''}${pc.toFixed(2)}%) since entry · ${fav?'with you':'against you'}</span>`;
+    }
+    stk=`<br>📈 ${p.ticker} <b>${sp.toFixed(2)}</b> <span style="color:${ac}">${arrow}</span>${since}`;
+  }
+  // provider's UNDERLYING stop watch (e.g. JMT SL:751.60) — how far live spot is from the cut level
+  let uw='';
+  if(p.u_stop){
+    const hit=sp!=null&&(isC?sp<=p.u_stop:sp>=p.u_stop);
+    const dist=sp!=null?(isC?sp-p.u_stop:p.u_stop-sp):null;
+    uw=`<br><span style="color:${hit?'#ef4444':(dist!=null&&dist<0.5?'#f59e0b':'var(--dim)')}">`
+      +`🎯 ${p.ticker} stop ${p.u_stop}`
+      +`${hit?' · <b>CROSSED — CUT</b>':(dist!=null?` · ${dist.toFixed(2)} to stop`:'')}</span>`;
+  }
   return `📡 Live $${lv.mid} · <b style="color:${c}">${lv.pnl_pct>=0?'+':''}${lv.pnl_pct}%</b> · peak +${lv.peak_pct||0}%`
-    +`${lv.delta!=null?' · Δ'+lv.delta:''}${lv.iv!=null?' · IV '+Math.round(lv.iv*100)+'%':''}${lv.spread_pct!=null?' · spr '+lv.spread_pct+'%':''}`;
+    +`${lv.delta!=null?' · Δ'+lv.delta:''}${lv.iv!=null?' · IV '+Math.round(lv.iv*100)+'%':''}${lv.spread_pct!=null?' · spr '+lv.spread_pct+'%':''}`+stk+uw;
 }
 
 // merged timeline: 💬 provider recommendations · ✅ your actions · 📡 live-market alerts
@@ -576,6 +659,63 @@ function sparkline(curve){
   const last=curve[curve.length-1], col=last>=0?'#22c55e':'#ef4444';
   const zy=(h-(0-mn)/rng*h).toFixed(1);
   return `<svg width="${w}" height="${h}" style="margin-left:auto"><line x1="0" y1="${zy}" x2="${w}" y2="${zy}" stroke="#2a3344" stroke-dasharray="2 2"/><path d="${d}" fill="none" stroke="${col}" stroke-width="1.5" stroke-linejoin="round"/></svg>`;
+}
+function renderCalibration(c){
+  const el=document.getElementById('calibration'); if(!el) return;
+  if(!c||!c.n_closed){el.innerHTML='';return;}
+  const rcol=v=>v==null?'var(--dim)':v>=0?'#22c55e':'#ef4444';
+  const cell=b=>{
+    const r=b.avg_r==null?'—':(b.avg_r>=0?'+':'')+b.avg_r+'R';
+    const w=b.win_pct==null?'':` · ${b.win_pct}%`;
+    return `<div style="display:flex;justify-content:space-between;padding:3px 0;font-size:12px;${b.n?'':'opacity:.4'}">
+      <span>${b.bucket}</span>
+      <span><b style="color:${rcol(b.avg_r)}">${r}</b><span style="color:var(--dim)">${w} · n${b.n}</span></span></div>`;
+  };
+  // verdict tone
+  const r=c.pearson_r;
+  const tone = r==null?['var(--dim)','—'] : r>=0.3?['#22c55e','✅ tracking'] : r>=0.15?['#f59e0b','🟡 weak +'] : r<0?['#ef4444','🔴 inverted'] : ['#f59e0b','⚪ flat'];
+  const mono = c.monotonic===true?' · <span style="color:#22c55e">order ✓</span>':(c.monotonic===false?' · <span style="color:var(--amber)">order ✗</span>':'');
+  el.innerHTML=`
+    <div class="stats-h">📊 Score Quality <span style="color:var(--muted);font-weight:500">${c.n_closed} closed</span></div>
+    ${c.score_buckets.map(cell).join('')}
+    <div style="margin-top:7px;padding-top:7px;border-top:1px solid var(--line);font-size:11px;color:var(--muted)">
+      grade ${c.grade_buckets.filter(g=>g.avg_r!=null).map(g=>`${g.grade} <b style="color:${rcol(g.avg_r)}">${g.avg_r>=0?'+':''}${g.avg_r}</b>`).join(' · ')||'—'}
+    </div>
+    <div style="margin-top:5px;font-size:11px">r(score,R)=<b style="color:${tone[0]}">${r==null?'—':r}</b> ${mono}</div>
+    <div style="margin-top:5px;font-size:11px;color:${tone[0]}">${tone[1]} — <span style="color:var(--muted)">${c.verdict}</span></div>`;
+}
+function renderProviderEdge(edge){
+  const el=document.getElementById('provideredge'); if(!el) return;
+  const provs=Object.entries(edge||{}).filter(([k,v])=>((v.realized_n||0)+(v.shadow_n||0))>0);
+  if(!provs.length){el.innerHTML='';return;}
+  provs.sort((a,b)=>((b[1].blended_r??-9)-(a[1].blended_r??-9)));
+  const mc=m=>m>1?'#22c55e':m<1?'#ef4444':'var(--dim)';
+  const rc=r=>r==null?'var(--dim)':(r>0.05?'#22c55e':r<-0.05?'#ef4444':'var(--fg)');
+  const fmt=r=>r==null?'—':(r>=0?'+':'')+r+'R';
+  const rows=provs.map(([p,v])=>`<div style="padding:5px 0;border-top:1px solid var(--line)">
+      <div style="display:flex;justify-content:space-between;font-size:12px"><b>${p}</b><span style="color:${mc(v.mult)}"><b>${v.mult}×</b></span></div>
+      <div style="display:flex;gap:10px;font-size:11px;color:var(--muted);margin-top:2px;flex-wrap:wrap">
+        <span>real <b style="color:${rc(v.realized_r)}">${fmt(v.realized_r)}</b> <span style="color:var(--dim)">n${v.realized_n}</span></span>
+        <span>shadow <b style="color:${rc(v.shadow_r)}">${fmt(v.shadow_r)}</b> <span style="color:var(--dim)">n${v.shadow_n}</span></span>
+        <span style="margin-left:auto">→ blend <b style="color:${rc(v.blended_r)}">${fmt(v.blended_r)}</b> <span style="color:var(--dim)">eff-n ${v.eff_n}</span></span>
+      </div></div>`).join('');
+  el.innerHTML=`<div class="stats-h">📐 Provider Edge <span style="color:var(--muted);font-weight:500">realized + shadow → size</span></div>${rows}
+    <div style="font-size:10.5px;color:var(--dim);margin-top:6px">shadow: −0.10R haircut, ⅓ weight · tilt-up needs eff-n≥20 &amp; ≥5 real fills · shrink can trigger on shadow alone</div>`;
+}
+function renderExitQuality(e){
+  const el=document.getElementById('exitquality'); if(!el) return;
+  if(!e||!e.n){el.innerHTML='';return;}
+  const bad=v=>v<0?'#ef4444':'#22c55e';
+  const lossCol = e.avg_loss_r==null?'var(--dim)':(e.avg_loss_r<-1.1?'#ef4444':'#22c55e');
+  const whipCol = e.whipsaws>0?'#f59e0b':'#22c55e';
+  const row=(k,v,c)=>`<div style="display:flex;justify-content:space-between;padding:3px 0;font-size:12px"><span style="color:var(--muted)">${k}</span><span style="color:${c||'var(--fg)'}"><b>${v}</b></span></div>`;
+  el.innerHTML=`
+    <div class="stats-h">🎯 Exit Quality <span style="color:var(--muted);font-weight:500">${e.n} closed</span></div>
+    ${row('win rate', e.win_pct+'%')}
+    ${row('avg loss', (e.avg_loss_r==null?'—':e.avg_loss_r+'R')+(e.overrun_pct!=null?` (${e.overrun_pct>=0?'+':''}${e.overrun_pct}% vs stop)`:''), lossCol)}
+    ${row('whipsaws', e.whipsaws+(e.whip_of_loss?` · ${e.whip_of_loss}% of losses`:''), whipCol)}
+    ${row('winner giveback', e.avg_giveback==null?'—':e.avg_giveback+'% below peak', 'var(--fg)')}
+    <div style="margin-top:6px;padding-top:6px;border-top:1px solid var(--line);font-size:11px;color:${e.verdict.includes('disciplined')?'#22c55e':'#f59e0b'}">${e.verdict}</div>`;
 }
 function renderDrawdown(dd,acct){
   const el=document.getElementById('drawdown'); if(!el) return;
@@ -805,6 +945,26 @@ async function bankIt(){
   refresh();
 }
 let BLOCKED=false;
+function ttBtn(s){   // gated "send to tastytrade" — only when the broker is connected
+  if(!window.BROKER) return '';
+  return `<button class="take" style="background:rgba(220,38,38,.85)" onclick="sendToTasty('${s.id}')" title="route through the Desk Rules to tastytrade">🍒 Send</button>`;
+}
+async function sendToTasty(id){
+  const px=document.getElementById('px-'+id), qty=document.getElementById('qty-'+id);
+  const price=px?parseFloat(px.value):NaN, q=qty?parseInt(qty.value):1;
+  if(!price||price<=0){alert('Enter a fill price first.');return;}
+  const post=dry=>fetch('/api/broker_order',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({id,qty:q,price,side:'BTO',dry_run:dry})}).then(r=>r.json());
+  const prev=await post(true);                       // 1) preview: gate + broker validation
+  if(prev.error){alert('⚠ '+prev.error);return;}
+  if(!prev.allow){alert('🚫 REFUSED by the Desk Rules:\n\n• '+(prev.reasons||[]).join('\n• '));return;}
+  const w=(prev.warnings||[]).length?('\n\n⚠ '+prev.warnings.join('\n⚠ ')):'';
+  if(!confirm(`✅ Passes the Desk Rules.\n\nSend ${q} × @ $${price} to tastytrade?${w}`)) return;
+  const r=await post(false);                          // 2) real submit
+  if(r.placed) alert('🍒 Sent to tastytrade — status: '+(r.status||'ok'));
+  else alert('⚠ '+(r.error||(r.reasons||[]).join('\n')));
+  refresh();
+}
 async function overrideDay(on){
   if(on && !confirm('Trade through today’s day-stop?\n\nThe breaker tripped for a reason (losing streak / risk budget). Only override with a clear edge — size small and honor every stop. It auto-resets tomorrow.')) return;
   await fetch('/api/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'override_daystop',on})});
@@ -852,7 +1012,7 @@ function planHTML(s){
   const p=s.plan;
   if(s.paper && !s.manual_override) return `<div class="warn" style="color:var(--blue)">👁 <b>PAPER MODE</b> — ${s.provider} is distrusted (paper-only until it proves out on your logged fills). Tracking hypothetical fills, no live risk.</div>`;
   if(!p.ok) return `<div class="warn">⚠ ${p.reason}</div>`;
-  const paperbanner=(s.paper&&s.manual_override)?`<div class="warn" style="color:var(--amber)">👁 <b>${s.provider} is PAPER</b> (data says avoid) — this is a <b>DISCRETIONARY 1-lot</b> trade on YOUR read. Size is hard-capped at 1.</div>`:'';
+  const paperbanner=(s.paper&&s.manual_override)?`<div class="sub" style="color:var(--amber);font-size:11px">👁 <b>discretionary 1-lot</b> · ${s.provider} distrusted — your read, capped at 1</div>`:'';
   const mult=s.size_mult!=null&&s.size_mult<1?` <span style="color:var(--dim)">(×${s.size_mult} ${s.provider})</span>`:'';
   const floor=p.min_position?' <span style="color:var(--amber)">· min 1-lot (edge thin at your size)</span>':'';
   const tp=p.tp1_pct||40, tr=p.trail_pct||25, st=p.stop_pct||30;
@@ -876,8 +1036,56 @@ function planHTML(s){
   </div><div class="planline">🎯 ${ex}${mult}${floor}</div>${ssmsg}<div class="planline" style="color:var(--amber)">${stopmsg}</div>`;
 }
 
+function ticketFallbackHTML(s){
+  // No live IBKR quote (illiquid name, adjusted class, or misparse). Still give the trader something
+  // actionable: a manual ladder off the PROVIDER's stated entry + the grade, clearly labelled as un-live.
+  const sg=s.sig||{}, prem=sg.premium;
+  const g=s.grade||grade(s);
+  let h='<div class="ticket fallback">';
+  if(prem){
+    const rnd=x=>Math.round(x*100)/100;
+    const chip=(cls,lbl,val,sub)=>`<span class="tk ${cls}">${lbl} <b>${val}</b>${sub?` <i>${sub}</i>`:''}</span>`;
+    h+=chip('buy','🎯 Entry',`~$${prem}`,'provider price');
+    h+=chip('stop','🛑 Stop',`$${rnd(prem*0.70)}`,'−30%');
+    h+=chip('tp','🥇 T1',`$${rnd(prem*1.35)}`,'+35%');
+    h+=chip('tp','🥈 T2',`$${rnd(prem*1.70)}`,'+70%');
+    if(g&&g.g) h+=`<span class="tk rr">🏅 Grade <b>${g.g}</b> <i>${g.suggest_lots||1} lot</i></span>`;
+  } else if(g&&g.g){
+    h+=`<span class="tk rr">🏅 Grade <b>${g.g}</b></span>`;
+  }
+  h+='</div>';
+  h+=`<div class="sub" style="color:var(--amber);font-size:11px">🔌 no live quote from IBKR — ladder is off the provider's stated entry. Price it live on tastytrade before you take it.</div>`;
+  return h;
+}
+function providerPlaybook(s){   // JMT's 704-trade proven doctrine, applied to every JMT card
+  if(s.provider!=='jmt'||!s.sig) return '';
+  let hr=null;
+  try{hr=parseInt(new Intl.DateTimeFormat('en-US',{hour:'numeric',hour12:false,timeZone:'America/New_York'}).format(new Date(s.iso)));}catch(e){}
+  let win='';
+  if(hr!=null){
+    if(hr<12) win=`<span style="color:#22c55e">🌅 morning — JMT's BEST window ✓</span>`;
+    else if(hr>=14) win=`<span style="color:var(--amber)">🌆 power hour — JMT's WORST window (−8%..+14%): size down / skip</span>`;
+    else win=`<span style="color:var(--muted)">☀️ midday</span>`;
+  }
+  return `<div class="jmtplay">📋 <b>JMT playbook</b> <span style="color:var(--dim)">(704-trade data)</span>${win?' · '+win:''}
+    <div style="margin-top:3px;color:var(--muted);font-size:11.5px">Bank <b>½ at +30%</b> · run ½ to <b>+75%</b> · hard cut at <b>−50%</b>. <b style="color:var(--amber)">Never hold to expiry</b> — held, JMT loses −14%.</div></div>`;
+}
+function junkHTML(s){
+  const j=s.junk||{}, rs=j.reasons||[];
+  const low=['mike','sulker','optionking'].includes(j.provider);
+  if(j.warn) return `<div class="junkblock warn">
+    <div class="junkhdr" style="color:var(--amber)">⚠ SCALP-ONLY — theta trap</div>
+    <ul class="junkreasons">${rs.map(r=>`<li>${r}</li>`).join('')}</ul>
+    <div class="junknote">Clean enough to scalp fast — but this decays hard. In and out in minutes; <b>never hold it.</b> If you can't watch it, skip it.</div>
+  </div>`;
+  return `<div class="junkblock">
+    <div class="junkhdr">🚫 BLOCKED — JUNK SETUP</div>
+    <ul class="junkreasons">${rs.map(r=>`<li>${r}</li>`).join('')}</ul>
+    <div class="junknote">${low?`<b>${j.provider}</b> loses on setups exactly like this — the kind that bled the account. Don't take it.`:'Negative expectancy before you even click. The desk is protecting you.'}</div>
+  </div>`;
+}
 function ticketHTML(s){
-  const t=s.ticket; if(!t||t.limit==null) return '';
+  const t=s.ticket; if(!t||t.limit==null) return ticketFallbackHTML(s);
   const chip=(cls,lbl,val,sub)=>`<span class="tk ${cls}">${lbl} <b>${val}</b>${sub?` <i>${sub}</i>`:''}</span>`;
   let h='<div class="ticket">';
   h+=chip('buy','🎯 Limit',`$${t.limit}`,`bid ${t.bid??'—'} / ask ${t.ask??'—'}`);
@@ -911,6 +1119,7 @@ function verdict(s){   // synthesize every chip into one call
   const thin=liqGrade(s).k==='lo';
   const lotto=!!sg.lotto||(o.delta!=null&&Math.abs(o.delta)<0.20);
   // 1) SKIP
+  if(s.price_mismatch) return {c:'skip',head:'🚫 SKIP',reason:`price mismatch — provider $${s.price_mismatch.stated} vs market $${s.price_mismatch.market}`,act:'misparsed contract — verify strike/expiry, do not take'};
   if(against) return {c:'skip',head:'🚫 SKIP',reason:'tape is AGAINST you — fighting the trend',act:'pass; wait for the tape to flip'};
   if(g==='D') return {c:'skip',head:'🚫 SKIP',reason:'grade D — weak execution setup',act:'let it go'};
   if(lvl==='skip') return {c:'skip',head:'🚫 SKIP',reason:(L&&L.text)?L.text.replace(/^\S+\s*/,''):'entry too far / faded',act:'wait for a real pullback'};
@@ -999,18 +1208,19 @@ function liqGrade(s){
   if(sp<=15) return {k:'mid',emoji:'🟡',word:'ok',   txt:`spread ${sp}%`};
   return {k:'lo',emoji:'🔴',word:'thin',txt:`spread ${sp}% · slippage`};
 }
-function grade(s){
-  const t=s.ticket||{}, L=s.live;
-  const chase = L? L.chase_pct : (t.chasing_pct||0);
-  let entry = chase<=8?30 : chase<=15?22 : chase<=25?12 : 4;   // entry quality (buy-zone best)
-  if(L&&L.level==='better') entry=30;
-  if(L&&L.level==='skip') entry=0;
-  const lk=liqGrade(s).k; const liq = lk==='hi'?25 : lk==='mid'?15 : 3;
-  const prov = s.tier_key==='HIGH'?20 : s.tier_key==='MEDIUM'?15 : s.tier_key==='LOW'?9 : 4;
-  const rr=t.rr2||0; const rrs = rr>=2?15 : rr>=1.5?10 : rr>=1?5 : 0;
-  let sc=entry+liq+prov+rrs; if(s.sig&&s.sig.lotto) sc-=20;
-  sc=Math.max(0,Math.min(100,sc));
-  return {g: sc>=80?'A':sc>=65?'B':sc>=50?'C':'D', sc};
+function grade(s){   // mirror of signal_engine.setup_grade — PURE execution (no R:R trap)
+  const t=s.ticket||{}, L=s.live, o=s.opt||{};
+  const chase = (L&&L.chase_pct!=null) ? L.chase_pct : (t.chasing_pct||0);
+  const sp=t.spread_pct, mid=t.mid;
+  let liq = (mid!=null&&mid<0.15)?6 : sp==null?18 : sp<=6?35 : sp<=10?25 : sp<=18?12 : 4;
+  let buy = chase<=5?30 : chase<=12?22 : chase<=20?12 : 4;
+  if(L&&L.level==='skip') buy=0;
+  const ad = o.delta!=null?Math.abs(o.delta):null, lotto=s.sig&&s.sig.lotto;
+  let risk = lotto?2 : ad==null?14 : ad<0.15?4 : ad<0.30?12 : ad<=0.70?25 : 16;
+  const prov = s.tier_key==='HIGH'?10 : s.tier_key==='MEDIUM'?7 : s.tier_key==='LOW'?4 : 2;
+  const z=(s.sig&&(s.sig.dte===0||s.sig.expiry==='0DTE'))?6:0;
+  const sc=Math.max(0,Math.min(100,liq+buy+risk+prov-z));
+  return {g: sc>=80?'A':sc>=64?'B':sc>=46?'C':'D', sc};
 }
 function breakeven(s){
   const t=s.ticket||{}, stop=t.stop_pct||30, t1=t.t1_pct||28, t2=t.t2_pct||64;
@@ -1042,12 +1252,28 @@ function exitLadder(n,t,rt){
   const a=Math.max(1,Math.round(n/3)), b=Math.max(1,Math.round(n/3)), c=n-a-b;   // thirds across T1/T2/T3
   return `🔒 <b>Exit ${n} lots:</b> sell <b>${a}</b> @ $${t.t1} · <b>${b}</b> @ $${t.t2} · run <b>${c}</b> to $${t3} <i>(stop→BE $${t.limit} after 1st)</i>`;
 }
+function jmtContracts(s){   // JMT rule: max(3 contracts, contracts-at-3%), from premium + live account
+  if(s.provider!=='jmt') return null;
+  const prem=(s.plan&&s.plan.entry)||(s.sig&&s.sig.premium)||(s.opt&&s.opt.mid);
+  const acct=window.ACCT||9516;
+  if(!prem) return null;
+  const n=Math.max(3, Math.floor(0.03*acct/(prem*100*0.5)));
+  const risk=Math.round(n*prem*100*0.5);
+  return {n, prem, risk, pct:risk/acct*100};
+}
 function sizingHTML(s){
   const p=s.plan; if(!p||!p.ok||p.risk==null) return '';
   const basis=p.risk_basis?` <i>(${p.risk_basis})</i>`:'';
-  return `<div class="sizerow"><span class="tk sz">🎲 Risk <b>${p.risk_pct}%</b> ≈ <b>$${Math.round(p.risk)}</b>`
+  let h='';
+  const j=jmtContracts(s);                 // prominent contract call for JMT, driven by premium
+  if(j){
+    const over=j.pct>3.05?` <span style="color:var(--amber)">⚠ ${j.pct.toFixed(1)}% (>3% — 3-lot floor on a pricey option)</span>`:'';
+    h+=`<div class="jmtsize">📦 TAKE <b>${j.n}</b> CONTRACT${j.n!=1?'S':''} <span class="jmtsub">@ $${j.prem} · risk $${j.risk} (${j.pct.toFixed(1)}%) · min 3, up to 3%${over}</span></div>`;
+  }
+  h+=`<div class="sizerow"><span class="tk sz">🎲 Risk <b>${p.risk_pct}%</b> ≈ <b>$${Math.round(p.risk)}</b>`
     +` → <b>${p.contracts}</b> ×$${p.entry}${basis}</span>`
     +`<span class="tk">🛑 stop $${p.stop} · exit at your fill</span></div>`;
+  return h;
 }
 function posExitLadder(p){
   // 3-tier exit ladder for the ACTUAL held quantity, off YOUR fill — recomputes live as you trim
@@ -1065,17 +1291,24 @@ function posExitLadder(p){
   const a=Math.max(1,Math.round(n/3)), b=Math.max(1,Math.round(n/3)), c=n-a-b;
   return `🔒 <b>${n} left:</b> sell <b>${a}</b> @ $${t1} · <b>${b}</b> @ $${t2} · run <b>${c}</b> to $${t3} <i>(stop→BE $${be} after 1st)</i>`;
 }
-function posVerdict(p){   // live "what do I do NOW" for a position you're in
+function posVerdict(p){   // live "what do I do NOW" — hardened for the two proven leaks (overrun stops, whipsaws)
   if(!p||['CLOSED','CUT'].includes(p.state)||!p.live||p.live.pnl_pct==null) return '';
-  const pnl=p.live.pnl_pct, t1=p.tp1_pct||30, stop=p.stop_pct||30;
+  const pnl=p.live.pnl_pct, peak=Math.max(p.live.peak_pct||0,p.peak_pct||0), t1=p.tp1_pct||30, stop=p.stop_pct||30;
   const be=p.stop!=null&&p.avg_entry&&p.stop>=p.avg_entry;
+  const half=Math.max(1,Math.round((p.qty_remaining||1)/2)), twothirds=Math.max(1,Math.round((p.qty_remaining||1)*2/3));
   const trim=Math.max(1,Math.round((p.qty_remaining||1)/3));
+  const rt=posRoundTrip(p);
   let c,txt;
-  if(pnl<=-stop*0.85){ c='skip'; txt=`🔴 ${Math.round(pnl)}% — at/near stop, cut if it breaks $${p.stop}`; }
-  else if(pnl>=t1+35){ c='take'; txt=`🟢 +${Math.round(pnl)}% — past T2! trail the runner, bank into strength`; }
+  // 1) STOP breach — cut FIRMLY (your losses overrun the stop by ~23% — no 'giving it room')
+  if(pnl<=-stop*0.85){ c='skip'; txt=`🔴 ${Math.round(pnl)}% — AT STOP: cut now at $${p.stop}. Don't give it room — this is exactly where losses overrun.`; }
+  // 2) GIVE-BACK / whipsaw guard — was up big, now bleeding back toward a loss
+  else if(peak>=25 && pnl<=peak-20 && pnl>0){ c='wait'; txt=`⚡ was +${Math.round(peak)}%, now +${Math.round(pnl)}% — GIVING IT BACK. Bank ${rt?twothirds:half} NOW before it round-trips.`; }
+  // 3) round-trip setup popped — bank hard (lottos/far-OTM collapse)
+  else if(rt && pnl>=25){ c='take'; txt=`⚡ +${Math.round(pnl)}% on a round-trip setup — BANK ${twothirds} now, run the rest. These give it all back.`; }
+  else if(pnl>=t1+35){ c='take'; txt=`🟢 +${Math.round(pnl)}% — past T2! trim to a runner, trail your stop UP (lock the gain)`; }
   else if(pnl>=t1){ c='take'; txt=`🟢 +${Math.round(pnl)}% — at T1: trim ${trim}, move stop→BE $${p.avg_entry}`; }
   else if(pnl>=0){ c='wait'; txt=`🟡 +${Math.round(pnl)}% — hold, stop $${p.stop}${be?' (at BE — free roll)':''}`; }
-  else { c='wait'; txt=`🟡 ${Math.round(pnl)}% — hold, stop $${p.stop}`; }
+  else { c='wait'; txt=`🟡 ${Math.round(pnl)}% — hold, hard stop $${p.stop} (honor it)`; }
   return `<div class="verdict v-${c}">🎯 <b>${txt}</b></div>`;
 }
 function coachHTML(s){
@@ -1094,10 +1327,21 @@ function coachHTML(s){
   h+=`<div class="coachex">${exitLadder(n,t,rt)}</div>`;
   return h;
 }
+function entryVerdictHTML(e){
+  if(!e||!e.action) return '';
+  const col={TAKE:'#22c55e',WAIT:'#f59e0b',SKIP:'#ef4444'}[e.action]||'var(--dim)';
+  const bg={TAKE:'rgba(34,197,94,.15)',WAIT:'rgba(245,158,11,.12)',SKIP:'rgba(239,68,68,.14)'}[e.action]||'transparent';
+  const lbl=e.action==='TAKE'?'TAKE NOW':e.action;
+  return `<div class="entry-verdict" style="border-color:${col};background:${bg}">
+    <div><b style="color:${col};font-size:13px">${e.icon} ${lbl}</b> <span style="color:var(--fg)">— ${e.head}</span></div>
+    ${e.trig?`<div class="entry-trig">🎯 <b>${e.trig}</b></div>`:''}</div>`;
+}
 function liveRecoHTML(l){
-  if(!l||l.move_pct==null) return '';
+  if(!l) return '';
+  const banner=entryVerdictHTML(l.entry);
+  if(l.move_pct==null) return banner;
   const mv=l.move_pct>0?`📈 +${l.move_pct}%`:(l.move_pct<0?`📉 ${l.move_pct}%`:`● 0%`);
-  return `<span class="lvmove">${mv} since signal</span>`
+  return banner+`<span class="lvmove">${mv} since signal</span>`
     +`<span class="lvnow">now $${l.mid}${l.ask!=null?` · ask $${l.ask}`:''}</span>`
     +`<span class="lvreco ${l.level}">${l.text}</span>`;
 }
@@ -1164,6 +1408,9 @@ function actionsHTML(s){
       <button class="skip" onclick="act('${s.id}','skip')">Dismiss</button></div>`;
   }
   if(s.status==='NEW'){
+    if(s.junk&&s.junk.block) return `<div class="actions"><span class="statustag SKIPPED">🚫 BLOCKED — junk setup</span>
+      <button class="skip" onclick="act('${s.id}','skip')">Dismiss</button>
+      <button class="take" style="opacity:.45;font-size:11px" onclick="if(confirm('This is BLOCKED as a junk setup — negative expectancy. Override and take anyway?')) act('${s.id}','take')" title="strongly discouraged — the data says this loses">override</button></div>`;
     if(s.verified===false) return `<div class="actions"><span class="statustag SKIPPED">❌ misparse — not a real contract</span>
       <button class="skip" onclick="act('${s.id}','skip')">Dismiss</button></div>`;
     if(window.KILLED&&window.KILLED[s.provider]) return `<div class="actions"><span class="statustag SKIPPED">⛔ ${s.provider} disabled (neg edge ${window.KILLED[s.provider]}%)</span>
@@ -1175,17 +1422,18 @@ function actionsHTML(s){
         <input class="px mono" id="px-${s.id}" placeholder="fill" value="${typed[s.id]??(s.plan.ok?s.plan.entry:(s.sig.premium||''))}">
         <input class="px mono" id="qty-${s.id}" placeholder="qty" value="${(s.grade&&s.grade.suggest_lots)||1}" style="width:52px" title="contracts YOU actually took (grade-suggested default)">
         <button class="take" onclick="act('${s.id}','take')" title="discretionary — logs your real size & fill">Take</button>
-        <button class="skip" onclick="act('${s.id}','skip')">Dismiss</button></div>`;
+        ${ttBtn(s)}<button class="skip" onclick="act('${s.id}','skip')">Dismiss</button></div>`;
       return `<div class="actions"><span class="statustag" style="background:rgba(56,189,248,.15);color:var(--blue)">👁 PAPER — tracking only</span>
         <button class="skip" onclick="act('${s.id}','skip')">Dismiss</button></div>`;
     }
     const q=(s.plan.ok?s.plan.entry:(s.sig.premium||''));
-    const dq=(s.plan.ok?s.plan.contracts:1);
+    const _j=jmtContracts(s);                                  // JMT: default qty to the max(3,3%) count
+    const dq=_j?_j.n:(s.plan.ok?s.plan.contracts:1);
     return `<div class="actions">
       <input class="px mono" id="px-${s.id}" placeholder="fill" value="${typed[s.id]??q}">
       <input class="px mono" id="qty-${s.id}" placeholder="qty" value="${dq}" style="width:52px" title="contracts YOU actually took">
       <button class="take" onclick="act('${s.id}','take')">Take</button>
-      <button class="skip" onclick="act('${s.id}','skip')">Skip</button> ${logForm(s)}</div>`;
+      ${ttBtn(s)}<button class="skip" onclick="act('${s.id}','skip')">Skip</button> ${logForm(s)}</div>`;
   }
   if(s.status==='TAKEN'){
     return `<div class="actions"><span class="statustag TAKEN">TAKEN</span>
@@ -1197,6 +1445,14 @@ function actionsHTML(s){
   return `<div class="actions"><span class="statustag ${s.status}">${s.status}</span></div>`;
 }
 
+// universal graded tape-strength chip — used on signal cards AND the re-entry panel
+function tapeStrHTML(st){
+  if(!st||st.score==null) return '';
+  const c={strong:'#22c55e',moderate:'#f59e0b',weak:'var(--dim)',against:'#ef4444'}[st.grade]||'var(--dim)';
+  const g=st.grade.charAt(0).toUpperCase()+st.grade.slice(1);
+  const tip=(st.components||[]).map(x=>`${x.k}: ${x.t}`).join(' · ');
+  return `<span style="color:${c}" title="${tip}">${st.icon} ${g} ${st.score}</span> <span style="letter-spacing:1px;color:${c}">${st.bars}</span>`;
+}
 function card(s){
   const [col,bg]=TIER[s.tier_key]||TIER.LOW;
   const g=s.sig;
@@ -1212,7 +1468,7 @@ function card(s){
       <div class="head">
         <div class="sig">${title}
           <span class="badge tier">${s.tier_key}</span>
-          <span class="badge prov">${s.provider}</span>
+          <span class="badge prov">${s.provider}</span>${s.reenter_of?`<span class="badge" style="background:rgba(56,189,248,.15);color:var(--blue)" title="re-entry built from a live analysis of ${s.reenter_of}">↩ re-entry</span>`:''}${s.paper?`<span class="badge paper" title="distrusted — discretionary 1-lot on your read">👁 PAPER · 1-lot</span>`:''}
           ${g.lotto?'<span class="badge lotto">Lotto</span>':''}
           ${vb}
         </div>
@@ -1223,16 +1479,87 @@ function card(s){
         ${s.behavior&&s.behavior.recommendation?`<div class="sub" style="color:var(--muted)">🧭 <b>${s.behavior.recommendation}</b> · ${s.behavior.note||''}${s.behavior.cuts_losers===false?' <span style="color:var(--amber)">⚠ hides losers — set your own stop</span>':''}</div>`:''}
         ${s.cosign?`<div class="sub" style="color:var(--amber)">🔗 also called by <b>${s.cosign.join(', ')}</b> — same correlated cluster: this is <b>ONE bet</b>, don't size it 4×</div>`:''}
         ${s.verified===false?`<div class="sub" style="color:var(--red)">⚠ ${s.verify_note||'contract not found at IBKR — do not trade'}</div>`:''}
+        ${s.price_mismatch?`<div class="sub" style="color:var(--red)">⚠ <b>price mismatch</b> — provider said <b>$${s.price_mismatch.stated}</b> but this contract trades <b>$${s.price_mismatch.market}</b>. Misparsed strike/expiry — do NOT trust the ticket; verify the contract before acting.</div>`:''}
         ${s.evidence?`<div class="sub">📊 ${s.evidence}</div>`:''}
-        ${s.tech&&s.tech.ind?`<div class="sub">📈 <b>${s.tech.label}</b> · px ${s.tech.ind.price} · VWAP ${s.tech.ind.vwap} · RSI ${s.tech.ind.rsi} · BB ${s.tech.ind.bb_low}–${s.tech.ind.bb_up}</div>`:''}
+        ${s.tech&&s.tech.ind?`<div class="sub">📈 <b>${s.tech.label}</b>${s.tech.strength?' · '+tapeStrHTML(s.tech.strength):''} · px ${s.tech.ind.price} · VWAP ${s.tech.ind.vwap} · RSI ${s.tech.ind.rsi} · BB ${s.tech.ind.bb_low}–${s.tech.ind.bb_up}</div>`:''}
         ${optLine}
         <div class="reasons">${(s.reasons||[]).join(' · ')}</div>
       </div>
     </div>`;
   if(s.pos){   // ONE card: a taken trade morphs into its live management surface
-    return `<div class="card status-${s.pos.state}" style="--tier:${col};--tierbg:${bg}">${head}${posBody(s.pos)}</div>`;
+    return `<div class="card status-${s.pos.state}" style="--tier:${col};--tierbg:${bg}">${head}${posBody(s.pos)}${reentryBlock(s)}</div>`;
   }
-  return `<div class="card status-${s.status}" style="--tier:${col};--tierbg:${bg}">${head}${shadowHTML(s)}${watchBadge(s)}${ticketHTML(s)}${planHTML(s)}${actionsHTML(s)}</div>`;
+  if(s.junk&&s.junk.block) return `<div class="card status-${s.status} junk" style="--tier:#ef4444;--tierbg:rgba(239,68,68,.10)">${head}${junkHTML(s)}${actionsHTML(s)}</div>`;
+  const warnB = (s.junk&&s.junk.warn)?junkHTML(s):'';   // scalp-only θ-cliff warning, ticket still shown
+  return `<div class="card status-${s.status}" style="--tier:${col};--tierbg:${bg}">${head}${shadowHTML(s)}${watchBadge(s)}${providerPlaybook(s)}${warnB}${ticketHTML(s)}${planHTML(s)}${actionsHTML(s)}${reentryBlock(s)}</div>`;
+}
+
+// ── RE-ENTRY ANALYSIS — reopen an exited card for a live tape/option read before getting back in ──
+function reentryBlock(s){ return `<div id="rblock-${s.id}" class="rblock">${reentryBlockInner(s)}</div>`; }
+function reentryBlockInner(s){
+  const armed = s.reentry && s.reentry.armed;
+  const exited = s.status==='CLOSED'||s.status==='SKIPPED'||(s.pos&&['CLOSED','CUT'].includes(s.pos.state));
+  if(armed) return reentryPanel(s);
+  if(!exited) return '';
+  return `<div class="reentry-arm"><button class="reentry-btn" onclick="armReentry('${s.id}')">🔄 Re-entry Analysis</button>
+    <span class="sub" style="color:var(--dim)">reopen for a live tape + option read before re-entering</span></div>`;
+}
+function armReentry(id){
+  const s=(window.SIGMAP||{})[id]||{};
+  const ex=(s.pos&&(s.pos.exit_price||s.pos.avg_entry))||(s.sig&&s.sig.premium)||null;   // seed the limit cap
+  act(id,'reentry_open', ex?{ref_exit:ex}:{});
+}
+function reStrike(id,cur,d){ act(id,'reentry_strike',{strike:(parseFloat(cur)||0)+d}); }
+function flipCP(id,cur){ act(id,'reentry_strike',{type:cur==='C'?'P':'C'}); }
+async function reenterNow(btn,id,verdict){
+  if(verdict==='BACK OFF' && !confirm("The tape is AGAINST this direction (BACK OFF). Build a re-entry ticket anyway?")) return;
+  if(btn){btn.disabled=true; btn.dataset.orig=btn.innerHTML; btn.innerHTML='⏳ building ticket…'; btn.style.opacity='.75';}
+  window._reBuilding=id;                                  // suppress the panel patch from wiping the spinner
+  try{
+    const r=await fetch('/api/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,action:'reentry_promote'})});
+    const j=await r.json().catch(()=>({}));
+    if(j&&j.error){alert('⚠ '+j.error);}
+    else if(j&&!j.new_id){alert('Could not build the entry card — the contract may not have verified. Try dialing the strike.');}
+  }catch(e){ if(btn){btn.disabled=false; btn.innerHTML=btn.dataset.orig||'▶ Re-enter'; btn.style.opacity='';} }
+  finally{ window._reBuilding=null; refresh(); }
+}
+function reentryPanel(s){
+  const re=s.reentry||{}, a=re.analysis, strike=re.strike, cp=re.type||'C';
+  const head=`<div class="re-head">🔄 <b>Re-entry Analysis</b> · ${re.ticker||''}
+      <span class="strike-step"><button onclick="reStrike('${s.id}','${strike}',-1)" title="strike down">▼</button>
+      <b>${strike}${cp}</b>
+      <button onclick="reStrike('${s.id}','${strike}',1)" title="strike up">▲</button></span>
+      <button class="cp-flip" onclick="flipCP('${s.id}','${cp}')">${cp==='C'?'CALL':'PUT'}</button>
+      <button class="re-x" onclick="act('${s.id}','reentry_close')" title="stop watching">✕</button></div>`;
+  if(!a) return `<div class="reentry-panel amber">${head}<div class="sub">📡 pulling live quote + tape…</div></div>`;
+  // guard EVERY malformed analysis (error may be null; option/tape may be missing on an expired
+  // contract) — one throwing panel takes the ENTIRE feed render down with it
+  if(a.error||!a.option||!a.tape) return `<div class="reentry-panel amber">${head}<div class="sub" style="color:var(--amber)">⚠ ${a.error||'no live quote'} — try the ▲▼ to dial a valid strike/expiry, or ✕ to close this watch</div></div>`;
+  const o=a.option, t=a.tape;
+  const VC={green:'var(--green)',amber:'var(--amber)',red:'var(--red)'}, VI={green:'🟢',amber:'🟡',red:'🔴'};
+  const vcol=VC[a.vcol]||'var(--dim)', vico=VI[a.vcol]||'⚪';
+  const tcol=t.verdict==='ALIGNED'?'var(--green)':t.verdict==='AGAINST'?'var(--red)':'var(--amber)';
+  const optline=`💵 <b>$${o.mid}</b> (bid ${o.bid}/ask ${o.ask}${o.spread_pct!=null?', spr '+o.spread_pct+'%':''})${o.delta!=null?' · Δ'+o.delta:''}${o.iv!=null?' · IV '+Math.round(o.iv*100)+'%':''}`;
+  const thetaline=o.theta_pct!=null?`<span style="color:${o.onedte?'var(--red)':'var(--dim)'}">⏳ ${o.dte!=null?o.dte+'-DTE · ':''}θ −${o.theta_pct}%/day${o.onedte?' — melts overnight, directional only':''}</span>`:'';
+  const bullets=(t.bullets||[]).map(b=>`<div class="re-bullet">${b}</div>`).join('');
+  const trig=a.trigger?`<div class="re-trigger" style="border-color:${vcol}">🎯 <b>${a.verdict}</b> — ${a.trigger}</div>`:'';
+  // ROLL — the original strike has run too far to chase; offer a fresh near-the-money strike (same thesis)
+  const rolled=a.rolled?`<div class="re-row" style="color:var(--green)">🎯 <b>rolled to a FRESH strike ${strike}${cp}</b> (from ${a.rolled.from}${cp}) — same thesis, better leverage <button class="cp-flip" onclick="act('${s.id}','reentry_unroll')" title="back to the provider's original strike">↩ original</button></div>`:'';
+  const chaseBanner=(a.chasing&&!a.rolled)?`<div class="re-trigger" style="border-color:var(--amber);background:rgba(245,158,11,.10)">⚠️ <b>${strike}${cp} is +${a.chase_pct}% since the call</b> — chasing a runner (bad leverage). <button class="reenter-go" style="background:var(--amber);color:#3a2c05;margin-left:4px;padding:4px 10px" onclick="act('${s.id}','reentry_roll')">🎯 Roll to a fresh strike</button></div>`:'';
+  // ▶ Re-enter — build a fresh actionable entry ticket (limit/stop/T1/T2/size), same as a real signal card
+  const backoff=a.verdict==='BACK OFF';
+  const rollBtn=`<button class="cp-flip" onclick="act('${s.id}','reentry_roll')" title="find a fresh near-the-money strike">🎯 roll strike</button>`;
+  const reBtn=`<div class="re-actions"><button class="reenter-go${backoff?' danger':''}" onclick="reenterNow(this,'${s.id}','${a.verdict}')">▶ Re-enter ${strike}${cp} — build ticket</button>
+    ${rollBtn}
+    <span class="sub" style="color:var(--dim)">limit $${a.limit}${a.u_stop?` · stop ${re.ticker} ${a.u_stop}`:''}</span></div>`;
+  return `<div class="reentry-panel" style="border-color:${vcol}">${head}
+    <div class="re-verdict" style="color:${vcol}">${vico} <b>${a.verdict}</b> — ${a.headline}</div>
+    ${rolled}${chaseBanner}
+    <div class="re-row">${optline}</div>
+    ${thetaline?`<div class="re-row">${thetaline}</div>`:''}
+    <div class="re-row">📈 TAPE${t.price!=null?' (px '+t.price+')':''}: <b style="color:${tcol}">${t.verdict}</b>${t.strength?' · '+tapeStrHTML(t.strength):''}</div>
+    ${bullets}${trig}${reBtn}
+    <div class="re-updated">updated ${re.updated?ago(re.updated,window.NOW||re.updated):'—'}${a.limit?` · suggested pullback-limit <b>$${a.limit}</b>`:''}${a.ref_exit?` · your exit $${a.ref_exit}`:''}</div></div>`;
 }
 
 async function act(id,action,extra){
@@ -1253,6 +1580,7 @@ async function refresh(){
     document.getElementById('acct').innerHTML=`$${Number(d.account).toLocaleString(undefined,{maximumFractionDigits:0})} <span style="color:${grow>=0?'#22c55e':'#ef4444'}">(${grow>=0?'+':''}${grow.toFixed(1)}%)</span>`;
     document.getElementById('risk').textContent=d.risk+'%';
     let S=d.signals||[];
+    window.SIGMAP=Object.fromEntries(S.map(x=>[x.id,x]));    // id -> signal (armReentry / re-entry panel)
     window.NOW=d.now; window.STATS=d.stats; window.KILLED=d.killed||{};   // early so quality-pack verdicts are accurate
     // TODAY P&L: realized closed today (from the closed-trades LEDGER — one source of truth, matches Day P&L)
     const _td=(d.now||'').slice(0,10);
@@ -1266,9 +1594,19 @@ async function refresh(){
     document.getElementById('today').innerHTML=`<span style="color:${col(rzToday)}">${rzToday>=0?'+':'−'}$${Math.abs(Math.round(rzToday))}</span>`
       +(Math.abs(openPnl)>=1?` <span style="color:var(--muted)">· open <span style="color:${col(openPnl)}">${openPnl>=0?'+':'−'}$${Math.abs(Math.round(openPnl))}</span></span>`:'');
     renderWallet(d);
+    window.ACCT=d.account||9516;                             // for client-side JMT sizing
+    window.BROKER=d.broker&&!d.broker.error?d.broker:null;   // tastytrade connected?
+    (function(){const c=document.getElementById('ttchip'); if(!c)return;
+      if(window.BROKER){c.style.display='';
+        document.getElementById('ttbal').textContent='$'+Math.round(window.BROKER.net_liq).toLocaleString();
+        document.getElementById('ttenv').textContent=window.BROKER.sandbox?'SANDBOX':'LIVE';
+      } else c.style.display='none';})();
     renderStats(d.stats);
     renderDayPnl(d.stats&&d.stats.by_day);
     renderDrawdown(d.stats&&d.stats.drawdown,d.account);
+    renderCalibration(d.calibration);
+    renderExitQuality(d.exit_quality);
+    renderProviderEdge(d.provider_edge);
     renderSources(d.sources,d.now);
     window.DAY_OVERRIDE=d.day_override;
     renderChipsTray(d.discipline,d.account);
@@ -1278,9 +1616,10 @@ async function refresh(){
     renderPending(d.pending);
     renderPositions(d.positions);
     window.KILLED=d.killed||{};
-    document.getElementById('n').textContent=S.length;
-    document.getElementById('nt').textContent=S.filter(x=>x.status==='TAKEN'||x.status==='CLOSED').length;
-    document.getElementById('ns').textContent=S.filter(x=>x.status==='SKIPPED').length;
+    const T=d.totals||{};   // all-time counts over the full store (feed is windowed to last 60 for speed)
+    document.getElementById('n').textContent=T.signals!=null?T.signals:S.length;
+    document.getElementById('nt').textContent=T.taken!=null?T.taken:S.filter(x=>x.status==='TAKEN'||x.status==='CLOSED').length;
+    document.getElementById('ns').textContent=T.skipped!=null?T.skipped:S.filter(x=>x.status==='SKIPPED').length;
     S=S.filter(x=>!muted.has(x.provider));            // apply channel filter
     S.sort((a,b)=>(Date.parse(b.iso||0)-Date.parse(a.iso||0)));   // newest first (section order set below)
     // group into sections + counts, then render the top filter bar every refresh
@@ -1302,7 +1641,9 @@ async function refresh(){
     // re-render only on STRUCTURAL change (state/qty/realized/events/filter) — live P&L is patched separately
     const pkey=s=>s.pos?[s.pos.state,s.pos.qty_remaining,s.pos.realized,(s.pos.provider_events||[]).length,
       (s.pos.user_actions||[]).length,(s.pos.live_alerts||[]).length,(s.pos.suggested||{}).raw||''].join(','):'';
-    const sig=S.map(s=>s.id+s.status+s.score+s.tier_key+((s.plan||{}).contracts||'')+pkey(s)).join('|')
+    // reentry STRUCTURAL key (armed / strike / type) — not analysis/updated, which patch in place below
+    const rkey=s=>{const r=s.reentry;return r&&r.armed?('R'+r.strike+(r.type||'')):'';};
+    const sig=S.map(s=>s.id+s.status+s.score+s.tier_key+((s.plan||{}).contracts||'')+pkey(s)+rkey(s)).join('|')
               +'|'+BLOCKED+'|'+Object.keys(window.KILLED||{}).join(',')+'|'+JSON.stringify(secOn);
     if(sig!==feed.dataset.sig){
       feed.dataset.sig=sig;
@@ -1312,7 +1653,9 @@ async function refresh(){
         if(!secOn[k]||!groups[k].length) return;
         html+=hdr(k, groups[k].length);
         if(k==='skip') html+=skipScoreHTML(groups[k]);
-        html+=(k==='skip'?'<div class="skipwrap">':'')+groups[k].map(card).join('')+(k==='skip'?'</div>':'');
+        const safeCard=s=>{try{return card(s);}catch(e){console.error('card render failed',s&&s.id,e);
+          return `<div class="card" style="--tier:#ef4444;--tierbg:rgba(239,68,68,.08)"><div class="sub" style="color:var(--amber)">⚠ card ${s&&s.id?s.id:'?'} failed to render — data issue, feed unaffected</div></div>`;}};
+        html+=(k==='skip'?'<div class="skipwrap">':'')+groups[k].map(safeCard).join('')+(k==='skip'?'</div>':'');
       });
       feed.innerHTML=html;
     }
@@ -1326,7 +1669,11 @@ async function refresh(){
       const ce=document.getElementById('coach-'+s.id); if(ce) ce.innerHTML=coachHTML(s);
       const ge=document.getElementById('greeks-'+s.id); if(ge) ge.innerHTML=greeksHTML(s);
       const ve=document.getElementById('vslot-'+s.id); if(ve) ve.innerHTML=verdictHTML(s);
-      const we=document.getElementById('wslot-'+s.id); if(we) we.innerHTML=whipsawHTML(s); });
+      const we=document.getElementById('wslot-'+s.id); if(we) we.innerHTML=whipsawHTML(s);
+      // re-entry panel: patch in place when its content changes (analysis refreshes ~every 8s, no card blink)
+      const rb=document.getElementById('rblock-'+s.id); if(rb && window._reBuilding!==s.id){ const r=s.reentry||{};
+        const rk=r.armed?('A'+r.strike+(r.type||'')+((r.analysis||{}).verdict||'')+(r.updated||'')):'x';
+        if(rb.dataset.rk!==rk){ rb.dataset.rk=rk; rb.innerHTML=reentryBlockInner(s); } } });
   }catch(e){document.getElementById('dot').style.background='var(--red)';}
 }
 refresh(); setInterval(refresh,1500);

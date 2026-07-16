@@ -35,9 +35,10 @@ ENV = load_env()
 SERVER = ENV.get("SERVER_URL", "http://localhost:8787")
 
 
-def post(author, text, channel=None, provider=None, msg_id=None, reply_to=None):
+def post(author, text, channel=None, provider=None, msg_id=None, reply_to=None, edited=False):
     body = json.dumps({"author": author, "text": text, "channel": channel,
-                       "provider": provider, "msg_id": msg_id, "reply_to": reply_to}).encode()
+                       "provider": provider, "msg_id": msg_id, "reply_to": reply_to,
+                       "edited": edited}).encode()
     try:
         req = urllib.request.Request(SERVER, data=body, headers={"Content-Type": "application/json"})
         urllib.request.urlopen(req, timeout=5)
@@ -104,6 +105,16 @@ def main():
             post(m.author.display_name, m.content, channel=cid, provider=channels[cid],
                  msg_id=str(m.id), reply_to=ref)
             print(f"⚡ {channels[cid]}: {m.content[:70]}" + ("  ↩reply" if ref else ""))
+
+    @client.event
+    async def on_message_edit(before, after):
+        # provider EDITED a callout (e.g. fixed 7/13 -> 7/15) — re-forward so the desk re-prices the card
+        cid = str(after.channel.id)
+        if cid in channels and after.content and before.content != after.content:
+            ref = str(after.reference.message_id) if (after.reference and after.reference.message_id) else None
+            post(after.author.display_name, after.content, channel=cid, provider=channels[cid],
+                 msg_id=str(after.id), reply_to=ref, edited=True)
+            print(f"✏️  {channels[cid]} EDIT: {after.content[:60]}")
 
     client.run(token)
 

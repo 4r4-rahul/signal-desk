@@ -203,9 +203,58 @@ def record_tick(row):
         pass
 
 
+def _shadow_scaleout(ticks, t1, t2, stop):
+    """Replay ordered option-%-move ticks through the desk's SCALE-OUT discipline — the exits the desk
+    actually tells you to take, so the shadow measures YOUR strategy, not a naive all-out:
+      · sell 1/2 at +t1, move the stop to BREAKEVEN
+      · sell 1/4 at +t2, trail the stop up to +t1
+      · the runner (1/4) exits at the last observed tick / EOD
+      · a hard stop at -stop before any fill = full -1R
+    Returns the portion-weighted blended return %. Fixes both failure modes of the old binary model
+    (spike-then-die was OVERstated as a full T1 win; a big runner was UNDERstated at just T1)."""
+    if not ticks:
+        return None
+    rem, realized, slvl, hit1, hit2 = 1.0, 0.0, -abs(stop), False, False
+    for pct in ticks:
+        if rem <= 0:
+            break
+        if not hit1 and pct >= t1:
+            realized += 0.50 * t1; rem -= 0.50; hit1 = True; slvl = 0.0        # 1/2 out, stop -> breakeven
+        if hit1 and not hit2 and pct >= t2:
+            realized += 0.25 * t2; rem -= 0.25; hit2 = True; slvl = t1         # 1/4 out, trail -> +t1
+        if pct <= slvl:
+            realized += rem * slvl; rem = 0.0; break                          # remainder stopped/trailed out
+    if rem > 0:
+        realized += rem * ticks[-1]                                           # runner exits at last observed tick
+    return round(realized, 2)
+
+
+def _shadow_r(con, signal_id, stop, t1, t2):
+    """Would-be blended return% + R for a shadowed signal: scale-out replay of its stored 'shadow' path."""
+    rows = con.execute("SELECT opt_pct FROM path WHERE signal_id=? AND phase='shadow' AND opt_pct IS NOT NULL "
+                       "ORDER BY ts_utc", (signal_id,)).fetchall()
+    ret = _shadow_scaleout([r[0] for r in rows], t1, t2, stop)
+    if ret is None or not stop:
+        return None, None
+    return ret, round(ret / abs(stop), 3)
+
+
+def _resync_shadow_r(con):
+    """(Re)score EVERY shadow outcome's return% + R from a scale-out replay of its path + the signal's own
+    stop/target plan. One code path for live shadows (updates as their path grows) AND historical backfill."""
+    rows = con.execute("SELECT o.signal_id, s.stop_pct, s.t1_pct, s.t2_pct FROM outcomes o "
+                       "JOIN signals s ON s.signal_id=o.signal_id WHERE o.kind='SHADOW'").fetchall()
+    for sid, sp, t1, t2 in rows:
+        sp = sp or 30; t1 = t1 or 40; t2 = t2 or (t1 * 2)
+        ret, r = _shadow_r(con, sid, sp, t1, t2)
+        if r is not None:
+            con.execute("UPDATE outcomes SET return_pct=?, r_multiple=? WHERE signal_id=? AND kind='SHADOW'",
+                        (ret, r, sid))
+
+
 def _shadow_outcome(e):
-    """Would-be outcome of a SKIPPED signal: disciplined result (WIN/LOSS/SCRATCH by our stop/target,
-    first hit) PLUS the ultimate peak/trough over its full life (what we truly missed or dodged)."""
+    """Would-be outcome of a shadowed signal: disciplined WIN/LOSS/SCRATCH label (target vs stop, first hit)
+    PLUS peak/trough over its life. return%/R are (re)computed by _resync_shadow_r via a scale-out replay."""
     sh = e.get("shadow") or {}
     res = sh.get("result") or (sh.get("state") if sh.get("state") in ("WIN", "LOSS") else None)
     if res not in ("WIN", "LOSS", "SCRATCH"):
@@ -262,6 +311,7 @@ def sync_outcomes(signals=None):
                 cur = con.execute("SELECT kind FROM outcomes WHERE signal_id=?", (row["signal_id"],)).fetchone()
                 if not cur or cur[0] == "SHADOW":
                     _upsert(con, "outcomes", row)
+        _resync_shadow_r(con)                 # score shadow return%/R from the scale-out replay (live + backfill)
         con.commit(); con.close()
     except Exception:
         pass
@@ -306,6 +356,161 @@ def export_csv(path="ml_dataset.csv"):
     n = con.execute("SELECT COUNT(*) FROM ml_dataset").fetchone()[0]
     con.close()
     return n, path
+
+
+SCORE_BUCKETS = [(0, 45, "SKIP <45"), (45, 60, "LOW 45-59"), (60, 75, "MED 60-74"), (75, 101, "HIGH 75+")]
+
+
+def _pearson(pairs):
+    n = len(pairs)
+    if n < 3:
+        return None
+    xs = [a for a, b in pairs]
+    ys = [b for a, b in pairs]
+    mx, my = sum(xs) / n, sum(ys) / n
+    num = sum((x - mx) * (y - my) for x, y in pairs)
+    den = (sum((x - mx) ** 2 for x in xs) * sum((y - my) ** 2 for y in ys)) ** 0.5
+    return round(num / den, 3) if den else None
+
+
+def _calib_stats(sub):
+    rs = [x["r"] for x in sub if x["r"] is not None]
+    us = [x["usd"] for x in sub if x["usd"] is not None]
+    n = len(sub)
+    wins = sum(1 for x in sub if (x["r"] if x["r"] is not None else x["usd"] or 0) > 0)
+    return {"n": n,
+            "avg_r": round(sum(rs) / len(rs), 2) if rs else None,
+            "win_pct": round(wins / n * 100) if n else None,
+            "avg_usd": round(sum(us) / len(us)) if us else None,
+            "total_usd": round(sum(us)) if us else None}
+
+
+def _calib_verdict(n, pr_r):
+    """Honest read: is the score EARNING trust? Significance ≈ |r| > 2/sqrt(n)."""
+    if n < 15:
+        return f"too few closed trades (n={n}) — keep logging; need ~30+ before the score can be trusted"
+    sig = (2 / (n ** 0.5)) if n else 1
+    if pr_r is None:
+        return "insufficient data"
+    if pr_r >= sig and pr_r >= 0.3:
+        return f"score is TRACKING outcomes (r={pr_r}, significant at n={n}) — higher score = better R"
+    if pr_r >= 0.15:
+        return f"weak positive (r={pr_r}) — directionally right but NOT yet significant (need r>{sig:.2f} at n={n})"
+    if pr_r < 0:
+        return f"score is INVERTED vs outcomes (r={pr_r}) — re-weight needed"
+    return f"score not separating outcomes yet (r={pr_r}) — needs re-weighting or more data"
+
+
+def calibration():
+    """Is the score/grade actually tracking realized outcomes? Per-bucket realized R + win% + $ on the
+    closed trades we have. This is the loop that keeps the score honest — watch it as n grows; the score
+    earns trust only when the buckets separate AND the correlation clears significance."""
+    con = connect()
+    rows = con.execute("SELECT score, grade, r_multiple, realized_usd, result FROM ml_dataset "
+                       "WHERE r_multiple IS NOT NULL OR realized_usd IS NOT NULL").fetchall()
+    con.close()
+    closed = [{"score": r[0], "grade": r[1], "r": r[2], "usd": r[3], "result": r[4]} for r in rows]
+    score_rows = [{"bucket": lbl, "lo": lo, "hi": hi,
+                   **_calib_stats([x for x in closed if x["score"] is not None and lo <= x["score"] < hi])}
+                  for lo, hi, lbl in SCORE_BUCKETS]
+    grade_rows = [{"grade": g, **_calib_stats([x for x in closed if x["grade"] == g])} for g in ("A", "B", "C", "D")]
+    pr_r = _pearson([(x["score"], x["r"]) for x in closed if x["score"] is not None and x["r"] is not None])
+    pr_usd = _pearson([(x["score"], x["usd"]) for x in closed if x["score"] is not None and x["usd"] is not None])
+    seq = [b["avg_r"] for b in score_rows if b["avg_r"] is not None]
+    monotonic = all(seq[i] <= seq[i + 1] for i in range(len(seq) - 1)) if len(seq) >= 2 else None
+    return {"n_closed": len(closed), "score_buckets": score_rows, "grade_buckets": grade_rows,
+            "pearson_r": pr_r, "pearson_usd": pr_usd, "monotonic": monotonic,
+            "verdict": _calib_verdict(len(closed), pr_r)}
+
+
+def _exit_verdict(n, avg_loss_r, n_whip, n_loss):
+    if n < 12:
+        return f"too few closed trades (n={n}) — keep logging to read the exit leak"
+    issues = []
+    if avg_loss_r is not None and avg_loss_r < -1.1:
+        issues.append(f"losses OVERRUN the stop (avg {avg_loss_r}R vs -1.0 target) — cut faster")
+    if n_whip and n_loss and n_whip / n_loss >= 0.2:
+        issues.append(f"{n_whip} whipsaws — winners round-tripping to losses; bank the pop sooner")
+    return " · ".join(issues) if issues else "exits look disciplined — stops honored, few round-trips"
+
+
+def exit_quality():
+    """How well are the EXITS executed? Direction is a coin flip, so THIS is where the edge lives.
+    Measures the two proven leaks on YOUR real closed trades (kind=REALIZED, not shadows): losses that
+    overrun the -1R stop, and winners that round-trip (peaked then closed red)."""
+    con = connect()
+    rows = con.execute("SELECT peak_pct, r_multiple, exit_vs_peak_pct, result FROM outcomes "
+                       "WHERE kind='REALIZED' AND r_multiple IS NOT NULL").fetchall()
+    con.close()
+    o = [{"peak": r[0], "r": r[1], "evp": r[2], "result": r[3]} for r in rows]
+    n = len(o)
+    if not n:
+        return {"n": 0}
+    wins = [x for x in o if x["r"] > 0]
+    loss = [x for x in o if x["r"] < 0]
+    avg_loss_r = round(sum(x["r"] for x in loss) / len(loss), 2) if loss else None
+    overrun_pct = round((abs(avg_loss_r) - 1) * 100) if avg_loss_r is not None else None   # % beyond 1R
+    whip = [x for x in o if (x["peak"] or 0) >= 25 and x["r"] < 0]                          # peaked then lost
+    gb = [x["evp"] for x in wins if x["evp"] is not None]                                   # exit vs peak (neg=gave back)
+    return {"n": n, "win_pct": round(len(wins) / n * 100),
+            "avg_loss_r": avg_loss_r, "overrun_pct": overrun_pct,
+            "whipsaws": len(whip), "whip_of_loss": round(len(whip) / len(loss) * 100) if loss else 0,
+            "avg_giveback": round(sum(gb) / len(gb), 1) if gb else None,
+            "avg_peak": round(sum((x["peak"] or 0) for x in o) / n, 1),
+            "verdict": _exit_verdict(n, avg_loss_r, len(whip), len(loss))}
+
+
+SHADOW_WEIGHT = 0.35     # a shadow observation counts ~1/3 of a realized one (lower confidence)
+SHADOW_HAIRCUT = 0.10    # subtract 0.10R from shadow avg — shadow assumes ideal mechanical exits; reality slips
+
+
+def provider_edge():
+    """Per-provider BLENDED-R edge + a DATA-GATED size multiplier.
+
+    Blends TWO tracks so size moves on real evidence without waiting forever for a realized sample:
+      · REALIZED R (your actual fills) — unbiased, full weight, but low-n.
+      · SHADOW R (would-be, scale-out replay) — high-n, but assumes ideal execution, so it's HAIRCUT
+        (−0.10R for slippage) and DOWN-WEIGHTED (≈1/3 of a realized obs).
+    SHRINKING a bleeder can trigger on the blend alone (safe direction). TILTING UP additionally requires
+    ≥5 real fills — never size real money up on pure hypothesis. Capped so no provider oversizes the acct."""
+    con = connect()
+    rows = con.execute("SELECT s.provider, o.kind, o.r_multiple FROM outcomes o JOIN signals s ON s.signal_id=o.signal_id "
+                       "WHERE o.r_multiple IS NOT NULL AND o.kind IN ('REALIZED','SHADOW')").fetchall()
+    con.close()
+    from collections import defaultdict
+    realized, shadow = defaultdict(list), defaultdict(list)
+    for prov, kind, r in rows:
+        (realized if kind == "REALIZED" else shadow)[prov].append(r)
+    out = {}
+    for prov in set(realized) | set(shadow):
+        rr, ss = realized.get(prov, []), shadow.get(prov, [])
+        n_r, n_s = len(rr), len(ss)
+        avg_r = (sum(rr) / n_r) if n_r else None
+        avg_s = (sum(ss) / n_s) if n_s else None
+        w_r, w_s = float(n_r), n_s * SHADOW_WEIGHT                      # shadow down-weighted
+        num = (avg_r * w_r if n_r else 0.0) + ((avg_s - SHADOW_HAIRCUT) * w_s if n_s else 0.0)  # shadow haircut
+        den = w_r + w_s
+        blended = (num / den) if den else None
+        eff_n = n_r + w_s                                              # effective sample size
+        if blended is None or eff_n < 8:
+            mult = 1.0                                                 # not enough data to move either way
+        elif blended <= -0.30:
+            mult = 0.25                                                # bleeder — shrink (shadow may trigger; safe)
+        elif blended <= -0.10:
+            mult = 0.50
+        elif blended >= 0.30 and eff_n >= 20 and n_r >= 5:
+            mult = 1.50                                                # tilt-UP needs REAL fills, not hypothesis
+        elif blended >= 0.10 and eff_n >= 20 and n_r >= 5:
+            mult = 1.25
+        else:
+            mult = 1.0
+        out[prov] = {"mult": mult,
+                     "n": n_r, "avg_r": round(avg_r, 2) if avg_r is not None else None,  # back-compat keys
+                     "realized_n": n_r, "realized_r": round(avg_r, 2) if avg_r is not None else None,
+                     "shadow_n": n_s, "shadow_r": round(avg_s, 2) if avg_s is not None else None,
+                     "blended_r": round(blended, 2) if blended is not None else None,
+                     "eff_n": round(eff_n, 1)}
+    return out
 
 
 def summary():
@@ -401,7 +606,31 @@ if __name__ == "__main__":
     if cmd == "validate":
         import sys as _s
         _s.exit(0 if validate() else 1)
-    if cmd == "backfill":
+    if cmd in ("calibrate", "calibration", "calib"):
+        c = calibration()
+        print(f"\n  SCORE CALIBRATION  ({c['n_closed']} closed trades)\n  {'-'*54}")
+        print(f"  {'bucket':<11}{'n':>4}{'avg R':>8}{'win%':>7}{'avg $':>8}{'total $':>9}")
+        for b in c["score_buckets"]:
+            r = f"{b['avg_r']:+.2f}" if b['avg_r'] is not None else "—"
+            w = f"{b['win_pct']}%" if b['win_pct'] is not None else "—"
+            au = f"{b['avg_usd']:+d}" if b['avg_usd'] is not None else "—"
+            tu = f"{b['total_usd']:+d}" if b['total_usd'] is not None else "—"
+            print(f"  {b['bucket']:<11}{b['n']:>4}{r:>8}{w:>7}{au:>8}{tu:>9}")
+        print(f"\n  grade:  " + "   ".join(f"{g['grade']}={g['avg_r']:+.2f}(n{g['n']})" for g in c["grade_buckets"] if g['avg_r'] is not None))
+        print(f"  Pearson r(score, R) = {c['pearson_r']}   monotonic={c['monotonic']}")
+        print(f"\n  VERDICT: {c['verdict']}\n")
+    elif cmd in ("exits", "exit", "exitquality"):
+        e = exit_quality()
+        if not e.get("n"):
+            print("  no closed trades yet"); raise SystemExit
+        print(f"\n  EXIT QUALITY  ({e['n']} real closed trades)\n  {'-'*54}")
+        print(f"  win rate       : {e['win_pct']}%")
+        print(f"  avg loss       : {e['avg_loss_r']}R" + (f"  ({e['overrun_pct']:+d}% vs the -1R stop)" if e['overrun_pct'] is not None else ""))
+        print(f"  whipsaws       : {e['whipsaws']}  ({e['whip_of_loss']}% of losses were round-tripped wins)")
+        print(f"  avg peak run   : +{e['avg_peak']}%")
+        print(f"  winner giveback: {e['avg_giveback']}% below peak" if e['avg_giveback'] is not None else "  winner giveback: —")
+        print(f"\n  VERDICT: {e['verdict']}\n")
+    elif cmd == "backfill":
         print(f"  backfilled {backfill()} signals -> {DB_PATH.name}")
         summary()
     elif cmd == "export":

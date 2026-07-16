@@ -12,7 +12,7 @@ prediction of this trade) + a full trade plan: contracts, stop, scale-out, runne
 
 Config via env:  ACCOUNT (default 15000)   RISK_PCT (default 1.0)
 """
-import sqlite3, re, sys, os, statistics as st
+import sqlite3, re, sys, os, json, statistics as st
 from pathlib import Path
 ROOT = Path(__file__).parent
 ACCOUNT = float(os.environ.get("ACCOUNT", 15000))
@@ -66,6 +66,25 @@ def provider_size_mult(p):
     integrity-capped/negative-EV size down). Unknown/unrecognized author -> 0.25 sandbox."""
     m = (_TRUST.get("providers") or {}).get(p or "", {}).get("size_mult")
     return float(m) if m is not None else 0.25
+
+
+_EDGE_FILE = ROOT / "channels" / "_provider_edge.json"
+
+
+def provider_edge_mult(p):
+    """Calibration-gated size tilt from the LIVE realized-R record (written by the server from the DB).
+    Shrinks proven bleeders, unlocks tilt-up only when a provider earns it over a real sample. Defaults
+    to 1.0 (no change) when there's no data. This is 'data buys the size, feelings don't' in code."""
+    try:
+        edge = json.loads(_EDGE_FILE.read_text())
+        return float(edge.get(p or "", {}).get("mult", 1.0))
+    except Exception:
+        return 1.0
+
+
+def provider_disabled(p):
+    """User eliminated this provider (proven money-loser / cancelled subscription) — drop their signals."""
+    return bool((_TRUST.get("providers") or {}).get(p or "", {}).get("disabled"))
 
 
 def provider_manual_override(p):
@@ -125,6 +144,11 @@ KNOWN_TK = set(TICKER_ADJ) | set(ALIAS.values()) | {
 _SKIP_TK = NOT_TICKERS
 
 
+# Tickers that are ALSO common English words — matching them lowercase mid-sentence is how
+# Prince's "Filled now" became a ServiceNow card. These only count when written UPPERCASE (or $-prefixed).
+AMBIG_TK = {"NOW", "ARM", "COIN", "HOOD", "BULL", "COST", "APP", "GRAB", "HIVE", "BILL", "ALL", "OPEN", "RUN", "PLAY"}
+
+
 def _find_ticker(text):
     """Find the real ticker anywhere in the message (handles $C / multi-line 'ticker then strike')."""
     for t in re.findall(r'\$([A-Za-z]{1,5})', text):      # $-prefixed first (catches single-letter $C)
@@ -133,6 +157,8 @@ def _find_ticker(text):
     up = text.upper()
     for t in KNOWN_TK:                                     # bare known multi-letter symbol as a word
         if len(t) >= 2 and re.search(rf'\b{re.escape(t)}\b', up):
+            if t in AMBIG_TK and not re.search(rf'\b{re.escape(t)}\b', text):
+                continue                                   # 'now'/'arm'/'coin' as lowercase words ≠ tickers
             return t
     return None
 
@@ -142,21 +168,35 @@ def _resolve_ticker(text, mstart, provider, strike):
     before the strike -> known-symbol scan -> provider/implicit defaults."""
     for t in re.findall(r'\$([A-Za-z]{1,5})\b', text):    # 1) cashtag (Prince, $C)
         u = t.upper()
-        if u not in _SKIP_TK:
+        if u not in _SKIP_TK or u in KNOWN_TK:            # a cashtag is EXPLICIT — $now really is ServiceNow
             return ALIAS.get(u, u)
     pre = text[:mstart]                                   # 2) nearest ticker-ish token before strike
-    for tok in reversed(re.findall(r'[A-Za-z]{1,5}', pre)):
+    for _i, tok in enumerate(reversed(re.findall(r'[A-Za-z]{1,5}', pre))):
         u = tok.upper()
+        # ambiguous common-word tickers (now/arm/coin/hood…) in lowercase only count in TICKER POSITION
+        # (within 2 tokens of the strike, e.g. mike's 'hood 80c') — never as distant sentence words
+        _ambig_block = (not tok.isupper()) and _i > 1
         if u in _SKIP_TK:
             continue
         if u in ALIAS:
+            if ALIAS[u] in AMBIG_TK and _ambig_block:     # distant lowercase 'coin flip' ≠ COIN
+                continue
             return ALIAS[u]
         if tok.isupper() and len(tok) >= 2:               # providers write tickers in CAPS
             return u
         if u in KNOWN_TK:                                 # known symbol in any case (mike's lowercase)
+            if u in AMBIG_TK and _ambig_block:            # 'arm the stop'/'filled now' ≠ ARM/NOW tickers
+                continue
             return u
         if len(tok) == 1 and tok in ("C", "F"):
             return u
+    for tok in reversed(re.findall(r'[A-Za-z]{3,6}', pre)):   # 2b) typo-tolerant ticker (msttr -> MSTR)
+        u = tok.upper()
+        if u in _SKIP_TK or u in KNOWN_TK:
+            continue
+        cand = _closest_known(u)
+        if cand:
+            return cand
     kt = _find_ticker(text)                               # 3) known-symbol scan anywhere
     if kt:
         return kt
@@ -220,6 +260,57 @@ _STRIKE_RE = re.compile(r'(?<![\d.])(\d{1,5}(?:\.\d{1,2})?)\s*([cp])\b', re.I)
 _WORD_LEG_RE = re.compile(r'(?<![\d.])\$?(\d{1,5}(?:\.\d{1,2})?)\s*(call|put)s?\b', re.I)
 # "TICKER STRIKE at/@ PREMIUM" with NO c/p and no call/put word (e.g. "NVDA 200 at 0.10") -> default CALL
 _BARE_LEG_RE = re.compile(r'(?<![\d.])(\d{2,5}(?:\.\d{1,2})?)\s*(?:@|\bat\b)\s*\$?\d{0,3}\.\d{1,2}', re.I)
+# Mike shorthand: "TICKER STRIKE PREMIUM" space-separated, NO c/p (e.g. "META 675 2.5", "NVDA 212.5 .14",
+# "meta 672 1.7") -> default CALL. Strike is the big number; premium is the small decimal that follows.
+_BARE_SPACE_RE = re.compile(r'(?<![\d.$])(\d{2,5}(?:\.\d{1,2})?)\s+\$?(\.\d{1,2}|\d{1,2}\.\d{1,2})(?![\d.])')
+# odd word order: "call/put ... on/at STRIKE"  and  "on/at STRIKE ... call/put"  (e.g. "tsla call .39 on 417")
+_CALLPUT_ON_RE = re.compile(r'\b(call|put)s?\b[^\n]{0,20}?\b(?:on|at|@|strike)\s*\$?(\d{2,5}(?:\.\d{1,2})?)\b', re.I)
+_ON_CALLPUT_RE = re.compile(r'\b(?:on|at|@|strike)\s*\$?(\d{2,5}(?:\.\d{1,2})?)\b[^\n]{0,20}?\b(call|put)s?\b', re.I)
+
+
+def _sniff_premium(text, strike):
+    """Last-resort premium finder for odd word order — the smallest plausible decimal that isn't the strike."""
+    sv = float(strike) if strike and re.match(r'^\d', str(strike)) else None
+    for mm in re.finditer(r'(?<![\d./:$%])\$?(\.\d{1,2}|\d{1,3}\.\d{1,2})\b', text):
+        v = float(mm.group(1))
+        if sv is not None and abs(v - sv) < 1e-9:
+            continue
+        if 0 < v <= 60:
+            return v
+    return None
+
+
+def _lev_le1(a, b):
+    """True if a and b are within edit distance 1 (one insert/delete/substitute) — for ticker typos."""
+    if a == b:
+        return True
+    la, lb = len(a), len(b)
+    if abs(la - lb) > 1:
+        return False
+    if la == lb:
+        return sum(1 for x, y in zip(a, b) if x != y) == 1
+    if la > lb:
+        a, b = b, a                                          # a = shorter
+    i = j = diff = 0
+    while i < len(a) and j < len(b):
+        if a[i] == b[j]:
+            i += 1
+        else:
+            diff += 1
+            if diff > 1:
+                return False
+        j += 1
+    return True
+
+
+def _closest_known(u):
+    """A KNOWN_TK within one typo of u (msttr -> MSTR). Length-gated to avoid loose 2-letter matches."""
+    if len(u) < 3:
+        return None
+    for t in KNOWN_TK:
+        if len(t) >= 3 and _lev_le1(u, t):
+            return t
+    return None
 
 
 def _strip_noise(s):
@@ -277,30 +368,42 @@ def parse_signal(s, provider=None):
         return None
     if re.match(r'\s*(sold|all ?out|out\b|trimm?ed|cutting|closing|secure|scal(ed|ing)|de-?risk)\b', low):
         return None
-    m, typ, assumed = None, None, False
+    m, typ, assumed, strike = None, None, False, None
     for mm in _STRIKE_RE.finditer(text):                        # strike + C/P suffix (e.g. 750C, $73c)
-        typ = mm.group(2).upper(); m = mm; break
+        typ = mm.group(2).upper(); m = mm; strike = mm.group(1); break
     if not m:                                                   # "$300 ... Calls": $-strike + call/put word
         dm = re.search(r'\$(\d{2,5}(?:\.\d{1,2})?)', text)      #   ($-prefixed strike beats a date's "10")
         wm = re.search(r'\b(call|put)s?\b', text, re.I)
         if dm and wm:
-            typ = "C" if wm.group(1).lower().startswith("c") else "P"; m = dm
-    if not m:                                                   # else strike + word "call"/"put"
+            typ = "C" if wm.group(1).lower().startswith("c") else "P"; m = dm; strike = dm.group(1)
+    if not m:                                                   # strike + word "call"/"put" (digit before)
         mm = _WORD_LEG_RE.search(text)
         if mm:
-            typ = "C" if mm.group(2).lower().startswith("c") else "P"; m = mm
-    if not m:                                                   # else "STRIKE at/@ PREMIUM", no C/P -> CALL
+            typ = "C" if mm.group(2).lower().startswith("c") else "P"; m = mm; strike = mm.group(1)
+    if not m:                                                   # Mike's word order: "call/put … on STRIKE"
+        mm = _CALLPUT_ON_RE.search(text) or _ON_CALLPUT_RE.search(text)
+        if mm:
+            g1, g2 = mm.group(1), mm.group(2)
+            word = g1 if g1.lower() in ("call", "put") else g2
+            strike = g2 if g1.lower() in ("call", "put") else g1
+            typ = "C" if word.lower().startswith("c") else "P"; m = mm
+    if not m:                                                   # "STRIKE at/@ PREMIUM", no C/P -> CALL
         mm = _BARE_LEG_RE.search(text)
         if mm:
-            m = mm; typ = "C"; assumed = True
+            m = mm; typ = "C"; assumed = True; strike = mm.group(1)
+    if not m:                                                   # Mike shorthand "STRIKE PREMIUM" (space) -> CALL
+        mm = _BARE_SPACE_RE.search(text)
+        if mm:
+            m = mm; typ = "C"; assumed = True; strike = mm.group(1)
     if not m:
         return None
-    strike = m.group(1)
     tk = _resolve_ticker(text, m.start(), provider, strike)
     if not tk:
         return None
     dte, expiry = _parse_expiry(text)
     prem = _parse_premium(text, m.end())
+    if prem is None:                                            # odd word order / space-shorthand — sniff it
+        prem = _sniff_premium(text, strike)
     lotto = bool(re.search(r'lotto|zero ?hero|\bhero\b|yolo|degen|flip coin|risky', low))
     stated_stop = None                                  # the PROVIDER's own stated stop, if any
     slm = re.search(r'\bs\s*/?\s*l\s*:?\s*(?:at|to)?\s*\$?(\d+(?:\.\d{1,2})?)\s*(%?)', low)
@@ -348,6 +451,83 @@ def confidence(sig, seg):
         w = sum(1 for x in ev if x > 1) / len(ev) * 100
         eff = f"{sig['ticker']} history: {w:.0f}% win, median {st.median(ev):+.0f}% (n={len(ev)}, self-reported)"
     return score, tier, reasons, eff
+
+
+LOW_TRUST = ("mike", "sulker")   # providers with PROVEN-negative realized R (large n) — strict single-reason gate.
+# optionking removed 2026-07-14: his block rested on n=3 (−0.94R, one −4.25R gap); a BS reconstruction over
+# n=1,279 cross-validated against tick data put him at ≈break-even (44% win, −0.09R), NOT a Mike-class bleeder.
+# He now gets the BALANCED gate: his far-OTM 0–1DTE lottos still hard-block (2 junk flags: far-OTM Δ + θ-cliff),
+# but his 2–30DTE weekly/swing (Δ≥0.30, tight spread) surface as PAPER for scalp-tracking. Stays zero-size.
+
+
+def junk_setup(opt, sig, provider=None, chase_pct=0):
+    """BALANCED quality gate. HARD-BLOCK the real garbage — far-OTM lottery tickets, wide-spread
+    slippage traps, chased R:R, and theta-cliffs on anything NOT cleanly scalpable. WARN (but allow) a
+    clean ATM tight-spread θ-cliff you can actually scalp (Δ0.30-0.70, spread<10%) — like Mike's ATM
+    META 0DTE, which nets green on fast scalps but must never be held. Low-trust providers get a stricter
+    bar. Returns {block, warn, reasons}. Built from what bled the account (Mike: 74% θ-cliffs, 21% win)."""
+    empty = {"block": False, "warn": False, "reasons": []}
+    if not opt or opt.get("error") or opt.get("mid") is None:
+        return empty
+    mid, delta, theta, spread = opt.get("mid"), opt.get("delta"), opt.get("theta"), opt.get("spread_pct")
+    burn = (abs(theta) / mid * 100) if (theta is not None and mid) else None
+    ad = abs(delta) if delta is not None else None
+    low = provider in LOW_TRUST
+    th_burn, th_delta, th_spread = (40, 0.15, 15) if low else (60, 0.10, 25)
+    garbage, warns = [], []
+    if ad is not None and ad < th_delta:
+        garbage.append(f"far-OTM Δ{ad:.2f} — a lottery ticket, not a trade")
+    if spread is not None and spread >= th_spread:
+        garbage.append(f"wide spread {spread:.0f}% — you lose on entry+exit")
+    if mid is not None and mid < 0.50 and (spread is not None and spread >= 10):
+        garbage.append(f"cheap ${mid} + wide spread — slippage eats it")
+    if chase_pct and chase_pct >= 25:
+        garbage.append(f"chasing +{chase_pct:.0f}% — R:R already gone")
+    if burn is not None and burn >= th_burn:
+        scalpable = (ad is not None and 0.30 <= ad <= 0.70) and (spread is not None and spread < 10)
+        if scalpable:
+            warns.append(f"θ-cliff {burn:.0f}%/day — SCALP ONLY, never hold it")
+        else:
+            garbage.append(f"θ-cliff {burn:.0f}%/day — decays to zero fast")
+    if (low and len(garbage) >= 1) or (len(garbage) >= 2):
+        return {"block": True, "warn": False, "reasons": garbage}
+    if garbage or warns:
+        return {"block": False, "warn": True, "reasons": garbage + warns}
+    return empty
+
+
+def cost_adjust(opt, sig, now_min=None):
+    """Fold the live MECHANICAL costs the base score misses — chasing the provider's stated entry,
+    theta decay, and 0DTE time-of-day. (Spread + delta are already scored in market.option_score.)
+    These are causal costs that bleed expectancy REGARDLESS of direction: this ranks how expensive the
+    setup is to express, not whether it wins. Returns (adj, reasons); adj bounded so it can't dominate."""
+    if not opt or opt.get("error") or opt.get("mid") is None:
+        return 0, []
+    adj, reasons = 0, []
+    mid, prem, th = opt.get("mid"), sig.get("premium"), opt.get("theta")
+    # 1) chasing the provider's stated entry — paying up is a guaranteed R:R erosion
+    if prem and mid:
+        chase = (mid / prem - 1) * 100
+        if chase >= 20:
+            adj -= 8; reasons.append(f"chasing +{chase:.0f}% over entry (-8)")
+        elif chase >= 12:
+            adj -= 4; reasons.append(f"chasing +{chase:.0f}% over entry (-4)")
+        elif chase <= 3:
+            adj += 2; reasons.append("in the buy zone (+2)")
+    # 2) theta burn — guaranteed daily decay as a % of premium (0DTE cliffs)
+    if th is not None and mid:
+        burn = abs(th) / mid * 100
+        if burn >= 50:
+            adj -= 6; reasons.append(f"θ-cliff {burn:.0f}%/day (-6)")
+        elif burn >= 30:
+            adj -= 3; reasons.append(f"heavy θ {burn:.0f}%/day (-3)")
+    # 3) time-of-day — 0DTE midday chop bleeds theta with little movement; power hour has range (mild)
+    if now_min is not None and (sig.get("dte") == 0 or sig.get("expiry") == "0DTE"):
+        if 120 <= now_min <= 300:
+            adj -= 2; reasons.append("0DTE midday chop (-2)")
+        elif now_min >= 360:
+            adj += 1; reasons.append("power hour (+1)")
+    return max(-16, min(4, adj)), reasons
 
 
 # ---------- trade plan ----------
@@ -557,22 +737,35 @@ def order_ticket(opt, prov_entry, stop_pct=30, tp1_pct=0.35, tp2_pct=0.70, sold_
             "wide": bool(spread_pct and spread_pct > 15)}
 
 
-def setup_grade(ticket, tier_key, lotto, chase_pct=0):
-    """Composite setup quality A–D, weighted toward EXECUTION (entry 30 + liquidity 25 + R:R 15 = 70)
-    over provider trust (20). Returns the grade + a bounded SIZE multiplier — award more contracts to
-    the best-executed setups (better R:R / tighter spread / buy-zone), NOT to 'predicted winners'."""
+def setup_grade(ticket, tier_key, lotto, chase_pct=0, delta=None, zero_dte=False):
+    """PURE EXECUTION quality A–D — how cheaply and cleanly you can express this bet with CONTROLLED
+    risk, NOT how likely it is to win (direction is a coin flip). Built only from causal, mechanical
+    costs: liquidity (slippage in AND out), buy-zone (not chasing), risk-clarity (a definable-risk
+    contract, not a far-OTM lotto that gaps through its stop). 0DTE is penalized for theta risk.
+
+    Deliberately does NOT reward R:R: high R:R on an option ticket just means a far-OTM strike — the
+    exact setups that round-trip — so the OLD grade rewarded the worst trades (it graded A worse than D
+    on realized R). Provider trust is a minor nudge here; it already drives the base score + sizing.
+
+    The size tilt is TAMED (A 1.25× … D 0.5×, was 1.5×…0.3×): the grade hasn't yet EARNED trust on the
+    calibration panel, so it can't over-size an unproven bet. Widen it back once buckets separate."""
     t = ticket or {}
-    ch = chase_pct or 0
-    entry = 30 if ch <= 8 else 22 if ch <= 15 else 12 if ch <= 25 else 4
     sp, mid = t.get("spread_pct"), t.get("mid")
-    liq = 3 if (mid is not None and mid < 0.15) else 15 if sp is None else \
-        25 if sp <= 8 else 15 if sp <= 15 else 3
-    prov = {"HIGH": 20, "MEDIUM": 15, "LOW": 9}.get(tier_key, 4)
-    rr = t.get("rr2") or 0
-    rrs = 15 if rr >= 2 else 10 if rr >= 1.5 else 5 if rr >= 1 else 0
-    sc = max(0, min(100, entry + liq + prov + rrs - (20 if lotto else 0)))
-    g = "A" if sc >= 80 else "B" if sc >= 65 else "C" if sc >= 50 else "D"
-    mult = {"A": 1.5, "B": 1.0, "C": 0.6, "D": 0.3}[g]      # bounded tilt (hard risk caps still apply)
+    ch = chase_pct or 0
+    # liquidity — the biggest execution cost (slippage both ways). 0–35
+    liq = 6 if (mid is not None and mid < 0.15) else 18 if sp is None else \
+        35 if sp <= 6 else 25 if sp <= 10 else 12 if sp <= 18 else 4
+    # buy-zone — paying near the provider's price, not extended. 0–30
+    buy = 30 if ch <= 5 else 22 if ch <= 12 else 12 if ch <= 20 else 4
+    # risk-clarity — definable-risk contract, not a far-OTM lotto that gaps its stop. 0–25
+    ad = abs(delta) if delta is not None else None
+    risk = 2 if lotto else 14 if ad is None else \
+        4 if ad < 0.15 else 12 if ad < 0.30 else 25 if ad <= 0.70 else 16
+    # provider quality — minor nudge only (already in the base score). 0–10
+    prov = {"HIGH": 10, "MEDIUM": 7, "LOW": 4}.get(tier_key, 2)
+    sc = max(0, min(100, liq + buy + risk + prov - (6 if zero_dte else 0)))
+    g = "A" if sc >= 80 else "B" if sc >= 64 else "C" if sc >= 46 else "D"
+    mult = {"A": 1.25, "B": 1.0, "C": 0.75, "D": 0.5}[g]    # tamed tilt (hard risk caps still apply)
     return {"g": g, "score": sc, "mult": mult, "suggest_lots": {"A": 2, "B": 1, "C": 1, "D": 1}[g]}
 
 
@@ -611,7 +804,8 @@ def analyze(text, seg, provider=None):
     override = provider_manual_override(sig.get("provider"))   # paper provider you may still take, capped
     conv = conviction_factor(score - trust_of(sig.get("provider")))
     rp = round(size_pct(score, sig["lotto"], mult, sig.get("premium"),
-                        base_trust=trust_of(sig.get("provider"))) * THROTTLE, 3)
+                        base_trust=trust_of(sig.get("provider"))) * THROTTLE
+               * provider_edge_mult(sig.get("provider")), 3)   # calibration-gated tilt (bleeders shrink)
     plan = plan_data(sig, rp, conviction=conv)
     if mult == 0 and override and not plan.get("ok") and sig.get("premium"):
         plan = plan_data(sig, conviction=conv, force_contracts=override)   # 1-lot discretionary plan

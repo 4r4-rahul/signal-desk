@@ -18,3 +18,6 @@ channels/*/live_signals.md
 signal_desk.db
 signal_desk.db-journal
 ml_dataset.csv
+
+# daily day-stop override (ephemeral, auto-expires)
+channels/_day_override
