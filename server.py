@@ -10,6 +10,7 @@ import json, http.server
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import os, re
+import deskpaths as _P                       # env-controlled DATA root (prod: identical to code dir)
 import signal_engine as E
 import tracker as T
 import discipline as D
@@ -43,6 +44,19 @@ def _broker_snap():
 _CALIB_CACHE = {"t": 0.0, "calibration": None, "exits": None}
 
 
+def _scrub_nan(o):
+    """Recursively replace NaN/Infinity floats (from empty IBKR quotes) with None — they are valid in
+    Python's json but INVALID JSON that the browser's JSON.parse rejects, blanking the whole dashboard."""
+    import math
+    if isinstance(o, float):
+        return None if (math.isnan(o) or math.isinf(o)) else o
+    if isinstance(o, dict):
+        return {k: _scrub_nan(v) for k, v in o.items()}
+    if isinstance(o, (list, tuple)):
+        return [_scrub_nan(v) for v in o]
+    return o
+
+
 def _scorecard_cached():
     """Score calibration + exit quality for the desk — recomputed at most every 20s (no need per poll)."""
     if not DB:
@@ -59,7 +73,8 @@ def _scorecard_cached():
             _CALIB_CACHE["exits"] = None
         try:                                              # persist data-gated provider size tiers for the engine
             _edge = DB.provider_edge()
-            (ROOT / "channels" / "_provider_edge.json").write_text(json.dumps(_edge))
+            from safe_io import safe_write_json
+            safe_write_json(SIGNALS_STORE.parent / "_provider_edge.json", _edge, min_keep_ratio=0.0)  # derived: atomic+backup, no tripwire
             _CALIB_CACHE["edge"] = _edge                   # cache for the dashboard payload (no per-poll DB hit)
         except Exception:
             pass
@@ -219,14 +234,14 @@ ET = timezone(timedelta(hours=-4))
 def load_chmap():
     """channel-key -> provider, so a provider's channel is tagged even if the poster's name differs."""
     try:
-        return json.loads((ROOT / "channels" / "_channel_map.json").read_text())
+        return json.loads((_P.CHANNELS / "_channel_map.json").read_text())
     except Exception:
         return {}
 
 
 CHMAP = load_chmap()
-SIGNALS_STORE = ROOT / "channels" / "_signals.json"
-INBOUND_LOG = ROOT / "logs" / "inbound.log"
+SIGNALS_STORE = _P.CHANNELS / "_signals.json"
+INBOUND_LOG = _P.LOGS / "inbound.log"
 
 
 def load_signals():
@@ -236,11 +251,42 @@ def load_signals():
         return []
 
 
-def save_signals():
+SIGNALS_CAP = 350   # in-memory ceiling — mirrors the 250 disk window with headroom for kept-alive cards
+
+
+def trim_signals():
+    """Bound in-memory SIGNALS to SIGNALS_CAP so the monitor lap + every poll stay O(CAP), not O(session).
+    Keeps the last CAP by insertion order, PLUS any older card still doing work: an armed re-entry watch,
+    a live shadow, or a card linked to an OPEN position. Dropping old CLOSED/SKIP dicts is safe — LIVE_SIG
+    self-heals (drops absent ids) and MONITOR is keyed by position id, not signal id (no dangling refs)."""
+    global SIGNALS
+    if len(SIGNALS) <= SIGNALS_CAP:
+        return
     try:
-        SIGNALS_STORE.write_text(json.dumps(SIGNALS[-250:]))
+        open_jids = {p.get("journal_id") for p in M.open_positions() if p.get("journal_id")}
     except Exception:
-        pass
+        open_jids = set()
+    recent = SIGNALS[-SIGNALS_CAP:]
+    recent_ids = {id(s) for s in recent}            # identity, not s["id"] (ids can repeat across reposts)
+    keep_old = [s for s in SIGNALS[:-SIGNALS_CAP] if id(s) not in recent_ids and (
+                (s.get("reentry") or {}).get("armed")
+                or (s.get("shadow") and s["shadow"].get("state") != "ended")
+                or s.get("id") in open_jids
+                or s.get("status") in ("NEW", "WATCHING"))]
+    SIGNALS = keep_old + recent                     # preserve chronological order
+
+
+def save_signals():
+    from safe_io import safe_write_json, DeskClobberBlocked
+    trim_signals()
+    try:
+        safe_write_json(SIGNALS_STORE, SIGNALS[-250:], min_keep_ratio=0.5, floor=20)
+    except DeskClobberBlocked as e:
+        _inlog("-", "SYSTEM", str(e), "CLOBBER")          # LOUD — a blocked write must never look silent
+        try: _alert(f"🛑 save_signals blocked a clobber: {e}", "Signal Desk — WRITE BLOCKED")
+        except Exception: pass
+    except Exception as e:
+        _inlog("-", "SYSTEM", f"save_signals error: {e}", "ERROR")
 
 
 def _resolve_expiry(sig):
@@ -284,7 +330,7 @@ def _archive_signal(prov, entry):
     sizing plan + dynamic stop & its terms + behavior + Greeks). Never pruned. The dataset for future
     analysis / expectancy tracking / honest ML retraining on real live data + real recommendations."""
     try:
-        d = ROOT / "channels" / (prov or "unknown")
+        d = _P.CHANNELS / (prov or "unknown")
         d.mkdir(parents=True, exist_ok=True)
         rec = {k: v for k, v in entry.items() if k != "tech"}   # everything except the bulky raw tech blob
         rec["ts_utc"] = datetime.now(timezone.utc).isoformat()  # explicit UTC, matches historical data
@@ -301,7 +347,7 @@ def _log_paper_entry(prov, sid, entry):
     (graduation gate reads channels/<prov>/paper_journal.csv). Outcome filled later by you."""
     try:
         import csv as _csv
-        pj = ROOT / "channels" / prov / "paper_journal.csv"
+        pj = _P.CHANNELS / prov / "paper_journal.csv"
         pj.parent.mkdir(parents=True, exist_ok=True)
         newf = not pj.exists()
         sig = entry.get("sig", {})
@@ -340,10 +386,12 @@ def _looks_mgmt(t):
 # ================= LIVE POSITION MONITOR (IBKR market data) =================
 MONITOR = {}    # pos_id -> {mid, pnl_pct, peak_pct, iv, delta, spread_pct, expiry, alert, fired}
 SPOT_CACHE = {} # ticker -> (epoch, price) — fast underlying last-price (ustop_loop), for stop-watch + card
+IBKR = {"connected": False, "last_data": None, "mkt_type": None}   # live IBKR market-data link status
+_TAKE_PINGS = {}   # {day, n} — daily 🟢 TAKE push-alert counter (anti-spam cap)
 LIVE_SIG = {}   # card_id -> live quote + move% + recommendation for an un-taken actionable card
 _TAPE_CACHE = {}   # ticker -> (epoch, indicators) — throttled underlying spot+tape for path capture
 DAY_OVERRIDE_DATE = None   # ISO date the day-stop is manually overridden (auto-resets each day)
-_OVERRIDE_FILE = ROOT / "channels" / "_day_override"   # persisted so a restart doesn't silently re-block
+_OVERRIDE_FILE = _P.CHANNELS / "_day_override"   # persisted so a restart doesn't silently re-block
 
 
 def _save_override():
@@ -630,52 +678,70 @@ def reentry_read(ticker, strike, cp, exp, q, ind, ref_exit=None, u_stop=None, or
             "chase_pct": chase_pct, "chasing": chasing, "rolled": rolled}
 
 
-def entry_timing(sig, ind, reco, u_stop=None, spot=None):
-    """ONE clear 'when do I pull the trigger' verdict for an actionable card — synthesizes tape STRENGTH,
-    buy-zone/chase, and stop proximity into TAKE / WAIT / SKIP with a concrete watchable trigger, so you
-    never have to interpret the raw signals. Universal across every actionable card (and re-entry)."""
+def entry_timing(sig, ind, reco, u_stop=None, spot=None, provider=None):
+    """ONE clear 'when to pull the trigger' verdict — TAKE / WAIT / SKIP with a watchable trigger.
+    PROVIDER-AWARE and shadow-backtested: a trusted provider clears TAKE on a lower tape bar (the old
+    fixed grade>=moderate bar fired ~never — every real tape landed 'weak'). Also: AGAINST->SKIP,
+    collapsed<=-30->SKIP, faded -30..-15->WAIT, TAKE requires chase>=-15, wider chase cap when confirmed."""
     import market as _MK
     call = (sig.get("type") or "C").upper() != "P"
     tk, prem = sig.get("ticker"), sig.get("premium")
-    st = _MK.tape_strength(sig.get("type"), ind) if ind else {"grade": "no-data"}
+    st = _MK.tape_strength(sig.get("type"), ind) if ind else {"grade": "no-data", "score": None}
+    grade, score = st.get("grade"), st.get("score")
     spot = spot if spot is not None else (ind or {}).get("price")
     vwap = (ind or {}).get("vwap")
     vw = f"{vwap:.2f}" if vwap else "VWAP"
     chase = (reco or {}).get("chase_pct", 0)
-    reclaim = f"reclaims VWAP {vw} and holds" if call else f"loses VWAP {vw} and holds"
+    reclaim = f"reclaims VWAP {vw}" if call else f"loses VWAP {vw}"
     holds = f"holds above VWAP {vw} & RSI lifts" if call else f"holds below VWAP {vw} & RSI drops"
+    try: emult = E.provider_edge_mult(provider) if provider else 1.0
+    except Exception: emult = 1.0
+    trusted = emult >= 1.0
+    min_tape = 52 if trusted else (74 if emult < 0.5 else 60)      # provider-tiered TAKE bar (shadow-validated)
     def out(a, i, h, t=None): return {"action": a, "icon": i, "head": h, "trig": t}
-    if u_stop and spot and ((spot <= u_stop) if call else (spot >= u_stop)):        # thesis broken
+    # ---- hard SKIPs (shadow-validated junk) ----
+    if u_stop and spot and ((spot <= u_stop) if call else (spot >= u_stop)):
         return out("SKIP", "🔴", f"{tk} {spot:.2f} is past the {u_stop} stop — thesis broken")
-    if chase <= -40:                                                                # collapsed since the call
+    if chase <= -30:                                              # collapsed (was -40; -36% HIMS slipped through)
         return out("SKIP", "🔴", f"down {chase}% since the call — the setup likely failed")
-    if st.get("grade") == "against":                                               # tape against direction
-        return out("WAIT", "🔴", "tape is AGAINST this direction right now", f"take when {tk} {reclaim}")
-    # STRENGTH-AWARE chase gate: a STRONG confirmed tape justifies paying up a bit (fast runners used to
-    # be structurally un-takeable — price left the zone before the tape confirmed, e.g. SPY 753C +78%).
-    _cap = 35 if (prem or 1) < 0.5 else (32 if st.get("grade") == "strong" else 22)
-    if chase >= _cap:                                                               # chasing too far even so
+    if grade == "against":                                        # shadow: AGAINST = 11% win / -0.62R -> kill it
+        return out("SKIP", "🔴", "tape is AGAINST this direction — do not take", f"only if {tk} {reclaim} first")
+    # ---- chase cap: wider when the tape is CONFIRMED, +bonus for trusted; ROLL above it ----
+    _cap = (60 if grade == "strong" else 40 if grade == "moderate" else 25) + (15 if trusted else 0)
+    if chase >= _cap:
         _trig = f"take on a pullback to ~${round((prem or 0) * 1.08, 2)}"
-        if st.get("grade") in ("strong", "moderate"):
-            _trig += " — or 🎯 roll to a fresh strike (tape's confirmed, the called strike just ran)"
+        if grade in ("strong", "moderate"):
+            _trig += " — or 🎯 roll to a fresh ~0.45Δ strike (tape confirmed, the called strike ran)"
         return out("WAIT", "🟡", f"chasing +{chase}% above the call — paying up", _trig)
-    if u_stop and spot and abs(spot - u_stop) / spot < 0.0015:                      # no room to the stop
+    if u_stop and spot and abs(spot - u_stop) / spot < 0.0015:    # no room to the stop
         return out("WAIT", "🟡", f"right on top of the {u_stop} stop — no room", f"take once {tk} pushes ~0.3 off {u_stop}")
-    if st.get("grade") in ("weak", "no-data"):                                     # tape flat / no push
-        return out("WAIT", "⚪", "tape aligned but weak/flat — no push yet", (f"take when {tk} {holds}" if vwap else "take when the tape strengthens"))
-    return out("TAKE", "🟢", f"tape {st.get('grade')}, in buy zone ({chase:+d}%), room to the stop", "take at the limit now")
+    if -30 < chase < -15:                                         # faded but not collapsed -> wait for the turn
+        return out("WAIT", "🟡", f"faded {chase}% since the call — wait for the tape to turn", f"take when {tk} {holds}")
+    # ---- no-data tape: don't auto-WAIT (shadow: +0.26R). trusted + in-zone -> surface as TAKE w/ caveat ----
+    if grade == "no-data" or score is None:
+        if trusted and chase < _cap:
+            return out("TAKE", "🟢", f"{provider or 'signal'} in zone ({chase:+d}%) — trusted; tape read pending", "take at the limit; eyeball that the tape hasn't turned")
+        return out("WAIT", "⚪", "tape read pending — hold for confirmation", f"take when {tk} {holds}")
+    # ---- THE TAKE gate: score clears the provider-tiered bar, in zone, room ----
+    if score >= min_tape:
+        return out("TAKE", "🟢", f"tape {grade} ({score}), in buy zone ({chase:+d}%), room to the stop", "take at the limit now")
+    return out("WAIT", "⚪", f"tape {grade} ({score}) — below the {min_tape} bar for {provider or 'this provider'}",
+               (f"take when {tk} {holds}" if vwap else "take when the tape strengthens"))
 
 
 def monitor_loop():
     import market as MK
     import time
     conn = None
+    cyc = 0
     while True:
         try:
             if conn is None:
                 conn = MK.connect(client_id=80)
                 try: conn.reqMarketDataType(int(MK.env("IBKR_MARKET_DATA_TYPE", "2")))
                 except Exception: pass
+            IBKR["connected"] = bool(conn and conn.isConnected())      # live market-data link status
+            IBKR["mkt_type"] = MK.env("IBKR_MARKET_DATA_TYPE", "2")
             for p in M.open_positions():
                 try:
                     leg = p.get("leg") or ""
@@ -687,6 +753,7 @@ def monitor_loop():
                     q = MK.option_quote(p["ticker"], leg[:-1], leg[-1], expiry=st.get("expiry"), ib=conn)
                     if not q or q.get("error") or not q.get("mid"):
                         continue
+                    IBKR["last_data"] = datetime.now(ET).isoformat()      # live quote landed = data flowing
                     entry = p.get("avg_entry") or p.get("entry") or 0
                     # Contract-mismatch guard: a live price an order of magnitude off the entry (and itself
                     # large) means the resolved contract isn't this trade — a misparsed strike/expiry or an
@@ -712,13 +779,24 @@ def monitor_loop():
                             st["spot_dir"] = "up" if _sp > _prev else "down"          # tick-over-tick direction
                         st["spot"] = _sp                                              # -> stop-watch + card display
                     _check_pos_rules(p, st)
-                    conn.sleep(1)
                 except Exception:
                     continue
             # live-quote the ACTIONABLE un-taken cards -> live move% + recommendation on the card
+            # PRUNE the decision surface: expired contracts + collapsed/worthless corpses (from last lap's
+            # live read) must not crowd fresh signals out of the [-20:] cap. ~58% of cards were dead corpses.
+            _today = datetime.now(ET).strftime("%Y%m%d")
+
+            def _dead(s):
+                lv = LIVE_SIG.get(s["id"]) or {}
+                if (lv.get("chase_pct") is not None and lv["chase_pct"] <= -30) or (lv.get("mid") is not None and lv["mid"] <= 0.05):
+                    return True                              # collapsed / worthless since the call
+                e = _resolve_expiry(s.get("sig") or {}) or (s.get("opt") or {}).get("expiry")
+                return bool(e) and len(str(e)) == 8 and str(e) < _today   # expired contract
+
             act = [s for s in SIGNALS if s.get("status") in ("NEW", "WATCHING") and s.get("verified")
-                   and (not s.get("paper") or s.get("manual_override")) and (s.get("sig") or {}).get("premium")]
-            for s in act[-20:]:                              # cap: 20 most-recent actionable cards
+                   and (not s.get("paper") or s.get("manual_override")) and (s.get("sig") or {}).get("premium")
+                   and not _dead(s)]
+            for s in act[-20:]:                              # cap: 20 most-recent LIVE actionable cards
                 try:                                          # one bad/ambiguous contract must NOT kill the cycle
                     sg = s["sig"]
                     exp = _resolve_expiry(sg) or (s.get("opt") or {}).get("expiry")   # SIGNAL'S expiry wins
@@ -726,6 +804,7 @@ def monitor_loop():
                                         expiry=exp, ib=conn)
                     if not q or q.get("error") or q.get("mid") is None:
                         continue
+                    IBKR["last_data"] = datetime.now(ET).isoformat()      # live quote landed = data flowing
                     if (s.get("opt") or {}).get("expiry") != q.get("expiry"):   # heal a wrong-expiry snapshot
                         s["opt"] = q
                         _pl = s.get("plan") or {}
@@ -739,28 +818,36 @@ def monitor_loop():
                         _ind = _tape_cached(conn, sg["ticker"])                 # fresh tape for the timing verdict
                         _ss = sg.get("stated_stop") or {}
                         _us = _ss.get("value") if _ss.get("kind") == "underlying" else None
-                        r["entry"] = entry_timing(sg, _ind, r, u_stop=_us, spot=(_ind or {}).get("price"))
-                        # ONE VOICE: ping only when the FULL entry verdict flips to TAKE (price in zone
-                        # AND tape pushing AND room to the stop) — a raw price-only "buy zone" ping while
-                        # the verdict says WAIT (cheap because it's flat) just teaches you to ignore pings.
+                        r["entry"] = entry_timing(sg, _ind, r, u_stop=_us, spot=(_ind or {}).get("price"),
+                                                  provider=s.get("provider"))
+                        r["strength"] = MK.tape_strength(sg.get("type"), _ind)   # FRESH tape for the card meter (not the frozen ingest snapshot)
+                        # Ping on the FLIP to TAKE, capped so it's actionable-not-spam (max/day + one per
+                        # contract until it leaves TAKE). This is the alert that was silent on a +418% day.
                         prev_act = (LIVE_SIG.get(s["id"], {}).get("entry") or {}).get("action")
                         if r["entry"]["action"] == "TAKE" and prev_act != "TAKE":
-                            tk = s.get("ticket") or {}
-                            leg = f'{sg["ticker"]} {sg["strike"]}{sg["type"]}'
-                            _alert(f"🟢 TAKE NOW — {s['provider']}: {leg} — {r['entry']['head']} · "
-                                   f"enter ~${q.get('ask') or r['mid']}, stop ${tk.get('stop', '?')} · "
-                                   f"T1 ${tk.get('t1','?')} / T2 ${tk.get('t2','?')}", "Signal Desk — 🟢 TAKE")
+                            _d = datetime.now(ET).strftime("%Y%m%d")
+                            if _TAKE_PINGS.get("day") != _d:
+                                _TAKE_PINGS.clear(); _TAKE_PINGS["day"] = _d; _TAKE_PINGS["n"] = 0
+                            if _TAKE_PINGS.get("n", 0) < 8:      # anti-spam: <= 8 TAKE pings/day
+                                _TAKE_PINGS["n"] = _TAKE_PINGS.get("n", 0) + 1
+                                tk = s.get("ticket") or {}
+                                leg = f'{sg["ticker"]} {sg["strike"]}{sg["type"]}'
+                                _alert(f"🟢 TAKE NOW — {s['provider']}: {leg} — {r['entry']['head']} · "
+                                       f"enter ~${q.get('ask') or r['mid']}, stop ${tk.get('stop', '?')} · "
+                                       f"T1 ${tk.get('t1','?')} / T2 ${tk.get('t2','?')}", "Signal Desk — 🟢 TAKE")
                         LIVE_SIG[s["id"]] = r
-                    conn.sleep(1)
                 except Exception:
                     continue
             for k in list(LIVE_SIG):                          # drop stale ids no longer in the feed
                 if k not in {s["id"] for s in SIGNALS}:
                     LIVE_SIG.pop(k, None)
-            # SHADOW TRACK skipped signals over their FULL LIFE: the disciplined would-be result (first
-            # T1/stop hit) AND the ultimate peak/trough (what we truly missed or dodged), until expiry.
-            shadows = [s for s in SIGNALS if s.get("shadow") and s.get("status") not in ("TAKEN", "CLOSED")
-                       and s["shadow"].get("state") != "ended" and (s.get("sig") or {}).get("premium")]
+            cyc += 1
+            _heavy = (cyc % 5 == 0)                            # shadow tracking + DB sync every ~5th lap (~20s);
+            # prices/greeks re-read every lap (~4s) off persistent streams. SHADOW TRACK skipped signals over
+            # their FULL LIFE: disciplined would-be result (first T1/stop) + ultimate peak/trough, until expiry.
+            shadows = ([s for s in SIGNALS if s.get("shadow") and s.get("status") not in ("TAKEN", "CLOSED")
+                        and s["shadow"].get("state") != "ended" and (s.get("sig") or {}).get("premium")]
+                       if _heavy else [])
             today = datetime.now(ET).strftime("%Y%m%d")
             now_utc = datetime.now(timezone.utc).isoformat()
             dirty = False
@@ -795,15 +882,17 @@ def monitor_loop():
                         if not sh.get("result"):
                             sh["result"] = "LOSS" if sh.get("trough", 0) <= -sh["stop_pct"] else "SCRATCH"
                     dirty = True
-                    conn.sleep(1)
                 except Exception:
                     continue
             if dirty:
                 save_signals()
-            if DB:
+            if DB and _heavy:
                 DB.sync_outcomes(SIGNALS)             # capture shadow resolutions + realized closes
-            conn.sleep(20)
+            try: MK.reap_subs(conn)                   # cancel idle streaming lines (IBKR line budget)
+            except Exception: pass
+            conn.sleep(4)                             # fast lap: persistent streams refresh in-place
         except Exception:
+            IBKR["connected"] = False                     # link dropped -> rail shows IBKR down
             try: conn.disconnect()
             except Exception: pass
             conn = None
@@ -866,7 +955,9 @@ def ustop_loop():
                         st["entry_spot"] = px                 # first observed spot ≈ entry (until slow loop refines)
                     st["spot"] = px
                     _check_ustop(p, st)                       # near-real-time provider-stop cut alert
-            time.sleep(6)
+            try: MK.reap_subs(conn)                           # line budget (shares the pool with the monitor)
+            except Exception: pass
+            time.sleep(2)                                     # spot reads are instant now -> tighter stop poll
         except Exception:
             try: conn.disconnect()
             except Exception: pass
@@ -917,6 +1008,25 @@ def _apply_entry_fill(prov, text, c, data, res):
     w["watch"] = False
     if price is not None:
         w["sig"]["premium"] = price                      # the REAL fill replaces the watched level
+    # The provider often states the EXPIRY (and stop) in the FILL, not the watch ("expiry july 20 im in
+    # at 2.95 stop limit 2.20"). Grab them so the card prices the REAL contract, not the nearest-expiry
+    # default — this was the QQQ 700C misread (a 7/20 swing priced as 0DTE → false 'setup failed').
+    try:
+        _dte, _exp = E._parse_expiry(text)
+        if _exp and _exp.upper() != "0DTE":
+            w["sig"]["expiry"] = _exp
+            if _dte is not None: w["sig"]["dte"] = _dte
+            w.pop("opt", None)                           # force a re-quote on the corrected expiry
+            w["fill_expiry"] = _exp
+    except Exception:
+        pass
+    try:                                                 # stated premium stop in the fill ("stop limit 2.20")
+        _slm = re.search(r'\bs\s*/?\s*l\s*:?\s*(?:at|to|limit)?\s*\$?(\d+(?:\.\d{1,2})?)', text.lower())
+        if _slm:
+            _sv = float(_slm.group(1))
+            w["sig"]["stated_stop"] = {"value": _sv, "kind": "pct" if "%" in text else ("underlying" if _sv >= 50 else "premium")}
+    except Exception:
+        pass
     w["status"] = "NEW"                                   # now actionable — provider is IN
     w["entered_from_watch"] = {"watched_at": old, "entered_at": price, "link": link,
                                "provisional": provisional, "candidates": candidates,
@@ -966,6 +1076,11 @@ def _maybe_missed_entry(text, c):
 
 def ingest(data):
     text = (data.get("text") or "").strip()
+    if os.environ.get("DESK_ENV") == "test" and not data.get("_allow_test_ingest"):
+        return {"blocked": "test-env ingest requires _allow_test_ingest — no accidental live mutation from a test"}
+    if data.get("dry_run"):                              # parse+score ONLY, never mutate SIGNALS/archive
+        _res = E.analyze(text, SEG, provider=CHMAP.get(data.get("channel")) or data.get("provider"))
+        return {"dry_run": True, "would_card": bool(_res), "parsed": (_res or {}).get("sig") if _res else None}
     # Channel map is authoritative (one room = one product): a single author (e.g. Prince) runs
     # BOTH a main room and the Small Account Challenge, so author-matching alone folds them together.
     # Author detection is only the fallback for channels we haven't mapped.
@@ -980,6 +1095,7 @@ def ingest(data):
         old = next((s for s in SIGNALS if s.get("msg_id") == data.get("msg_id")), None)
         if old and old.get("status") in ("NEW", "WATCHING"):
             SIGNALS.remove(old)
+            _archive_signal(prov, {**old, "status": "DELETED"})   # tombstone -> restore_signals won't resurrect it
             save_signals()
             _inlog(data.get("channel"), prov, text, "EDIT→REPRICE")
     refresh_account()                       # COMPOUND: size off current sleeve equity
@@ -1081,7 +1197,7 @@ def ingest(data):
     #      signal days later, past the 48h / last-120 dedup windows (the MSFT/HIMS "it's a log, not a new
     #      signal" bug). A GENUINE re-entry fills at a DIFFERENT price, so it still gets its own card.
     if not _force and sg.get("premium") is not None:
-        for s in reversed(SIGNALS):
+        for s in reversed(SIGNALS[-SIGNALS_CAP:]):   # bounded — SIGNALS is trimmed to CAP (~2 days of cards)
             if s.get("provider") != prov or not s.get("sig") or s.get("status") not in ("TAKEN", "CLOSED"):
                 continue
             if M.trade_key(prov, s["sig"]["ticker"], s["sig"]["strike"], s["sig"]["type"], None) != key:
@@ -1229,6 +1345,15 @@ def ingest(data):
                         _pl["over_3pct"] = _pl["risk_pct"] > 3.05             # flag pricey-option floor
         except Exception:
             pass
+    # CHIP (self-generated provider): inject chip's PER-TICKER R-targets into the ticket + plan BEFORE the
+    # card/shadow/DB are built, so _init_shadow + _signal_row + _resync_shadow_r all score chip's shadow
+    # against ITS OWN t1/t2/stop (not the generic 40/80 defaults). Guarded to provider=="chip" only.
+    if prov == "chip" and data.get("chip_plan"):
+        cp = data["chip_plan"]
+        tk = res.setdefault("ticket", {})
+        tk.update(t1_pct=cp["t1_pct"], t2_pct=cp["t2_pct"], t3_pct=cp["t3_pct"], stop_pct=cp["stop_pct"])
+        res.setdefault("plan", {})["stop_pct"] = cp["stop_pct"]
+        res["chip"] = data.get("chip_meta") or {}          # {regime, news, stale} badge for the card
     now = datetime.now(ET)
     sid = now.strftime("%H%M%S") + "-" + res["sig"]["ticker"] + res["sig"]["strike"]
     entry = {"id": sid, "ts": now.strftime("%H:%M:%S"), "iso": now.isoformat(),
@@ -1580,7 +1705,19 @@ class H(http.server.BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
-        self.wfile.write(body if isinstance(body, bytes) else json.dumps(body).encode())
+        # NaN/Infinity (from empty IBKR quotes) is INVALID JSON — Python emits it, but the browser's
+        # JSON.parse rejects it and blanks the whole dashboard. Scrub to null at the single output point.
+        if isinstance(body, bytes):
+            self.wfile.write(body)
+        else:
+            # One-pass strict encode (allow_nan=False rejects NaN/Inf — invalid browser JSON that blanks the
+            # dashboard). Quotes are scrubbed at the SOURCE so the common path never trips; the fallback
+            # keeps the NaN-guard guarantee if a non-finite float ever slips through.
+            try:
+                out = json.dumps(body, default=str, allow_nan=False).encode()
+            except ValueError:
+                out = json.dumps(_scrub_nan(body), default=str).encode()
+            self.wfile.write(out)
 
     def do_OPTIONS(self): self._send(200, {})
 
@@ -1591,8 +1728,9 @@ class H(http.server.BaseHTTPRequestHandler):
             livekeys = ("mid", "pnl_pct", "peak_pct", "iv", "delta", "spread_pct", "alert", "mismatch",
                         "spot", "entry_spot", "spot_dir")
             withlive = lambda p: {**p, "live": {k: MONITOR.get(p["id"], {}).get(k) for k in livekeys}}
+            _allpos = M.load()                          # read the positions ledger ONCE per poll (was 3×)
             # ONE card per trade: attach each position (open OR closed) to its signal by journal_id
-            posmap = {p["journal_id"]: withlive(p) for p in M.load() if p.get("journal_id")}
+            posmap = {p["journal_id"]: withlive(p) for p in _allpos if p.get("journal_id")}
             _window = SIGNALS[-60:]
             _armed = [s for s in SIGNALS if (s.get("reentry") or {}).get("armed") and s not in _window]
             sigs = []
@@ -1625,8 +1763,9 @@ class H(http.server.BaseHTTPRequestHandler):
                 if others and s.get("status") == "NEW":
                     s["cosign"] = sorted(others)
             linked = {s["id"] for s in SIGNALS}
-            orphans = [withlive(p) for p in M.open_positions() if p.get("journal_id") not in linked]
-            orphans += [withlive(p) for p in M.load() if p.get("kind") == "tracked"]   # provider-tracked shells
+            orphans = [withlive(p) for p in _allpos
+                       if p["state"] not in M.CLOSED_STATES and p.get("journal_id") not in linked]
+            orphans += [withlive(p) for p in _allpos if p.get("kind") == "tracked"]   # provider-tracked shells
             _sc_cal, _sc_exit = _scorecard_cached()
             # ALL-TIME tallies over the FULL store (the feed above is windowed to the last 60 for render
             # speed; the header shows the real totals so the count isn't frozen at 60).
@@ -1637,7 +1776,7 @@ class H(http.server.BaseHTTPRequestHandler):
                                     "now": datetime.now(ET).isoformat(),
                                     "sleeve": SLEEVE, "sources": SOURCES, "discipline": D.state(),
                                     "killed": V.killed_providers(), "day_override": _day_override_active(),
-                                    "positions": orphans, "totals": _tot,
+                                    "positions": orphans, "totals": _tot, "ibkr": IBKR,
                                     "pending": PENDING, "signals": sigs, "stats": ST.performance(),
                                     "calibration": _sc_cal, "exit_quality": _sc_exit,
                                     "provider_edge": _provider_edge_cached(),
@@ -1703,4 +1842,10 @@ if __name__ == "__main__":
         threading.Thread(target=ustop_loop, daemon=True).start()
         print("📡 Live position monitor started (IBKR option prices + Greeks).")
         print("⚡ Fast underlying-stop poll started (~6s spot watch for provider SL levels).")
+        try:
+            import chip_desk
+            threading.Thread(target=chip_desk.scan_loop, daemon=True).start()
+            print("🤖 chip desk started (self-generating SHADOW provider 'chip' — SPY/QQQ).")
+        except Exception as _e:
+            print(f"   (chip desk failed to start: {_e})")
     http.server.HTTPServer(("127.0.0.1", PORT), H).serve_forever()

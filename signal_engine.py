@@ -15,6 +15,7 @@ Config via env:  ACCOUNT (default 15000)   RISK_PCT (default 1.0)
 import sqlite3, re, sys, os, json, statistics as st
 from pathlib import Path
 ROOT = Path(__file__).parent
+import deskpaths as _P
 ACCOUNT = float(os.environ.get("ACCOUNT", 15000))
 RISK_PCT = float(os.environ.get("RISK_PCT", 1.0))
 THROTTLE = 1.0   # drawdown throttle (1.0 normal … 0.0 halt), set by the server from equity state
@@ -43,7 +44,7 @@ import json as _json
 
 def _load_trust():
     try:
-        return _json.loads((ROOT / "channels" / "_trust.json").read_text())
+        return _json.loads((_P.CHANNELS / "_trust.json").read_text())
     except Exception:
         return {}
 
@@ -68,7 +69,7 @@ def provider_size_mult(p):
     return float(m) if m is not None else 0.25
 
 
-_EDGE_FILE = ROOT / "channels" / "_provider_edge.json"
+_EDGE_FILE = _P.CHANNELS / "_provider_edge.json"
 
 
 def provider_edge_mult(p):
@@ -338,7 +339,7 @@ def realized(line):
 def load_segments():
     seg = {}
     for ch in ('mike', 'sulker'):
-        db = ROOT / "channels" / ch / f"{ch}.db"
+        db = _P.CHANNELS / ch / f"{ch}.db"
         if not db.exists(): continue
         rows = sqlite3.connect(str(db)).execute(
             "SELECT text FROM raw_messages WHERE text IS NOT NULL").fetchall()

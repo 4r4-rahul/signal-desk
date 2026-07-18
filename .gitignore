@@ -9,6 +9,7 @@ __pycache__/
 
 # data & local db / journals
 data/*.json
+channels/.bak/            # safe_io rolling backups — local recovery only, not versioned
 channels/*/*.db
 channels/*/messages.json
 channels/*/journal.csv

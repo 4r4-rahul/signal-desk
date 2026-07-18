@@ -11,8 +11,9 @@ from pathlib import Path
 from datetime import datetime, timezone, timedelta
 
 ROOT = Path(__file__).parent
+import deskpaths as _P
 ET = timezone(timedelta(hours=-4))
-STORE = ROOT / "channels" / "_positions.json"
+STORE = _P.CHANNELS / "_positions.json"
 KNOWN = {"SPX", "SPY", "QQQ", "IWM", "NDX", "DIA", "NVDA", "TSLA", "AAPL", "META", "AMZN",
          "MSFT", "GOOGL", "AMD", "SMCI", "SMTC", "PLTR", "COIN", "MSTR", "AVGO", "SOFI",
          "MU", "NFLX", "CRWV", "VIX", "TTD", "MRVL", "SNDK", "NOW", "BMNR", "TEM"}
@@ -144,9 +145,9 @@ def load():
         return []
 
 
-def save(ps):
-    STORE.parent.mkdir(parents=True, exist_ok=True)
-    STORE.write_text(json.dumps(ps, indent=2))
+def save(ps, force=False):
+    from safe_io import safe_write_json      # positions ledger = crown-jewel state; guard it like signals
+    safe_write_json(STORE, ps, min_keep_ratio=0.4, floor=8, indent=2, force=force)
 
 
 def trade_key(provider, ticker, strike, typ, expiry=None):
@@ -310,7 +311,7 @@ def prune_stale(today_iso):
         if p.get("kind") == "tracked" and not dated and (p.get("opened") or "")[:10] < today:
             continue
         keep.append(p)
-    save(keep)
+    save(keep, force=True)      # intentional day-rollover prune of 0DTE shells -> bypass the shrink tripwire
 
 
 def log_live_alert(pid, text, peak=None):
@@ -535,7 +536,7 @@ def _build_close_record(p):
 
 def _write_close_record(rec, provider):
     try:
-        d = ROOT / "channels" / (provider or "unknown")
+        d = _P.CHANNELS / (provider or "unknown")
         d.mkdir(parents=True, exist_ok=True)
         with (d / "closed_trades.jsonl").open("a") as f:
             f.write(json.dumps(rec) + "\n")

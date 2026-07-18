@@ -19,11 +19,12 @@ CLI:
   python3 db.py export [path] # dump ml_dataset to CSV (default ml_dataset.csv)
   python3 db.py summary       # quick counts + a peek at the ML table
 """
-import json, glob, sqlite3, csv
+import json, glob, sqlite3, csv, threading, time
 from pathlib import Path
 
 ROOT = Path(__file__).parent
-DB_PATH = ROOT / "signal_desk.db"
+import deskpaths as _P
+DB_PATH = _P.DB_FILE
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS signals (
@@ -100,6 +101,21 @@ def _f(x):
 def connect():
     con = sqlite3.connect(str(DB_PATH))
     con.executescript(SCHEMA)
+    return con
+
+
+_LOCAL = threading.local()   # per-thread cached connection for the HOT per-tick path (SQLite conns aren't
+                             # safe to share across threads, so one connection per calling thread)
+
+
+def _tick_con():
+    """A cached connection for record_tick — avoids a fresh connect()+executescript(SCHEMA)+close() on
+    EVERY tick (dozens/lap). Schema is applied once when the thread's connection is first created."""
+    con = getattr(_LOCAL, "con", None)
+    if con is None:
+        con = sqlite3.connect(str(DB_PATH))
+        con.executescript(SCHEMA)
+        _LOCAL.con = con
     return con
 
 
@@ -194,13 +210,16 @@ def record_decision(signal_id, action, qty=None, fill_px=None, ts_utc=None):
 
 def record_tick(row):
     """One observation in a trade's life — full conditions (option greeks + underlying + tape + momentum).
-    Cheap, idempotent (keyed signal_id/ts_utc). Called from the monitor while shadowing / holding."""
+    Cheap, idempotent (keyed signal_id/ts_utc). Called from the monitor while shadowing / holding.
+    Reuses a thread-local connection (no per-tick connect/executescript/close)."""
     try:
-        con = connect()
+        con = _tick_con()
         _upsert(con, "path", row, keys=("signal_id", "ts_utc"))
-        con.commit(); con.close()
+        con.commit()
     except Exception:
-        pass
+        try: _LOCAL.con.close()           # a broken cached connection -> drop it so the next call reconnects
+        except Exception: pass
+        _LOCAL.con = None
 
 
 def _shadow_scaleout(ticks, t1, t2, stop):
@@ -239,11 +258,38 @@ def _shadow_r(con, signal_id, stop, t1, t2):
     return ret, round(ret / abs(stop), 3)
 
 
+_PATH_RETAIN_DAYS = 30       # keep ~30 days of ticks — longer than any option DTE, so ended shadows keep
+                             # a full path for their FINAL score; anything older can't change again
+_SHADOW_ACTIVE_DAYS = 3      # a shadow whose path last grew within N days is still "live" -> worth re-scoring
+_LAST_PRUNE = [0.0]          # once/hour gate (list so it's mutable from the nested call)
+
+
+def prune_path(con):
+    """Rolling retention on the unbounded `path` table (grows every tick, forever). Deletes ticks older
+    than _PATH_RETAIN_DAYS. Gated to once/hour. Safe: option contracts expire within days, so a pruned
+    shadow's outcome is already final and _resync_shadow_r's `if r is not None` guard won't overwrite it."""
+    now = time.time()
+    if now - _LAST_PRUNE[0] < 3600:
+        return
+    _LAST_PRUNE[0] = now
+    from datetime import datetime, timedelta, timezone
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=_PATH_RETAIN_DAYS)).isoformat()
+    con.execute("DELETE FROM path WHERE ts_utc < ?", (cutoff,))
+
+
 def _resync_shadow_r(con):
-    """(Re)score EVERY shadow outcome's return% + R from a scale-out replay of its path + the signal's own
-    stop/target plan. One code path for live shadows (updates as their path grows) AND historical backfill."""
-    rows = con.execute("SELECT o.signal_id, s.stop_pct, s.t1_pct, s.t2_pct FROM outcomes o "
-                       "JOIN signals s ON s.signal_id=o.signal_id WHERE o.kind='SHADOW'").fetchall()
+    """(Re)score shadow outcomes' return% + R from a scale-out replay of their path + the signal's own
+    stop/target plan. Scoped to shadows still worth touching: never-scored (return_pct IS NULL) OR still
+    live (path grew within _SHADOW_ACTIVE_DAYS). Long-ended shadows keep their stored, final R — replaying
+    their full path every heavy lap was O(all-shadows × ticks) of pure waste."""
+    from datetime import datetime, timedelta, timezone
+    active_cutoff = (datetime.now(timezone.utc) - timedelta(days=_SHADOW_ACTIVE_DAYS)).isoformat()
+    rows = con.execute(
+        "SELECT o.signal_id, s.stop_pct, s.t1_pct, s.t2_pct FROM outcomes o "
+        "JOIN signals s ON s.signal_id=o.signal_id WHERE o.kind='SHADOW' AND ("
+        "  o.return_pct IS NULL OR EXISTS ("
+        "    SELECT 1 FROM path p WHERE p.signal_id=o.signal_id AND p.phase='shadow' AND p.ts_utc > ?))",
+        (active_cutoff,)).fetchall()
     for sid, sp, t1, t2 in rows:
         sp = sp or 30; t1 = t1 or 40; t2 = t2 or (t1 * 2)
         ret, r = _shadow_r(con, sid, sp, t1, t2)
@@ -283,7 +329,7 @@ def sync_outcomes(signals=None):
     Cheap + idempotent — safe to call every monitor cycle."""
     try:
         con = connect()
-        for f in glob.glob(str(ROOT / "channels" / "*" / "closed_trades.jsonl")):
+        for f in glob.glob(str(_P.CHANNELS / "*" / "closed_trades.jsonl")):
             for ln in Path(f).read_text().splitlines():
                 if not ln.strip():
                     continue
@@ -312,6 +358,7 @@ def sync_outcomes(signals=None):
                 if not cur or cur[0] == "SHADOW":
                     _upsert(con, "outcomes", row)
         _resync_shadow_r(con)                 # score shadow return%/R from the scale-out replay (live + backfill)
+        prune_path(con)                       # rolling retention on the unbounded path table (once/hour)
         con.commit(); con.close()
     except Exception:
         pass
@@ -322,10 +369,10 @@ def backfill():
     con = connect()
     seen = 0
     # 1) current cards
-    fp = ROOT / "channels" / "_signals.json"
+    fp = _P.CHANNELS / "_signals.json"
     entries = json.loads(fp.read_text()) if fp.exists() else []
     # 2) archived signals (full card history)
-    for f in glob.glob(str(ROOT / "channels" / "*" / "live_signals.jsonl")):
+    for f in glob.glob(str(_P.CHANNELS / "*" / "live_signals.jsonl")):
         for ln in Path(f).read_text().splitlines():
             if ln.strip():
                 entries.append(json.loads(ln))
@@ -574,10 +621,10 @@ def validate():
     C(q("SELECT COUNT(*) FROM outcomes WHERE result NOT IN ('WIN','LOSS','SCRATCH')") == 0, "outcome results valid")
     # 4) source consistency — every jsonl signal made it into the DB
     src = set()
-    fp = ROOT / "channels" / "_signals.json"
+    fp = _P.CHANNELS / "_signals.json"
     if fp.exists():
         src |= {e.get("id") for e in json.loads(fp.read_text()) if e.get("id")}
-    for f in glob.glob(str(ROOT / "channels" / "*" / "live_signals.jsonl")):
+    for f in glob.glob(str(_P.CHANNELS / "*" / "live_signals.jsonl")):
         for ln in Path(f).read_text().splitlines():
             if ln.strip():
                 i = json.loads(ln).get("id")

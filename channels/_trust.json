@@ -3,6 +3,14 @@
   "prior_source": "3-way reconciled: heuristic guess (contradicted, rho=-0.67), thread reconstruction (supported, rho=+0.87), rigorous ML+options-SME referee.",
   "note": "PROVISIONAL priors. Target is providers' SELF-REPORTED exits (unverified) \u2014 absolute EV% is NOT trustworthy; only the ROBUSTNESS RANKING is. Trust is conservative/compressed (33-58, no provider earns HIGH on trust alone \u2014 naive copy is ~breakeven-minus after slippage). Order = prince_small>=jmt>prince>sulker>optionking>mike, validated across every silent-loser assumption. Mike integrity-capped (recap 82% win vs ~20% real). Per-ticker & timing knobs REMOVED (ML: noise, R2=-0.22). Next real upgrade: reprice every trade from market.py to end the self-report dependency. Will re-fit from YOUR closed_trades.jsonl as real fills accumulate.",
   "providers": {
+    "chip": {
+      "trust": 45,
+      "robust": false,
+      "size_mult": 0.0,
+      "mode": "PAPER",
+      "self_generated": true,
+      "note": "SELF-GENERATED shadow provider (chip_desk.py). size_mult PINNED to 0.0 — chip NEVER sizes real money. Shadow-only until it clears the go-live gate (>=~58 resolved shadow trades AND blended_r>=+0.10) AND the user flips this to LIVE. Measures chip's ATM-scalp expectancy head-to-head vs the human books."
+    },
     "jmt": {
       "trust": 58,
       "robust": true,

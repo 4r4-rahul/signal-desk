@@ -26,6 +26,8 @@ def env(k, d=None):
 
 
 def connect(client_id=77):
+    if os.environ.get("DESK_ENV") == "test" and not os.environ.get("DESK_ALLOW_LIVE_BROKER"):
+        raise RuntimeError("market.connect() refused: DESK_ENV=test — live IBKR socket blocked (set DESK_ALLOW_LIVE_BROKER=1 to override)")
     from ib_async import IB
     ib = IB()
     ib.connect(env("IBKR_HOST", "127.0.0.1"), int(env("IBKR_PORT", "7497")),
@@ -68,50 +70,126 @@ def _pick_standard(contracts, tk):
     return sorted(contracts, key=rank)[0]
 
 
-def option_quote(ticker, strike, right, expiry=None, ib=None):
-    """Live option price + Greeks from IBKR for a specific contract."""
-    own = ib is None
+import time as _time
+# PERSISTENT streaming pool. reqMktData(snapshot=False) returns a Ticker IB mutates in place; we keep it
+# alive and READ it (no per-call sleep/cancel) — turning request/response polling back into a push feed.
+# Keyed per (connection, conId) so each loop-thread owns its own lines. FALLS BACK to a one-shot snapshot
+# on a fresh/own connection, so nothing ever goes dark. reap_subs() governs the ~100-line IBKR budget.
+_SUBS = {}              # (id(ib), conId) -> {"t": Ticker, "opt": contract, "last": epoch}
+_OPT_CACHE = {}         # (tk,strike,right,expiry) -> resolved Option contract (explicit-expiry only)
+
+
+def _ok(x):
+    return x is not None and x == x and x > 0        # not None, not NaN, positive
+
+
+def _resolve_option(ib, tk, strike, r, expiry):
+    """Resolve+qualify the standard OCC contract once; cache explicit-expiry results (conId is stable)."""
+    key = (tk, str(strike), r, expiry or "")
+    c = _OPT_CACHE.get(key)
+    if c is not None:
+        return c
     from ib_async import Option
+    from datetime import datetime, timezone, timedelta
+    today = datetime.now(timezone(timedelta(hours=-4))).strftime("%Y%m%d")
+    exch = "CBOE" if tk in ("SPX", "SPXW", "VIX", "NDX", "RUT") else "SMART"
+    tclass = "SPXW" if tk == "SPX" else ""
+    base = Option(tk, expiry or "", float(strike), r, exchange=exch, tradingClass=tclass)
+    cds = [cd.contract for cd in ib.reqContractDetails(base)]
+    if not cds:
+        return None
+    exp = expiry
+    if not exp:
+        exps = sorted(e for e in {c.lastTradeDateOrContractMonth for c in cds} if e >= today)
+        if not exps:
+            return None
+        exp = exps[0]
+    cands = [c for c in cds if c.lastTradeDateOrContractMonth == exp]
+    opt = _pick_standard(cands, tk) or (cands[0] if cands else None)
+    if opt is not None and expiry:                   # only cache when the expiry was explicit (stable)
+        _OPT_CACHE[key] = opt
+    return opt
+
+
+def _live_ticker(ib, opt):
+    """Get the persistent streaming Ticker for opt on this connection (subscribe once, then reuse)."""
+    k = (id(ib), opt.conId)
+    sub = _SUBS.get(k)
+    if sub is None:
+        t = ib.reqMktData(opt, "106", False, False)  # 106 = option model greeks
+        _SUBS[k] = {"t": t, "opt": opt, "last": _time.time()}
+        ib.sleep(1.2)                                 # cold subscribe: let the first ticks land
+        return t
+    sub["last"] = _time.time()
+    return sub["t"]
+
+
+def _fin(x, nd=None):
+    """Finite-or-None: NaN/Inf (empty IBKR quotes) -> None, so the payload is valid browser JSON BY
+    CONSTRUCTION and no downstream _scrub_nan walk is needed. Optionally round to nd places."""
+    if x is None or x != x or x in (float("inf"), float("-inf")):
+        return None
+    return round(x, nd) if nd is not None else x
+
+
+def _read_ticker(t, expiry):
+    """NaN-safe read of a (streaming or snapshot) Ticker into the quote dict shape callers expect.
+    Every numeric field is finite-scrubbed here (the single quote choke point) — NaN never leaves this fn."""
+    bid, ask = t.bid, t.ask
+    last = t.last if (t.last == t.last) else t.close
+    mid = (bid + ask) / 2 if (_ok(bid) and _ok(ask)) else (last if (last == last and last) else None)
+    q = {"expiry": expiry, "bid": _fin(bid), "ask": _fin(ask), "last": _fin(last),
+         "mid": _fin(mid, 2) if mid else None,
+         "spread_pct": _fin((ask - bid) / mid * 100, 1) if (mid and _ok(ask) and _ok(bid)) else None}
+    if t.modelGreeks:
+        g = t.modelGreeks
+        q.update(iv=_fin(g.impliedVol, 3), delta=_fin(g.delta, 3),
+                 gamma=_fin(g.gamma, 4), theta=_fin(g.theta, 4), vega=_fin(g.vega, 4))
+    return q
+
+
+def reap_subs(ib, max_idle=90, cap=80):
+    """Cancel streaming lines idle > max_idle sec + enforce a hard per-connection line cap (evict oldest)
+    so we stay under IBKR's ~100-line budget as cards churn. Positions/watches are re-read every cycle so
+    they stay warm; only truly-gone contracts age out."""
+    now = _time.time()
+    mine = [(k, v) for k, v in list(_SUBS.items()) if k[0] == id(ib)]
+    dead = [(k, v) for k, v in mine if now - v["last"] > max_idle]
+    if len(mine) - len(dead) > cap:                  # still over cap after idle-reap -> drop oldest live
+        dead += sorted([kv for kv in mine if kv not in dead], key=lambda kv: kv[1]["last"])[:len(mine) - len(dead) - cap]
+    for k, v in dead:
+        try: ib.cancelMktData(v["opt"])
+        except Exception: pass
+        _SUBS.pop(k, None)
+
+
+def option_quote(ticker, strike, right, expiry=None, ib=None):
+    """Live option price + Greeks from IBKR. Loop callers (ib passed) read a PERSISTENT stream — instant
+    after the first tick. One-off callers (ib=None) get a safe one-shot snapshot."""
+    own = ib is None
     try:
         if own:
             ib = connect()
-        r = right.upper()[0]
-        tk = ticker.upper()
-        exch = "CBOE" if tk in ("SPX", "SPXW", "VIX", "NDX", "RUT") else "SMART"
-        tclass = "SPXW" if tk == "SPX" else ""
-        from datetime import datetime, timezone, timedelta
-        today = datetime.now(timezone(timedelta(hours=-4))).strftime("%Y%m%d")
-        # Pull ALL contract details for this strike/right, then pick the STANDARD class ourselves.
-        # A stock that had a corporate action (split, special dividend) carries an adjusted option
-        # class like "2NVDA"/"NVDA1" alongside the standard "NVDA" one. Qualifying with a blank
-        # tradingClass makes IBKR return both and either error (ambiguous) or pick the odd lot.
-        base = Option(tk, expiry or "", float(strike), r, exchange=exch, tradingClass=tclass)
-        cds = [cd.contract for cd in ib.reqContractDetails(base)]
-        if not cds:
-            return {"error": "contract not found at IBKR"}
-        if not expiry:                              # resolve nearest NON-expired expiry
-            exps = sorted(e for e in {c.lastTradeDateOrContractMonth for c in cds} if e >= today)
-            if not exps:
-                return {"error": "no valid expiries found"}
-            expiry = exps[0]
-        cands = [c for c in cds if c.lastTradeDateOrContractMonth == expiry]
-        opt = _pick_standard(cands, tk) or (cands[0] if cands else None)
+        tk, r = ticker.upper(), right.upper()[0]
+        opt = _resolve_option(ib, tk, strike, r, expiry)
         if opt is None:
             return {"error": "contract not found at IBKR"}
-        t = ib.reqMktData(opt, "", False, False)
-        ib.sleep(2.5)
-        bid, ask, last = t.bid, t.ask, (t.last if t.last == t.last else t.close)
-        mid = (bid + ask) / 2 if (bid and ask and bid > 0 and ask > 0) else last
-        q = {"expiry": expiry, "bid": bid, "ask": ask, "last": last, "mid": round(mid, 2) if mid else None,
-             "spread_pct": round((ask - bid) / mid * 100, 1) if (mid and ask and bid and bid > 0) else None}
-        if t.modelGreeks:
-            g = t.modelGreeks
-            q.update(iv=round(g.impliedVol, 3) if g.impliedVol else None,
-                     delta=round(g.delta, 3) if g.delta else None,
-                     gamma=round(g.gamma, 4) if g.gamma else None,
-                     theta=round(g.theta, 4) if g.theta else None,
-                     vega=round(g.vega, 4) if g.vega else None)
-        ib.cancelMktData(opt)
+        exp = opt.lastTradeDateOrContractMonth
+        if own:                                       # transient connection -> snapshot, then clean up
+            t = ib.reqMktData(opt, "106", False, False)
+            ib.sleep(2.0)
+            q = _read_ticker(t, exp)
+            try: ib.cancelMktData(opt)
+            except Exception: pass
+            return q
+        t = _live_ticker(ib, opt)                     # persistent stream (pooled)
+        q = _read_ticker(t, exp)
+        if q.get("mid") is None:                      # cold sub not populated yet -> brief wait, re-read
+            for _ in range(2):
+                ib.sleep(0.7)
+                q = _read_ticker(t, exp)
+                if q.get("mid") is not None:
+                    break
         return q
     except Exception as e:
         return {"error": str(e)}
@@ -131,22 +209,39 @@ def _contract(ticker):
     return Stock(t, "SMART", "USD")
 
 
+_STK_CACHE = {}         # ticker -> qualified Stock/Index contract (conId is stable)
+
+
+def _spot_px(t):
+    p = t.last if (t.last == t.last and t.last and t.last > 0) else (t.close if (t.close == t.close and t.close) else None)
+    if p is None and _ok(t.bid) and _ok(t.ask):
+        p = (t.bid + t.ask) / 2
+    return round(p, 2) if p else None
+
+
 def spot_quote(ticker, ib=None):
-    """FAST last-price snapshot of the UNDERLYING (reqMktData) for real-time stop-watching + card
-    display. Far lighter than get_bars/indicators — no history request, just the current print.
-    Returns a rounded float or None."""
+    """Live UNDERLYING price for stop-watching + card display. Loop callers read a PERSISTENT stream
+    (instant, no per-read sleep) so the stop poll can tighten; one-off callers get a safe snapshot."""
     own = ib is None
     try:
         if ib is None:
             ib = connect()
-        c = _contract(ticker)
-        ib.qualifyContracts(c)
-        t = ib.reqMktData(c, "", False, False)
-        ib.sleep(1.0)
-        px = t.last if (t.last == t.last and t.last and t.last > 0) else (t.close if t.close == t.close else None)
-        try: ib.cancelMktData(c)
-        except Exception: pass
-        return round(px, 2) if px else None
+        tk = ticker.upper()
+        c = _STK_CACHE.get(tk)
+        if c is None:
+            c = _contract(tk); ib.qualifyContracts(c); _STK_CACHE[tk] = c
+        if own:
+            t = ib.reqMktData(c, "", False, False)
+            ib.sleep(1.0)
+            px = _spot_px(t)
+            try: ib.cancelMktData(c)
+            except Exception: pass
+            return px
+        t = _live_ticker(ib, c)                        # persistent stream (pooled with options)
+        px = _spot_px(t)
+        if px is None:                                 # cold sub -> brief wait, re-read
+            ib.sleep(0.6); px = _spot_px(t)
+        return px
     except Exception:
         return None
     finally:

@@ -334,6 +334,9 @@
   .reenter-go:hover{filter:brightness(1.08)}
   .reenter-go.danger{background:rgba(239,68,68,.2);color:#fecaca;border:1px solid rgba(239,68,68,.5)}
   .re-updated{margin-top:7px;font-size:11px;color:var(--dim)}
+  .ticketgate.gated{opacity:.5;filter:grayscale(.4);position:relative}
+  .ticketgate .gatehdr{font-size:11px;color:var(--muted);font-weight:600;margin:4px 0 2px;letter-spacing:.2px}
+  .junkcaveat{margin:4px 0;font-size:11.5px;color:var(--amber);opacity:.9}
   .entry-verdict{margin:6px 0;padding:7px 11px;border:1px solid var(--dim);border-left-width:3px;
     border-radius:9px;font-size:12.5px;line-height:1.5;display:block}
   .entry-trig{margin-top:3px;font-size:12px;color:var(--fg)}
@@ -387,6 +390,9 @@ const TIER={HIGH:['#22c55e','rgba(34,197,94,.15)'],MEDIUM:['#f59e0b','rgba(245,1
   LOW:['#fb923c','rgba(251,146,60,.15)'],SKIP:['#ef4444','rgba(239,68,68,.15)']};
 const typed={};        // preserve in-progress input by signal id
 const muted=new Set(); // providers toggled off in the filter
+let chipOnly=0;        // "🤖 Chip chips" solo filter — show ONLY chip's self-generated signals
+try{chipOnly=JSON.parse(localStorage.getItem('chipOnly'))||0}catch(e){}
+function toggleChip(){chipOnly=chipOnly?0:1;try{localStorage.setItem('chipOnly',JSON.stringify(chipOnly))}catch(e){}refresh();}
 
 // ---- feed sections + the top sorting/filter bar ----
 function secOf(s){const st=s.pos&&s.pos.state;
@@ -406,12 +412,15 @@ if(!secOn) secOn={live:1,new:1,watch:1,closed:1,skip:0};   // hide dismissed by 
 function saveSec(){try{localStorage.setItem('secOn',JSON.stringify(secOn))}catch(e){}}
 function toggleSec(k){secOn[k]=secOn[k]?0:1;saveSec();refresh();}
 function setAllSec(v){SECS.forEach(([k])=>secOn[k]=v);saveSec();refresh();}
-function renderSortbar(counts){
+function renderSortbar(counts,chipCount){
   const bar=document.getElementById('sortbar'); if(!bar) return;
   const allOn=SECS.every(([k])=>secOn[k]);
   let h='<span class="lbl">Show</span>';
   h+=`<div class="fchip all ${allOn?'on':''}" onclick="setAllSec(${allOn?0:1})" title="toggle everything">${allOn?'All ✓':'All'}</div>`;
   h+=SECS.map(([k,lbl])=>`<div class="fchip ${secOn[k]?'on':''} ${(counts[k]||0)===0?'dim':''}" onclick="toggleSec('${k}')">${lbl}<span class="cnt">${counts[k]||0}</span></div>`).join('');
+  // 🤖 Chip chips — solo filter for chip's self-generated signals (only shown once chip has emitted any)
+  if(chipCount>0||chipOnly)
+    h+=`<div class="fchip ${chipOnly?'on':''}" style="margin-left:auto;border-color:${chipOnly?'#c4b5fd':'var(--line)'};${chipOnly?'color:#c4b5fd':''}" onclick="toggleChip()" title="show only Chip's self-generated scalps">🤖 Chip chips<span class="cnt">${chipCount||0}</span></div>`;
   bar.innerHTML=h;
 }
 
@@ -420,10 +429,26 @@ function ago(iso,nowIso){
   const s=Math.max(0,(Date.parse(nowIso)-Date.parse(iso))/1000);
   return s<60?Math.round(s)+'s ago':s<3600?Math.round(s/60)+'m ago':Math.round(s/3600)+'h ago';
 }
-function renderSources(src,nowIso){
+function ibkrRowHTML(ibkr,nowIso){
+  if(!ibkr) return '';
+  const fresh=ibkr.last_data&&(Date.parse(nowIso)-Date.parse(ibkr.last_data))/1000<120;
+  const on=!!ibkr.connected;
+  const col=on?(fresh?'#22c55e':'#f59e0b'):'#ef4444';
+  const label=on?(fresh?'live · data flowing':'connected · idle'):'disconnected';
+  const mt={'1':'realtime','2':'frozen','3':'delayed','4':'delayed'}[String(ibkr.mkt_type||'')]||'';
+  const ago=ibkr.last_data?Math.round((Date.parse(nowIso)-Date.parse(ibkr.last_data))/1000):null;
+  return `<div class="src" style="cursor:default" title="IBKR market-data link — option quotes, greeks, live prices">
+    <span class="d" style="background:${col};margin-top:5px;flex-shrink:0"></span>
+    <div style="line-height:1.4;min-width:0;flex:1">
+      <div style="display:flex;align-items:center;gap:6px"><b>🏦 IBKR</b>${mt?`<small style="color:var(--dim)">${mt}</small>`:''}</div>
+      <small style="color:${on?'var(--muted)':'var(--red)'}">${label}${ago!=null?` · quote ${ago}s ago`:''}</small>
+    </div></div>`;
+}
+function renderSources(src,nowIso,ibkr){
   const el=document.getElementById('sources');
+  const ib=ibkrRowHTML(ibkr,nowIso);
   const keys=Object.keys(src||{});
-  if(!keys.length){el.innerHTML='<div class="rail-h">📡 Listening</div><div style="color:var(--muted);font-size:12px;padding:2px 4px">Nothing listening — open a channel & hit <b>👀 Watch</b> in the extension.</div>';return;}
+  if(!keys.length){el.innerHTML='<div class="rail-h">📡 Data feeds</div>'+ib+'<div style="color:var(--muted);font-size:12px;padding:6px 4px 2px">No providers listening — open a channel & hit <b>👀 Watch</b> in the extension.</div>';return;}
   const isLive=k=>((Date.parse(nowIso)-Date.parse(src[k].last_beat||0))/1000)<70;   // heartbeat ~20s
   // health = the extension actually FOUND & read Discord's message list this tick (undefined on older
   // extensions -> treat as healthy so nothing regresses). green = heartbeat AND reading; amber = tab open
@@ -433,7 +458,7 @@ function renderSources(src,nowIso){
   const liveN=keys.filter(k=>stateOf(k)==='live').length;   // truly RECEIVING, not just tab-open
   const RANK={live:2,blind:1,stale:0}, DOT={live:'#22c55e',blind:'#f59e0b',stale:'#6b7280'};
   keys.sort((a,b)=>(RANK[stateOf(b)]-RANK[stateOf(a)])||((src[b].count||0)-(src[a].count||0)));
-  el.innerHTML=`<div class="rail-h">📡 Listening <span class="rail-n">${liveN}/${keys.length} live</span></div>`+keys.map(k=>{
+  el.innerHTML=`<div class="rail-h">📡 Data feeds <span class="rail-n">${liveN}/${keys.length} providers</span></div>`+ib+keys.map(k=>{
     const s=src[k], stt=stateOf(k);
     const hrs=Math.max((Date.parse(nowIso)-Date.parse(s.first||nowIso))/3.6e6,0.05);
     const rate=s.count?(s.count/hrs).toFixed(1):'0';
@@ -1073,11 +1098,8 @@ function providerPlaybook(s){   // JMT's 704-trade proven doctrine, applied to e
 function junkHTML(s){
   const j=s.junk||{}, rs=j.reasons||[];
   const low=['mike','sulker','optionking'].includes(j.provider);
-  if(j.warn) return `<div class="junkblock warn">
-    <div class="junkhdr" style="color:var(--amber)">⚠ SCALP-ONLY — theta trap</div>
-    <ul class="junkreasons">${rs.map(r=>`<li>${r}</li>`).join('')}</ul>
-    <div class="junknote">Clean enough to scalp fast — but this decays hard. In and out in minutes; <b>never hold it.</b> If you can't watch it, skip it.</div>
-  </div>`;
+  // WARN = a risk CAVEAT, not a verdict — one line, subordinate to the single verdict headline above.
+  if(j.warn) return `<div class="junkcaveat">⚠ scalp-only — ${rs.join(' · ') || 'θ-cliff, decays fast'} · never hold</div>`;
   return `<div class="junkblock">
     <div class="junkhdr">🚫 BLOCKED — JUNK SETUP</div>
     <ul class="junkreasons">${rs.map(r=>`<li>${r}</li>`).join('')}</ul>
@@ -1086,24 +1108,32 @@ function junkHTML(s){
 }
 function ticketHTML(s){
   const t=s.ticket; if(!t||t.limit==null) return ticketFallbackHTML(s);
+  // SINGLE SOURCE OF TRUTH: the live entry verdict is the headline. Everything below is EVIDENCE (facts,
+  // no verdict) or the execution PLAN, which is visually GATED — dimmed & relabelled "when it turns"
+  // unless the verdict is TAKE — so the card can never say "full size, scale T1" under a SKIP.
+  const act=((s.live&&s.live.entry&&s.live.entry.action))||'WAIT';
+  const gated = act!=='TAKE';
   const chip=(cls,lbl,val,sub)=>`<span class="tk ${cls}">${lbl} <b>${val}</b>${sub?` <i>${sub}</i>`:''}</span>`;
-  let h='<div class="ticket">';
-  h+=chip('buy','🎯 Limit',`$${t.limit}`,`bid ${t.bid??'—'} / ask ${t.ask??'—'}`);
-  h+=chip('stop','🛑 Stop',`$${t.stop}`,`−${t.stop_pct}%`);
-  h+=chip('tp','🥇 T1',`$${t.t1}`,`+${t.t1_pct}%`);
-  h+=chip('tp','🥈 T2',`$${t.t2}`,`+${t.t2_pct}%`);
-  if(t.t3!=null) h+=chip('tp','🏆 T3',`$${t.t3}`,`+${t.t3_pct}%`);
-  if(t.rr3!=null) h+=chip('rr','⚖️ R:R',`${t.rr1}→${t.rr2}→${t.rr3}×`,'T1·T2·T3');
-  else if(t.rr2!=null) h+=chip('rr','⚖️ R:R',`${t.rr1}×→${t.rr2}×`,'T1→T2');
-  if(t.chasing_pct) h+=`<span class="tk warn">⚠ chasing +${t.chasing_pct}% vs provider $${t.prov_entry}</span>`;
-  if(t.wide) h+=`<span class="tk warn">⚠ wide spread ${t.spread_pct}% — limit only</span>`;
-  h+='</div>';
-  h+=`<div class="vslot" id="vslot-${s.id}">${verdictHTML(s)}</div>`;          // 🎯 Chip's call (patched)
-  h+=sizingHTML(s);
-  h+=`<div class="slive" id="slive-${s.id}">${liveRecoHTML(s.live)}</div>`;   // live move% + reco (patched)
-  h+=`<div class="coach" id="coach-${s.id}">${coachHTML(s)}</div>`;            // grade/liq/BE/exit (patched)
-  h+=`<div class="greeks" id="greeks-${s.id}">${greeksHTML(s)}</div>`;        // theta/tape/IV/lev/confluence
-  h+=`<div class="wslot" id="wslot-${s.id}">${whipsawHTML(s)}</div>`;         // ⚡ whipsaw guard (patched)
+  // (a) the one verdict, up top
+  let h=`<div class="slive" id="slive-${s.id}">${liveRecoHTML(s.live)}</div>`;
+  // (b) evidence row — tape/θ/IV/lev/confluence facts (no verbs)
+  h+=`<div class="greeks" id="greeks-${s.id}">${greeksHTML(s)}</div>`;
+  // (c) execution plan + sizing + exit ladder, GATED to the verdict
+  let tk='<div class="ticket">';
+  tk+=chip('buy','🎯 Limit',`$${t.limit}`,`bid ${t.bid??'—'} / ask ${t.ask??'—'}`);
+  tk+=chip('stop','🛑 Stop',`$${t.stop}`,`−${t.stop_pct}%`);
+  tk+=chip('tp','🥇 T1',`$${t.t1}`,`+${t.t1_pct}%`);
+  tk+=chip('tp','🥈 T2',`$${t.t2}`,`+${t.t2_pct}%`);
+  if(t.t3!=null) tk+=chip('tp','🏆 T3',`$${t.t3}`,`+${t.t3_pct}%`);
+  if(t.rr3!=null) tk+=chip('rr','⚖️ R:R',`${t.rr1}→${t.rr2}→${t.rr3}×`,'T1·T2·T3');
+  else if(t.rr2!=null) tk+=chip('rr','⚖️ R:R',`${t.rr1}×→${t.rr2}×`,'T1→T2');
+  if(t.chasing_pct) tk+=`<span class="tk">📈 chasing +${t.chasing_pct}% vs $${t.prov_entry}</span>`;   // neutral fact
+  if(t.wide) tk+=`<span class="tk">spread ${t.spread_pct}% · limit only</span>`;
+  tk+='</div>';
+  tk+=sizingHTML(s);
+  tk+=`<div class="coach" id="coach-${s.id}">${coachHTML(s)}</div>`;
+  tk+=`<div class="wslot" id="wslot-${s.id}">${whipsawHTML(s)}</div>`;
+  h+=`<div class="ticketgate${gated?' gated':''}">${gated?'<div class="gatehdr">📋 plan — armed when the verdict turns 🟢:</div>':''}${tk}</div>`;
   return h;
 }
 function verdict(s){   // synthesize every chip into one call
@@ -1341,9 +1371,10 @@ function liveRecoHTML(l){
   const banner=entryVerdictHTML(l.entry);
   if(l.move_pct==null) return banner;
   const mv=l.move_pct>0?`📈 +${l.move_pct}%`:(l.move_pct<0?`📉 ${l.move_pct}%`:`● 0%`);
+  // FACTS ONLY under the verdict — the old buy-zone reco text ("better entry, thesis intact") is REMOVED:
+  // it contradicted a SKIP. Its one datum (cheaper vs signal) is already the move% + chase evidence.
   return banner+`<span class="lvmove">${mv} since signal</span>`
-    +`<span class="lvnow">now $${l.mid}${l.ask!=null?` · ask $${l.ask}`:''}</span>`
-    +`<span class="lvreco ${l.level}">${l.text}</span>`;
+    +`<span class="lvnow">now $${l.mid}${l.ask!=null?` · ask $${l.ask}`:''}</span>`;
 }
 function shadowHTML(s){   // for a SKIPPED card: full-life would-be outcome (disciplined result + ultimate peak/trough)
   const sh=s.shadow; if(!sh) return '';
@@ -1481,7 +1512,7 @@ function card(s){
         ${s.verified===false?`<div class="sub" style="color:var(--red)">⚠ ${s.verify_note||'contract not found at IBKR — do not trade'}</div>`:''}
         ${s.price_mismatch?`<div class="sub" style="color:var(--red)">⚠ <b>price mismatch</b> — provider said <b>$${s.price_mismatch.stated}</b> but this contract trades <b>$${s.price_mismatch.market}</b>. Misparsed strike/expiry — do NOT trust the ticket; verify the contract before acting.</div>`:''}
         ${s.evidence?`<div class="sub">📊 ${s.evidence}</div>`:''}
-        ${s.tech&&s.tech.ind?`<div class="sub">📈 <b>${s.tech.label}</b>${s.tech.strength?' · '+tapeStrHTML(s.tech.strength):''} · px ${s.tech.ind.price} · VWAP ${s.tech.ind.vwap} · RSI ${s.tech.ind.rsi} · BB ${s.tech.ind.bb_low}–${s.tech.ind.bb_up}</div>`:''}
+        ${s.tech&&s.tech.ind?`<div class="sub">📈 <b>${s.tech.label}</b>${(s.live&&s.live.strength)||s.tech.strength?' · '+tapeStrHTML((s.live&&s.live.strength)||s.tech.strength):''} · px ${s.tech.ind.price} · VWAP ${s.tech.ind.vwap} · RSI ${s.tech.ind.rsi} · BB ${s.tech.ind.bb_low}–${s.tech.ind.bb_up}</div>`:''}
         ${optLine}
         <div class="reasons">${(s.reasons||[]).join(' · ')}</div>
       </div>
@@ -1490,8 +1521,12 @@ function card(s){
     return `<div class="card status-${s.pos.state}" style="--tier:${col};--tierbg:${bg}">${head}${posBody(s.pos)}${reentryBlock(s)}</div>`;
   }
   if(s.junk&&s.junk.block) return `<div class="card status-${s.status} junk" style="--tier:#ef4444;--tierbg:rgba(239,68,68,.10)">${head}${junkHTML(s)}${actionsHTML(s)}</div>`;
-  const warnB = (s.junk&&s.junk.warn)?junkHTML(s):'';   // scalp-only θ-cliff warning, ticket still shown
-  return `<div class="card status-${s.status}" style="--tier:${col};--tierbg:${bg}">${head}${shadowHTML(s)}${watchBadge(s)}${providerPlaybook(s)}${warnB}${ticketHTML(s)}${planHTML(s)}${actionsHTML(s)}${reentryBlock(s)}</div>`;
+  // ONE verdict leads (ticketHTML headline); the θ caveat and the sizing/plan follow, GATED to the verdict.
+  const warnB = (s.junk&&s.junk.warn)?junkHTML(s):'';
+  const _act=((s.live&&s.live.entry&&s.live.entry.action))||'WAIT';
+  const _ph=planHTML(s);
+  const _plan=_ph?`<div class="ticketgate${_act!=='TAKE'?' gated':''}">${_ph}</div>`:'';
+  return `<div class="card status-${s.status}" style="--tier:${col};--tierbg:${bg}">${head}${shadowHTML(s)}${watchBadge(s)}${providerPlaybook(s)}${ticketHTML(s)}${warnB}${_plan}${actionsHTML(s)}${reentryBlock(s)}</div>`;
 }
 
 // ── RE-ENTRY ANALYSIS — reopen an exited card for a live tape/option read before getting back in ──
@@ -1607,7 +1642,7 @@ async function refresh(){
     renderCalibration(d.calibration);
     renderExitQuality(d.exit_quality);
     renderProviderEdge(d.provider_edge);
-    renderSources(d.sources,d.now);
+    renderSources(d.sources,d.now,d.ibkr);
     window.DAY_OVERRIDE=d.day_override;
     renderChipsTray(d.discipline,d.account);
     renderQualityPack(S.filter(x=>!muted.has(x.provider)));
@@ -1620,13 +1655,15 @@ async function refresh(){
     document.getElementById('n').textContent=T.signals!=null?T.signals:S.length;
     document.getElementById('nt').textContent=T.taken!=null?T.taken:S.filter(x=>x.status==='TAKEN'||x.status==='CLOSED').length;
     document.getElementById('ns').textContent=T.skipped!=null?T.skipped:S.filter(x=>x.status==='SKIPPED').length;
+    const chipCount=S.filter(x=>x.provider==='chip').length;   // count before filters, for the toggle badge
     S=S.filter(x=>!muted.has(x.provider));            // apply channel filter
+    if(chipOnly) S=S.filter(x=>x.provider==='chip');  // "🤖 Chip chips" solo view
     S.sort((a,b)=>(Date.parse(b.iso||0)-Date.parse(a.iso||0)));   // newest first (section order set below)
     // group into sections + counts, then render the top filter bar every refresh
     const groups={live:[],new:[],watch:[],closed:[],skip:[]};
     S.forEach(s=>groups[secOf(s)].push(s));
     const counts=Object.fromEntries(Object.entries(groups).map(([k,v])=>[k,v.length]));
-    renderSortbar(counts);
+    renderSortbar(counts,chipCount);
     // capture in-progress typing before re-render
     document.querySelectorAll('input.px').forEach(i=>{const id=i.id.slice(3);if(i.value)typed[id]=i.value;});
     const feed=document.getElementById('feed');
@@ -1643,7 +1680,9 @@ async function refresh(){
       (s.pos.user_actions||[]).length,(s.pos.live_alerts||[]).length,(s.pos.suggested||{}).raw||''].join(','):'';
     // reentry STRUCTURAL key (armed / strike / type) — not analysis/updated, which patch in place below
     const rkey=s=>{const r=s.reentry;return r&&r.armed?('R'+r.strike+(r.type||'')):'';};
-    const sig=S.map(s=>s.id+s.status+s.score+s.tier_key+((s.plan||{}).contracts||'')+pkey(s)+rkey(s)).join('|')
+    // include the live verdict ACTION so a TAKE/WAIT/SKIP flip re-renders the card (re-gates the plan)
+    const vkey=s=>((s.live&&s.live.entry&&s.live.entry.action)||'');
+    const sig=S.map(s=>s.id+s.status+s.score+s.tier_key+((s.plan||{}).contracts||'')+pkey(s)+rkey(s)+vkey(s)).join('|')
               +'|'+BLOCKED+'|'+Object.keys(window.KILLED||{}).join(',')+'|'+JSON.stringify(secOn);
     if(sig!==feed.dataset.sig){
       feed.dataset.sig=sig;
@@ -1674,9 +1713,17 @@ async function refresh(){
       const rb=document.getElementById('rblock-'+s.id); if(rb && window._reBuilding!==s.id){ const r=s.reentry||{};
         const rk=r.armed?('A'+r.strike+(r.type||'')+((r.analysis||{}).verdict||'')+(r.updated||'')):'x';
         if(rb.dataset.rk!==rk){ rb.dataset.rk=rk; rb.innerHTML=reentryBlockInner(s); } } });
-  }catch(e){document.getElementById('dot').style.background='var(--red)';}
+  }catch(e){
+    const dot=document.getElementById('dot'); if(dot) dot.style.background='var(--red)';
+    const fe=document.getElementById('feed');
+    if(fe) fe.innerHTML='<div class="empty" style="color:#ef4444;text-align:left;padding:14px;font-size:12px">'
+      +'<div class="big">⚠️</div><b>Dashboard render error</b> — the desk is fine, this tab hit a JS error:<br><br>'
+      +'<b>'+((e&&e.message)||e)+'</b><br><br><small style="color:var(--muted);white-space:pre-wrap">'
+      +(((e&&e.stack)||'').split("\n").slice(0,5).join("\n").replace(/</g,'&lt;'))+'</small></div>';
+    console.error('refresh() threw:', e);
+  }
 }
-refresh(); setInterval(refresh,1500);
+refresh(); setInterval(refresh,2500);   // was 1500 — option streams refresh ~4s, so 2.5s keeps the live feel while ~40% fewer polls
 </script>
 </body>
 </html>
