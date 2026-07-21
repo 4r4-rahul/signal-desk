@@ -488,6 +488,26 @@ def _ground(raw, corpus, window, text, provider, why):
 # ---------------------------------------------------------------- adjudication
 
 _CARD_FIELDS = ("ticker", "strike", "right", "premium", "expiry")
+_YMD_RE = re.compile(r'^\s*(\d{4})-(\d{1,2})-(\d{1,2})\s*$')
+
+
+def _strip_year(exp):
+    """Drop the YEAR from an LLM expiry, keeping MM/DD, so server._resolve_expiry picks the year
+    deterministically (nearest matching calendar date).
+
+    THE MODEL MUST NEVER PICK THE YEAR. Measured: on "In SMCI july 31" with a prior watch message in
+    context, haiku returned expiry 2025-07-31 -- the wrong year, in 2026 -- while the SAME message with
+    NO context returned 2026-07-31 correctly. Providers virtually never state a year, so the model is
+    guessing, and a wrong year is a contract that does not exist: IBKR rejects it every lap and the
+    signal becomes a dead card with no quote, no path and no outcome (22 such signals already exist from
+    the MM/DD -> next-year bug fixed in 9e62eac).
+
+    This is the honesty contract applied to the LLM: it may report what the provider SAID ("july 31");
+    the deterministic resolver decides what that means. 0DTE/NDTE and bare MM/DD pass through untouched."""
+    if not exp:
+        return exp
+    m = _YMD_RE.match(str(exp))
+    return f"{int(m.group(2)):02d}/{int(m.group(3)):02d}" if m else exp
 
 
 def adjudicate(llm, regex_sig=None):
@@ -536,7 +556,7 @@ def adjudicate(llm, regex_sig=None):
         "ticker": llm.get("ticker"),
         "strike": None if llm.get("strike") is None else _fmt_strike(llm["strike"]),
         "type": llm.get("right"),
-        "expiry": llm.get("expiry"),
+        "expiry": _strip_year(llm.get("expiry")),
         "dte": 0 if str(llm.get("expiry") or "").upper() == "0DTE" else None,
         "premium": llm.get("premium"),
         "lotto": False,
