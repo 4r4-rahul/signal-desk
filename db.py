@@ -306,15 +306,26 @@ def _shadow_r(con, signal_id, stop, t1, t2, t3=None):
 # Cost is trivial: ~4.5k ticks/day at ~320 bytes = ~370 MB/year, against a DB currently at 17 MB.
 # Caught 18 days before the first deletion would have fired — nothing has been lost.
 # If size ever bites, DOWNSAMPLE old paths (keep entry/peak/trough/exit + every Nth tick), never delete.
-_PATH_RETAIN_DAYS = 3650     # ~10 years == keep everything; see note above before lowering this
+_PATH_RETAIN_DAYS = None     # None == NEVER DELETE. Owner's standing instruction: nothing is deleted.
+                             # Setting a number here re-enables destructive pruning — don't, without asking.
 _SHADOW_ACTIVE_DAYS = 3      # a shadow whose path last grew within N days is still "live" -> worth re-scoring
 _LAST_PRUNE = [0.0]          # once/hour gate (list so it's mutable from the nested call)
 
 
 def prune_path(con):
-    """Rolling retention on the unbounded `path` table (grows every tick, forever). Deletes ticks older
-    than _PATH_RETAIN_DAYS. Gated to once/hour. Safe: option contracts expire within days, so a pruned
-    shadow's outcome is already final and _resync_shadow_r's `if r is not None` guard won't overwrite it."""
+    """DISABLED BY DEFAULT — retention is None, so this is a no-op and no tick is ever deleted.
+
+    The `path` table is the minute-by-minute story of how every provider's call actually behaved. It is
+    the primary research asset of this desk: the only thing that can reveal a repeatable pattern. The
+    original 30-day window was reasoned from SCORING ("an ended shadow can't be rescored, so its path is
+    spent"), which is true of the score and false of the research. It optimised for a use we don't have at
+    the cost of the one we do.
+
+    Kept as a function (not ripped out) so the call sites stay stable and so a future DOWNSAMPLER can live
+    here — if size ever bites, thin old paths (keep entry/peak/trough/exit plus every Nth tick) rather than
+    deleting them. Growth is ~370 MB/year, which buys a lot of years."""
+    if not _PATH_RETAIN_DAYS:
+        return
     now = time.time()
     if now - _LAST_PRUNE[0] < 3600:
         return
