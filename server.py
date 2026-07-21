@@ -22,6 +22,13 @@ import validate as V
 import integrations as N
 import manage as M
 import stats as ST
+# --- LLM PARSING LAYER (integration point 1/5) -------------------------------------------
+# Optional by construction: if the module or its SDK is missing the desk behaves exactly as it
+# did before. Nothing below is allowed to raise into the ingest path.
+try:
+    import llm_parse as LLM
+except Exception:
+    LLM = None
 try:
     import db as DB                                    # SQLite warehouse — every signal/decision/outcome
 except Exception:
@@ -1409,6 +1416,137 @@ def _chip_ladder(tk, cp):
     return tk
 
 
+# ============ LLM PARSING LAYER (integration point 2/5) ==================================
+# The LLM's ONLY job is to rewrite an ambiguous message into an unambiguous one. It then goes
+# back through ingest() from the top, so dedup, contract verification, the price-mismatch
+# guard, the junk gate, sizing, shadowing and the DB all run EXACTLY as they do for a regex
+# parse. Not one guard is bypassed, and none of them has to trust a model output — which is
+# what "guards must not depend on an unverifiable model output" means in code.
+
+def _llm_canonical(sig):
+    """A parse rendered as text the DETERMINISTIC parser can read on its own."""
+    if not sig.get("ticker") or not sig.get("strike") or not sig.get("type"):
+        return None
+    out = f'{sig["ticker"]} {sig["strike"]}{sig["type"]}'
+    exp = sig.get("expiry")
+    if exp:
+        # The model returns full ISO dates ("2026-07-31"). _parse_expiry does extract 07/31 from
+        # that, but only via regex backtracking — and it has also been seen returning the wrong
+        # YEAR. Normalise to the unambiguous MM/DD the desk's expiry parser is built for, so the
+        # contract we price never depends on either of those.
+        m = re.match(r'^(\d{4})-(\d{1,2})-(\d{1,2})$', str(exp).strip())
+        exp = f"{int(m.group(2)):02d}/{int(m.group(3)):02d}" if m else exp
+        out += f' {exp}'
+    if sig.get("premium"):
+        out += f' @{sig["premium"]}'
+    return out
+
+
+def _llm_review(text, prov, res, entry, c, data):
+    """Queue a hard case. Returns immediately — the network call happens on a worker thread, so
+    the single-threaded server keeps serving. The card the desk shows RIGHT NOW is unchanged."""
+    if not LLM or not prov or data.get("_from_llm"):
+        return
+    try:
+        sig = (res or {}).get("sig")
+        why = LLM.triggers(text, regex_sig=sig, carded=bool(entry),
+                           market_mid=(entry or {}).get("opt", {}).get("mid") if entry else None,
+                           is_watch=E.is_watch(text),
+                           maybe_entry=(not entry) and _maybe_missed_entry(text, c))
+        if not why:
+            return
+        LLM.submit(text, provider=prov, why=why,
+                   card_id=(entry or {}).get("id"), extra={"regex_sig": sig})
+        _inlog(data.get("channel"), prov, text, "LLM?")
+    except Exception:
+        pass                                          # review is best-effort, never load-bearing
+
+
+def _apply_llm_result(r):
+    """Runs on the MAIN thread (called from drain points). Applies one finished review."""
+    d = r.get("decision") or {}
+    act, prov = d.get("action"), (r.get("job") or r).get("provider")
+    text = r.get("text") or ""
+    if act in (None, "DROP"):
+        return
+    if act == "ANNOTATE":
+        # The regex card stands. We attach the disagreement so the human sees BOTH readings
+        # instead of the desk silently preferring one of them.
+        card = next((s for s in SIGNALS if s.get("id") == r.get("card_id")), None)
+        if card:
+            card["llm_review"] = {"disagreements": d.get("disagreements"), "reason": d.get("reason"),
+                                  "llm": d.get("sig"), "confidence": d.get("confidence")}
+            save_signals()
+            _alert(f"⚠ {prov}: Chip reads this differently — {d.get('reason')}\n\"{text[:140]}\"",
+                   "Signal Desk — Parse disagreement")
+        return
+    canonical = _llm_canonical(d.get("sig") or {})
+    if not canonical:
+        return
+    # CONFIRM -> WATCHING (zero risk, one tap). It is a QUESTION, not a claim. Carding it as a
+    # watch is deliberate: the desk's existing _apply_entry_fill() then upgrades it to a real
+    # position at the real fill price when the provider posts one, so this feeds the mechanism
+    # that already exists rather than duplicating it.
+    # CARD -> still only survives if the live option quote corroborates the stated premium
+    #         (checked below, off the real chain — not off the model).
+    payload = {"text": canonical, "provider": prov, "channel": None, "_from_llm": True,
+               "_allow_test_ingest": True if os.environ.get("DESK_ENV") == "test" else None,
+               "raw_override": text,
+               "llm": {"action": act, "reason": d.get("reason"), "why": (r.get("why") or []),
+                       "confidence": d.get("confidence"), "unresolved": d.get("unresolved"),
+                       "resolved_from_context": d.get("resolved_from_context"),
+                       "targets": d.get("targets"), "quotes": (d.get("llm") or {}).get("quotes"),
+                       "model": LLM.MODEL},
+               "force_watch": True, "needs_confirm": True}
+    try:
+        entry = ingest(payload)
+    except Exception:
+        return
+    if not isinstance(entry, dict) or not entry.get("id"):
+        return
+    if act == "CARD":
+        ok, note = LLM.corroborated(d["sig"], (entry.get("opt") or {}).get("mid"))
+        entry["llm"]["corroboration"] = note
+        if ok and not (entry.get("junk") or {}).get("block"):
+            # An INDEPENDENT source agrees this contract trades where the provider said it does.
+            entry["status"] = "NEW"
+            entry["needs_confirm"] = False
+        save_signals()
+    _alert(f"{'🔎' if entry.get('needs_confirm') else '✅'} {prov}: "
+           f"{'CONFIRM' if entry.get('needs_confirm') else 'recovered'} "
+           f"{d['sig']['ticker']} {d['sig']['strike']}{d['sig']['type']}"
+           f"{' @$'+str(d['sig']['premium']) if d['sig'].get('premium') else ''} "
+           f"— {d.get('reason')}\n\"{text[:140]}\"",
+           "Signal Desk — Chip read this")
+
+
+_DRAINING = False
+
+
+def drain_llm():
+    """INTEGRATION POINT 3/5 — main-thread application of finished reviews. Called from the
+    ingest path and from the dashboard poll, so results land within a couple of seconds without
+    a second thread ever touching SIGNALS.
+
+    Re-entrancy guard: _apply_llm_result re-enters ingest(), which calls drain_llm() again.
+    That terminates on its own (the queue is popped, not peeked), but a guard is a cheaper way
+    to be sure than reasoning about it on a desk that trades real money."""
+    global _DRAINING
+    if not LLM or _DRAINING:
+        return
+    _DRAINING = True
+    try:
+        for r in LLM.drain():
+            try:
+                _apply_llm_result(r)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    finally:
+        _DRAINING = False
+
+
 def ingest(data):
     text = (data.get("text") or "").strip()
     if os.environ.get("DESK_ENV") == "test" and not data.get("_allow_test_ingest"):
@@ -1421,6 +1559,16 @@ def ingest(data):
     # Author detection is only the fallback for channels we haven't mapped.
     prov = CHMAP.get(data.get("channel")) or E.detect_provider(data.get("author")) or data.get("provider")
     _inlog(data.get("channel"), prov, text, "RECV")   # ground-truth: this message reached the server
+    # --- LLM PARSING LAYER (integration point 4/5) ---
+    # Record EVERY message for conversational context before any parsing decision, so that
+    # "In SMCI july 31" can later be resolved against "Watching SMCI 25 calls". Then apply any
+    # reviews that finished since the last request. Both are no-ops without the module.
+    if LLM and not data.get("_from_llm"):
+        try:
+            LLM.note_message(prov, text, msg_id=data.get("msg_id"))
+        except Exception:
+            pass
+    drain_llm()
     if prov and E.provider_disabled(prov):            # user ELIMINATED this provider — drop it entirely
         _inlog(data.get("channel"), prov, text, "DISABLED")
         return {"disabled": prov}
@@ -1508,6 +1656,7 @@ def ingest(data):
             return {"management": c["type"], "linked": None}
 
     if not res:                                             # res computed above (fresh-entry check)
+        _llm_review(text, prov, res, None, c, data)         # LLM LAYER (5/5a): nothing parsed
         if prov and _maybe_missed_entry(text, c) and text not in _MISSED_ALERTED:
             _MISSED_ALERTED.add(text)
             _inlog(data.get("channel"), prov, text, "MISS?")
@@ -1697,8 +1846,16 @@ def ingest(data):
     entry = {"id": sid, "ts": now.strftime("%H:%M:%S"), "iso": now.isoformat(),
              "ts_utc": now.astimezone(timezone.utc).isoformat(),
              "provider": prov or "unknown",
-             "status": "WATCHING" if res.get("watch") else "NEW",   # provider eyeing it, not filled yet
-             "msg_id": data.get("msg_id"), "raw": text[:200], **res}
+             "status": "WATCHING" if (res.get("watch") or data.get("force_watch")) else "NEW",
+             "msg_id": data.get("msg_id"),
+             # raw_override: an LLM-recovered card is fed back through ingest as canonical text
+             # ("SMCI 25C Jul 31 @1.67"), but the card must show what the PROVIDER actually
+             # wrote — otherwise the desk displays a sentence no human ever posted.
+             "raw": (data.get("raw_override") or text)[:200], **res}
+    if data.get("llm"):
+        entry["llm"] = data["llm"]
+        entry["needs_confirm"] = bool(data.get("needs_confirm"))
+        entry["canonical"] = text
     # Price-plausibility flag: if the live contract price is an order of magnitude off the provider's
     # stated premium, the signal is a misparse (wrong strike/expiry, or a number that isn't a premium —
     # e.g. "META 375C @ 2.9" when META is $674 and that call is worth $298). Warn; don't trust the ticket.
@@ -1726,6 +1883,7 @@ def ingest(data):
         _log_paper_entry(prov, sid, entry)
     touch_source(data.get("channel") or prov or "unknown", prov,
                  f"{res['sig']['ticker']} {res['sig']['strike']}{res['sig']['type']}", data.get("name"))
+    _llm_review(text, prov, res, entry, c, data)    # LLM LAYER (5/5b): carded, but is it right?
     _signal_alert(entry)                            # push the FULL info of EVERY new card to Discord
     # terminal echo
     print(f"\n⚡ {entry['ts']} {prov or '?'}  {res['sig']['ticker']} {res['sig']['strike']}"
@@ -2080,7 +2238,8 @@ class H(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path.startswith("/api/signals"):
-            refresh_account()
+            drain_llm()      # LLM LAYER: dashboard polls every ~2.5s, so a finished review is
+            refresh_account()  # applied within seconds — still entirely on the main thread.
             check_alerts()
             livekeys = ("mid", "pnl_pct", "peak_pct", "iv", "delta", "spread_pct", "alert", "mismatch",
                         "spot", "entry_spot", "spot_dir")

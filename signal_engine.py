@@ -398,7 +398,13 @@ def parse_signal(s, provider=None):
     if re.match(r'\s*(sold|all ?out|out\b|trimm?ed|cutting|closing|secure|scal(ed|ing)|de-?risk)\b', low):
         return None
     m, typ, assumed, strike = None, None, False, None
-    text = _mask_dates(text)      # a DATE's digits can never be the strike -- see _mask_dates
+    # A DATE's digits can never be the strike -- see _mask_dates. But the mask is for the STRIKE
+    # SCAN ONLY: _parse_expiry has to read the very spans _mask_dates blanks out, so it keeps the
+    # original. (Masking the text the expiry parser saw made EVERY signal parse to expiry=None --
+    # including 0DTE -- so every card priced the wrong contract: wrong Greeks, wrong theta, wrong
+    # price-mismatch check. Same family as the QQQ 700C swing that got priced as 0DTE.)
+    unmasked = text
+    text = _mask_dates(text)
     for mm in _STRIKE_RE.finditer(text):                        # strike + C/P suffix (e.g. 750C, $73c)
         typ = mm.group(2).upper(); m = mm; strike = mm.group(1); break
     if not m:                                                   # strike ADJACENT to "call"/"put" ("210 calls")
@@ -432,7 +438,7 @@ def parse_signal(s, provider=None):
     tk = _resolve_ticker(text, m.start(), provider, strike)
     if not tk:
         return None
-    dte, expiry = _parse_expiry(text)
+    dte, expiry = _parse_expiry(unmasked)      # MUST be the unmasked text -- see above
     prem = _parse_premium(text, m.end())
     if prem is None:                                            # odd word order / space-shorthand — sniff it
         prem = _sniff_premium(text, strike)
