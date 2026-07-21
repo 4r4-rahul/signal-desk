@@ -252,6 +252,7 @@ def load_signals():
 
 
 SIGNALS_CAP = 350   # in-memory ceiling — mirrors the 250 disk window with headroom for kept-alive cards
+CHIP_LOG_KEEP = 24  # keep the last N completed chip scalps as the persistent per-provider trade-log
 
 
 def trim_signals():
@@ -268,11 +269,16 @@ def trim_signals():
         open_jids = set()
     recent = SIGNALS[-SIGNALS_CAP:]
     recent_ids = {id(s) for s in recent}            # identity, not s["id"] (ids can repeat across reposts)
+    # keep the last ~24 COMPLETED chip scalps as the persistent trade-log (bounded — no unbounded growth)
+    _chip_ended = [s for s in SIGNALS if s.get("provider") == "chip"
+                   and (s.get("shadow") or {}).get("state") == "ended"][-CHIP_LOG_KEEP:]
+    chip_keep = {id(s) for s in _chip_ended}
     keep_old = [s for s in SIGNALS[:-SIGNALS_CAP] if id(s) not in recent_ids and (
                 (s.get("reentry") or {}).get("armed")
                 or (s.get("shadow") and s["shadow"].get("state") != "ended")
                 or s.get("id") in open_jids
-                or s.get("status") in ("NEW", "WATCHING"))]
+                or s.get("status") in ("NEW", "WATCHING")
+                or id(s) in chip_keep)]
     SIGNALS = keep_old + recent                     # preserve chronological order
 
 
@@ -315,13 +321,22 @@ def _resolve_expiry(sig):
         m = (int(m.group(1)), int(m.group(2)))
     if m:
         mo, dd = m
-        for yr in (now.year, now.year + 1):
+        # Pick the NEAREST calendar date matching this MM/DD, not the next FUTURE one. The old rule
+        # ("first year where d >= today") turned any slightly-stale signal into a LEAP a year out: on
+        # 7/21 a "7/8" callout resolved to 2027-07-08, and the desk then quoted a contract that does not
+        # trade (IBKR: "No security definition") on every lap. A bare MM/DD on a scalping desk always
+        # means the closest such date. Ties break toward the future so 0DTE-ish signals stay live.
+        cands = []
+        for yr in (now.year - 1, now.year, now.year + 1):
             try:
-                d = datetime(yr, mo, dd, tzinfo=ET)
-                if d.date() >= now.date():
-                    return d.strftime("%Y%m%d")
+                cands.append(datetime(yr, mo, dd, tzinfo=ET))
             except ValueError:
-                return None
+                continue                                   # e.g. 2/29 in a non-leap year
+        if not cands:
+            return None
+        best = min(cands, key=lambda d: (abs((d.date() - now.date()).days),
+                                         0 if d.date() >= now.date() else 1))
+        return best.strftime("%Y%m%d")
     return None
 
 
@@ -503,6 +518,276 @@ def _init_shadow(entry):
                        "expiry": _resolve_expiry(sg) or (entry.get("opt") or {}).get("expiry"),
                        "start_utc": datetime.now(timezone.utc).isoformat(), "state": "live",
                        "result": None, "peak": 0.0, "trough": 0.0, "now": 0.0}
+
+
+_CHIP_PHASE_LABELS = {"ENTERED": "taking", "MANAGING": "managing", "T1_HIT": "½ booked",
+                      "T2_HIT": "¾ booked", "RUNNER": "runner", "TRAILED_OUT": "trailed out",
+                      "STOPPED": "cut", "RESOLVED": "closed"}
+
+
+def _chip_narration(phase, sh, t1, t2, t3, stop, blended_pct, blended_r):
+    """Human-readable lifecycle log — reconstructable from current fields alone (peak is monotonic, so every
+    crossed milestone is known). Numbers come straight from ticket/shadow; the closed line's R is the SAME
+    scale-out proxy as blended_r, so narration can never contradict the scored result."""
+    peak, now = sh.get("peak", 0.0), sh.get("now")
+    lines = [f'📈 taking @ {sh.get("ref")}']
+    if peak >= t1:
+        lines.append(f'½ booked at +{t1:.0f}% → stop to breakeven')
+    if peak >= t2:
+        lines.append(f'¼ booked at +{t2:.0f}% → trailing +{t1:.0f}%')
+    if peak >= t3:
+        lines.append(f'runner target +{t3:.0f}% tagged (peak +{peak:.0f}%)')
+    if phase == "STOPPED":
+        lines.append(f'cut −{stop:.0f}% at stop (−1R)')
+    elif phase == "TRAILED_OUT" and now is not None:
+        lines.append(f'runner exited +{now:.0f}%')
+    elif phase == "RESOLVED" and blended_pct is not None:
+        icon = "✅" if (blended_r or 0) > 0 else "❌"
+        lines.append(f'{icon} closed {blended_pct:+.0f}% ({blended_r:+.1f}R)')
+    return lines
+
+
+_CHIP_TAPE_BAR, _CHIP_TAPE_FLOOR = 62, 52      # chip's entry bar / the desk's no-edge floor
+_CHIP_VWAP_HOLD, _CHIP_VWAP_LOST = 0.03, -0.05  # % of price, in the trade's favour
+_CHIP_DRIFT_BAND = -12                          # a full strong→moderate grade-band slide
+
+
+def _fin2(x, nd=2):
+    try:
+        x = float(x)
+        return round(x, nd) if x == x and abs(x) != float("inf") else None
+    except Exception:
+        return None
+
+
+def _chip_px(entry, now_pct, t1, t2, t3, cur_stop, stop, sh):
+    """Live $ ladder derived from entry×(1+pct/100). NEVER read ticket.t1/$ — those can be the generic
+    ladder. `mark` is the option MID (what shadow.now is computed off); `out` is the bid (real exit)."""
+    if not entry:
+        return None
+    tick = 0.05 if entry >= 3 else 0.01
+    rd = lambda x: round(round(x / tick) * tick, 2)
+    at = lambda p: rd(entry * (1 + (p or 0) / 100.0))
+    mark, spread, bid = at(now_pct), sh.get("spread_pct"), sh.get("bid")
+    out = _fin2(bid) if bid else (rd(mark * (1 - spread / 200.0)) if spread else None)
+    t1p, stopp = at(t1), at(cur_stop)
+    return {"entry": _fin2(entry), "mark": mark, "out": out, "spread_pct": _fin2(spread, 1),
+            "t1": t1p, "t2": at(t2), "t3": at(t3), "stop": stopp,
+            "to_t1_pct": _fin2((t1 or 0) - (now_pct or 0), 1), "to_t1_cx": int(round((t1p - mark) * 100)),
+            "to_stop_pct": _fin2((now_pct or 0) - (cur_stop or 0), 1),
+            "to_stop_cx": int(round((mark - stopp) * 100)),
+            "open_r": _fin2((now_pct or 0) / abs(stop), 2) if stop else None, "mark_source": "mid"}
+
+
+def _chip_clock(start_utc, ended_utc, er, sh, phase):
+    """Held-for + session clock + HONEST 0DTE theta burn (extrinsic ≈ k·√T, so decay is back-loaded —
+    a flat theta/6.5 understates the last hour badly)."""
+    import math
+    try:
+        t0 = datetime.fromisoformat(start_utc) if start_utc else None
+    except Exception:
+        t0 = None
+    if not t0:
+        return None
+    end = None
+    if ended_utc:
+        try: end = datetime.fromisoformat(ended_utc)
+        except Exception: end = None
+    held = int(((end or datetime.now(timezone.utc)) - t0).total_seconds())
+    etn = datetime.now(ET)
+    close = etn.replace(hour=16, minute=0, second=0, microsecond=0)
+    dte = (er.get("dte") or {}).get("dte")
+    # a 1DTE/2DTE contract has FULL sessions left beyond today's close — without the 390·dte term the
+    # theta narrative on a multi-day card was wrong by an entire session.
+    mins_close = max(0, int((close - etn).total_seconds() / 60)) + 390 * int(dte or 0)
+    h = mins_close / 60.0
+    tp = None
+    if sh.get("theta") and sh.get("mark"):
+        tp = _fin2(abs(sh["theta"]) / sh["mark"] * 100, 0)          # LIVE theta
+    src = "live" if tp is not None else "entry"
+    if tp is None:
+        tp = (er.get("dte") or {}).get("theta_pct")
+    burn_next = None
+    if dte == 0 and h > 0:
+        burn_next = int(round((1 - math.sqrt(max(h - 1, 0) / h)) * 100))
+    band, warn = "normal", None
+    if dte == 0:
+        hhmm = etn.hour * 100 + etn.minute
+        if hhmm >= 1545:
+            band, warn = "eod", "⏰ EOD — flat the 0DTE before the close"
+        elif mins_close <= 90:
+            band, warn = "late", "⏳ late-session 0DTE — θ dominates from here; it needs the move NOW"
+        elif etn.hour >= 13:
+            band, warn = "cliff", "⏱ past 13:00 — chip wouldn't OPEN a 0DTE here"
+    hl = f"{held // 3600}h {held % 3600 // 60:02d}m" if held >= 3600 else f"{held // 60}m"
+    cl = f"{mins_close // 60}h {mins_close % 60:02d}m to close" if mins_close >= 60 else f"{mins_close}m to close"
+    line = f"held {hl} · {cl}"
+    if tp is not None:
+        line += (f" · θ ≈ −{burn_next}%/hr from here (0DTE, accelerating)" if burn_next is not None
+                 else f" · θ ≈ −{tp}%/day")
+    return {"held_s": held, "held_label": hl, "mins_to_close": mins_close, "close_label": cl,
+            "dte": dte, "theta_pct_day": tp, "theta_source": src, "burn_next_hr": burn_next,
+            "band": band, "line": line, "warn": (None if phase in ("STOPPED", "TRAILED_OUT", "RESOLVED") else warn)}
+
+
+def _chip_giveback(peak, now, entry, result, t1):
+    """How much of the peak has been surrendered. Thresholds are the desk's OWN exit_rule numbers."""
+    if not peak or peak < 5:
+        return None
+    pts = _fin2(peak - (now or 0), 1)
+    if pts is None or pts < 5:
+        return None
+    usd = _fin2((entry or 0) * (peak - (now or 0)) / 100.0) if entry else None
+    lvl = "watch"
+    if pts >= 25 and peak >= 30:
+        lvl = "exit"
+    elif pts >= 17:
+        lvl = "rule"
+    line = f"gave back {pts:.0f} pts — peaked +{peak:.0f}%, now {now:+.0f}%"
+    if lvl == "rule":
+        line += " — the book's winners top out at ~17"
+    elif lvl == "exit":
+        line += " — that's the desk's trail-exit (25 off peak)"
+    if result == "LOSS" and t1 and peak >= t1:
+        line = f"round-tripped +{peak:.0f}% → {now:+.0f}%"
+    return {"pts": pts, "usd": usd, "cx": int(round((usd or 0) * 100)), "peak": _fin2(peak, 1),
+            "now": _fin2(now, 1), "level": lvl, "line": line, "round_trip": False}
+
+
+def _chip_thesis(er, lr, reason, side, phase, t1, cur_stop, stop):
+    """Is chip's ENTRY REASON still true? A level-thesis (VWAP reclaim) dies on the level alone; a
+    momentum-thesis needs both the level AND the tape gone. Ordered — first match wins."""
+    if not er:
+        return None
+    tae = er.get("tape_at_entry") or {}
+    s_in = tae.get("score")
+    kind = "level" if ("VWAP" in (reason or "") or (er.get("trigger") or {}).get("trigger_type", "").startswith("vwap")) else "momentum"
+    done = phase in ("STOPPED", "TRAILED_OUT", "RESOLVED")
+    if not lr or lr.get("stale") or lr.get("score") is None or lr.get("vfav") is None:
+        return {"state": "unknown", "kind": kind, "icon": "·", "word": "NO READ", "why": "no live tape read",
+                "line": "· no live read — chip's tape is stale", "action": "", "score_at_entry": s_in}
+    s, g, vf = lr["score"], lr.get("grade"), lr["vfav"]
+    drift = (s - s_in) if (s_in is not None) else 0
+    rsi, ema = lr.get("rsi"), lr.get("ema_side")
+    healthy = (45 <= (rsi or 50) <= 72) if side == "C" else (28 <= (rsi or 50) <= 55)
+    if g == "against":                                   st, why = "broken", "tape flipped against"
+    elif s < _CHIP_TAPE_FLOOR:                           st, why = "broken", f"tape collapsed to {s}"
+    elif kind == "level" and vf <= _CHIP_VWAP_LOST:      st, why = "broken", f"lost VWAP ({vf:+.2f}%)"
+    elif kind == "momentum" and vf <= _CHIP_VWAP_LOST and s < _CHIP_TAPE_BAR:
+        st, why = "broken", f"lost VWAP and tape {s} < {_CHIP_TAPE_BAR}"
+    elif s < _CHIP_TAPE_BAR:                             st, why = "weakening", f"tape {s} below chip's {_CHIP_TAPE_BAR} bar"
+    elif vf <= _CHIP_VWAP_HOLD:                          st, why = "weakening", f"VWAP contested ({vf:+.2f}%)"
+    elif drift <= _CHIP_DRIFT_BAND:                      st, why = "weakening", f"conviction faded {s_in}→{s}"
+    elif ema == "against" and not healthy:               st, why = "weakening", f"EMA turned, RSI {rsi:.0f} rolling"
+    else:                                                st, why = "intact", f"still {'above' if vf > 0 else 'at'} VWAP ({vf:+.2f}%)"
+    if s_in is not None:
+        why += f", tape {s} vs {s_in} in"
+    ic = {"intact": "✅", "weakening": "⚠️", "broken": "🛑"}[st]
+    wd = {"intact": "INTACT", "weakening": "WEAKENING", "broken": "BROKEN"}[st]
+    act = ""
+    if not done:
+        hit1 = phase not in ("ENTERED", "MANAGING")
+        if st == "broken":
+            act = (f"runner's thesis is gone — take the trail at +{cur_stop:.0f}%" if hit1
+                   else f"structure's gone — don't wait for the −{stop:.0f}% stop; cut or tighten now")
+        elif st == "weakening":
+            act = f"tighten — thesis is soft, don't add" if hit1 else f"almost there with a fading tape — bank the base at +{t1:.0f}%"
+        else:
+            act = f"runner's earned it — trail at +{cur_stop:.0f}%" if hit1 else f"let it work toward T1 +{t1:.0f}%"
+    return {"state": st, "kind": kind, "icon": ic, "word": wd, "why": why, "line": f"{ic} thesis {st} — {why}",
+            "action": act, "vfav": _fin2(vf, 2), "vwap": _fin2(lr.get("vwap")), "spot": _fin2(lr.get("spot")),
+            "score": s, "score_at_entry": s_in, "drift": drift, "ema_side": ema, "rsi": _fin2(rsi, 0),
+            "stale": False, "age_s": lr.get("age_s")}
+
+
+def _chip_drift(er, lr):
+    """Which tape FACTOR moved since entry (VWAP/EMA/RSI/room) — same producer both sides, exact join."""
+    if not er or not lr:
+        return None
+    ein = {f.get("factor"): f.get("score") for f in ((er.get("tape_at_entry") or {}).get("factors") or [])}
+    now = {f.get("factor"): f.get("score") for f in (lr.get("factors") or [])}
+    if not ein or not now:
+        return None
+    W = {"VWAP": 0.35, "EMA": 0.25, "RSI": 0.25, "room": 0.15}
+    rows, flipped = [], []
+    for k in ("VWAP", "EMA", "RSI", "room"):
+        a, b = ein.get(k), now.get(k)
+        if a is None or b is None:
+            continue
+        d = round(b - a, 2)
+        fl = (a > 0.05 and b < -0.05) or (a < -0.05 and b > 0.05)
+        if fl:
+            flipped.append(k)
+        if fl or abs(d) >= 0.20:
+            rows.append({"factor": k, "in": round(a, 2), "now": round(b, 2), "d": d,
+                         "cd": round(d * W.get(k, 0), 3), "flipped": fl})
+    si, sn = (er.get("tape_at_entry") or {}).get("score"), lr.get("score")
+    if si is None or sn is None:
+        return None
+    line = f"conviction {si} → {sn} ({sn - si:+d})" + (f" · {'+'.join(flipped)} flipped" if flipped else "")
+    return {"score_in": si, "score_now": sn, "delta": sn - si, "flipped": flipped, "rows": rows, "line": line}
+
+
+def _chip_live_read(s):
+    """O(1) join to chip's live tape by ticker+side, id-gated so a NEW scalp can't inherit an old read."""
+    import time
+    try:
+        import chip_desk as CD
+    except Exception:
+        return None
+    sg = s.get("sig") or {}
+    lr = (CD.STATUS.get(f'{sg.get("ticker")}|{sg.get("type")}') or {}).get("live_read")
+    if not lr or lr.get("sid") != s.get("id"):
+        return None
+    age = time.time() - (lr.get("ts") or 0)
+    return {**lr, "age_s": round(age), "stale": age > 90}
+
+
+def _chip_lifecycle(s):
+    """Derive the live scalp lifecycle for a chip card from its shadow + ticket (pure, O(1), no I/O).
+    Phase progression is peak-based — exactly how db._shadow_scaleout books ½@t1 / ¼@t2 — so the card's
+    phase, current stop, and narrated R stay consistent-by-construction with the scored discipline."""
+    import db as DB
+    sh, tk, sg = s.get("shadow") or {}, s.get("ticket") or {}, s.get("sig") or {}
+    meta = s.get("chip") or {}
+    t1, t2, t3, stop = tk.get("t1_pct"), tk.get("t2_pct"), tk.get("t3_pct"), tk.get("stop_pct")
+    if None in (t1, t2, t3, stop):                       # a chip card must carry all four targets
+        return None
+    now, peak, trough = sh.get("now"), sh.get("peak", 0.0), sh.get("trough", 0.0)
+    state, result = sh.get("state"), sh.get("result")
+    hit1, hit2, hit3 = peak >= t1, peak >= t2, peak >= t3
+    cur_stop = -stop if not hit1 else (0.0 if not hit2 else t1)
+    stopped = (not hit1) and (result == "LOSS" or (now is not None and now <= -stop))
+    trailed = hit1 and (now is not None and now <= cur_stop)
+    if state == "ended":               phase = "RESOLVED"
+    elif stopped:                      phase = "STOPPED"
+    elif trailed:                      phase = "TRAILED_OUT"
+    elif hit3:                         phase = "RUNNER"
+    elif hit2:                         phase = "T2_HIT"
+    elif hit1:                         phase = "T1_HIT"
+    elif peak == 0 and (now or 0) == 0: phase = "ENTERED"
+    else:                              phase = "MANAGING"
+    # blended-R proxy: run the SAME scale-out discipline over a representative 2-point path
+    _er = meta.get("entry_read") or {}
+    _lr = _chip_live_read(s) if sh.get("state") == "live" else None
+    ticks = [-stop] if stopped else [peak, now if now is not None else peak]
+    blended_pct = DB._shadow_scaleout(ticks, t1, t2, stop, t3)
+    blended_r = round(blended_pct / abs(stop), 2) if (blended_pct is not None and stop) else None
+    return {"phase": phase, "phase_label": _CHIP_PHASE_LABELS.get(phase, phase),
+            "entry_px": sh.get("ref"), "leg": f'{sg.get("ticker")} {sg.get("strike")}{sg.get("type")}',
+            "cp": sg.get("type"), "now_pct": now, "peak_pct": peak, "trough_pct": trough,
+            "cur_stop_pct": cur_stop, "t1_pct": t1, "t2_pct": t2, "t3_pct": t3, "stop_pct": stop,
+            "hit": [hit1, hit2, hit3], "stopped": bool(stopped), "result": result,
+            "blended_pct": blended_pct, "blended_r": blended_r,
+            "opened": sh.get("start_utc"), "closed": sh.get("ended_utc"),
+            "reason": meta.get("reason"), "regime": meta.get("regime"), "news": meta.get("news"),
+            "entry_read": _er,                          # frozen WHY (strike/DTE/tape at fill) for the story
+            "px": _chip_px(sh.get("ref"), now, t1, t2, t3, cur_stop, stop, sh),
+            "clock": _chip_clock(sh.get("start_utc"), sh.get("ended_utc"), _er, sh, phase),
+            "give_back": _chip_giveback(peak, now, sh.get("ref"), result, t1),
+            "thesis": _chip_thesis(_er, _lr, meta.get("reason"), sg.get("type"), phase, t1, cur_stop, stop),
+            "drift": _chip_drift(_er, _lr),
+            "narration": _chip_narration(phase, sh, t1, t2, t3, stop, blended_pct, blended_r)}
 
 
 def _pos_alert(p, st, key, text):
@@ -812,6 +1097,8 @@ def monitor_loop():
                         _t2f = (_pl["tp2"] / _e - 1) if (_e and _pl.get("tp2")) else 0.70
                         s["ticket"] = E.order_ticket(q, sg.get("premium"), _pl.get("stop_pct") or 30,
                                                      (_pl.get("tp1_pct") or 35) / 100.0, _t2f)
+                        if s.get("provider") == "chip":       # restore chip's own ladder over the rebuild
+                            _chip_ladder(s["ticket"], s.get("chip_plan"))
                         save_signals()
                     r = _live_reco(sg.get("premium"), q["mid"], q.get("ask"), q.get("spread_pct"))
                     if r:
@@ -871,6 +1158,10 @@ def monitor_loop():
                     sh["now"] = pct
                     sh["peak"] = round(max(sh.get("peak", 0), pct), 1)
                     sh["trough"] = round(min(sh.get("trough", 0), pct), 1)
+                    # stash the live quote we already have — powers live θ + the real exit (bid) on the card
+                    sh["mark"], sh["bid"], sh["ask"] = q.get("mid"), q.get("bid"), q.get("ask")
+                    sh["spread_pct"], sh["theta"], sh["delta"] = q.get("spread_pct"), q.get("theta"), q.get("delta")
+                    sh["gamma"], sh["iv"] = q.get("gamma"), q.get("iv")   # gamma moves P(T1) ~16 pts; iv is σ
                     _path_tick(s["id"], "shadow", q, sg["ticker"], sh["ref"], sh, sh.get("start_utc"), conn)
                     if not sh.get("result"):                      # disciplined result = whichever we'd hit FIRST
                         if pct <= -sh["stop_pct"]:
@@ -1074,6 +1365,29 @@ def _maybe_missed_entry(text, c):
     return has_price and has_strike and has_alpha
 
 
+def _chip_ladder(tk, cp):
+    """Overlay chip's per-ticker R-ladder onto an order ticket and RE-DERIVE the $ levels off the limit.
+    Must be called at ingest AND after ANY ticket rebuild (the wrong-expiry heal at ~1084 constructs a
+    fresh ticket from plan.tp1_pct, which chip never sets — silently reverting 22/46/74 to 35/70/110)."""
+    if tk is None or not cp:      # NB: `not tk` would skip a brand-new EMPTY ticket dict
+        return tk
+    tk.update(t1_pct=cp["t1_pct"], t2_pct=cp["t2_pct"], t3_pct=cp["t3_pct"], stop_pct=cp["stop_pct"])
+    e = tk.get("limit")
+    if e:
+        tick = 0.05 if e >= 3 else 0.01
+        rd = lambda x: round(round(x / tick) * tick, 2)
+        tk["t1"], tk["t2"], tk["t3"] = (rd(e * (1 + cp["t1_pct"] / 100.0)),
+                                        rd(e * (1 + cp["t2_pct"] / 100.0)),
+                                        rd(e * (1 + cp["t3_pct"] / 100.0)))
+        tk["stop"] = rd(e * (1 - cp["stop_pct"] / 100.0))
+        risk = e - tk["stop"]
+        if risk > 0:
+            tk["rr1"], tk["rr2"], tk["rr3"] = (round((tk["t1"] - e) / risk, 2),
+                                               round((tk["t2"] - e) / risk, 2),
+                                               round((tk["t3"] - e) / risk, 2))
+    return tk
+
+
 def ingest(data):
     text = (data.get("text") or "").strip()
     if os.environ.get("DESK_ENV") == "test" and not data.get("_allow_test_ingest"):
@@ -1251,7 +1565,8 @@ def ingest(data):
             import market
             _exp = _resolve_expiry(res["sig"])            # price the SIGNAL'S expiry (e.g. 7/9), not nearest/0DTE
             tech = market.context(res["sig"]["ticker"], res["sig"]["type"],
-                                  strike=res["sig"]["strike"], expiry=_exp)
+                                  strike=res["sig"]["strike"], expiry=_exp,
+                                  want_equity=(EQUITY_SOURCE == "ibkr"))   # avoid IBKR err 322 spam
             if not tech.get("ok"):
                 err = (tech.get("error") or "").lower()
                 if "security definition" in err or "unknown contract" in err or "no valid" in err:
@@ -1350,8 +1665,10 @@ def ingest(data):
     # against ITS OWN t1/t2/stop (not the generic 40/80 defaults). Guarded to provider=="chip" only.
     if prov == "chip" and data.get("chip_plan"):
         cp = data["chip_plan"]
-        tk = res.setdefault("ticket", {})
-        tk.update(t1_pct=cp["t1_pct"], t2_pct=cp["t2_pct"], t3_pct=cp["t3_pct"], stop_pct=cp["stop_pct"])
+        # Overlay the %s AND re-derive the $ ladder off the limit (overwriting only the %s left t1/t2/t3
+        # at the generic 35/70/110% dollars — a card read T1 22% but $2.47 = 1.83×1.35 instead of $2.23).
+        _chip_ladder(res.setdefault("ticket", {}), cp)
+        res["chip_plan"] = cp                              # persisted so the wrong-expiry heal can restore it
         res.setdefault("plan", {})["stop_pct"] = cp["stop_pct"]
         res["chip"] = data.get("chip_meta") or {}          # {regime, news, stale} badge for the card
     now = datetime.now(ET)
@@ -1733,13 +2050,20 @@ class H(http.server.BaseHTTPRequestHandler):
             posmap = {p["journal_id"]: withlive(p) for p in _allpos if p.get("journal_id")}
             _window = SIGNALS[-60:]
             _armed = [s for s in SIGNALS if (s.get("reentry") or {}).get("armed") and s not in _window]
+            # surface the last ~24 COMPLETED chip scalps as the persistent trade-log, even past the 60-window
+            _chiphist = [s for s in SIGNALS if s.get("provider") == "chip"
+                         and (s.get("shadow") or {}).get("state") == "ended" and s not in _window][-CHIP_LOG_KEEP:]
             sigs = []
-            for s in reversed(_window + _armed):        # always surface armed re-entry cards, even if older
+            for s in reversed(_window + _armed + _chiphist):
                 s2 = dict(s)
                 if s["id"] in posmap:
                     s2["pos"] = posmap[s["id"]]
                 if s["id"] in LIVE_SIG:
                     s2["live"] = LIVE_SIG[s["id"]]          # live move% + recommendation for un-taken cards
+                if s.get("provider") == "chip" and s.get("shadow"):
+                    _cl = _chip_lifecycle(s)                # per-ticker scalp lifecycle for the live/log card
+                    if _cl:
+                        s2["chip_lifecycle"] = _cl
                 sigs.append(s2)
             # CO-SIGN (B3): flag NEW signals whose correlation cluster is called by OTHER providers
             # within the last 30 min — one bet, not N. The US-BETA cluster cap already bounds the risk.
@@ -1772,6 +2096,11 @@ class H(http.server.BaseHTTPRequestHandler):
             _tot = {"signals": len(SIGNALS),
                     "taken": sum(1 for s in SIGNALS if s.get("status") in ("TAKEN", "CLOSED")),
                     "skipped": sum(1 for s in SIGNALS if s.get("status") == "SKIPPED")}
+            try:
+                import chip_desk as _CD
+                _chip = _CD.snapshot()
+            except Exception:
+                _chip = None
             return self._send(200, {"account": E.ACCOUNT, "risk": E.RISK_PCT, "start": START_ACCOUNT,
                                     "now": datetime.now(ET).isoformat(),
                                     "sleeve": SLEEVE, "sources": SOURCES, "discipline": D.state(),
@@ -1779,7 +2108,7 @@ class H(http.server.BaseHTTPRequestHandler):
                                     "positions": orphans, "totals": _tot, "ibkr": IBKR,
                                     "pending": PENDING, "signals": sigs, "stats": ST.performance(),
                                     "calibration": _sc_cal, "exit_quality": _sc_exit,
-                                    "provider_edge": _provider_edge_cached(),
+                                    "provider_edge": _provider_edge_cached(), "chip": _chip,
                                     "broker": _broker_snap()})
         html = (ROOT / "dashboard.html").read_bytes()
         self._send(200, html, "text/html; charset=utf-8")

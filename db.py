@@ -98,9 +98,39 @@ def _f(x):
         return None
 
 
+# Columns added AFTER a table first shipped. `CREATE TABLE IF NOT EXISTS` is a no-op on an existing table,
+# so a new column in SCHEMA would never appear on a live DB — every read of it would raise. ALTER is the
+# only migration path SQLite gives us. Append-only: never rename or drop, and keep the tuple ordered.
+_ADDED_COLS = (
+    # (table, column, type-and-default)
+)
+
+
+def _ensure_cols(con):
+    """Idempotent forward-migration for columns added after a table shipped. Cheap (one PRAGMA per table)
+    and safe to call on every connect — SQLite has no ADD COLUMN IF NOT EXISTS, so we diff first."""
+    tables = {t for t, _, _ in _ADDED_COLS}
+    have = {}
+    for t in tables:
+        try:
+            have[t] = {r[1] for r in con.execute(f"PRAGMA table_info({t})")}
+        except Exception:
+            have[t] = set()
+    for t, col, decl in _ADDED_COLS:
+        if col in have.get(t, set()):
+            continue
+        try:
+            con.execute(f"ALTER TABLE {t} ADD COLUMN {col} {decl}")
+            have[t].add(col)
+        except Exception:
+            pass          # column raced in from another connection, or the table doesn't exist yet
+    con.commit()
+
+
 def connect():
     con = sqlite3.connect(str(DB_PATH))
     con.executescript(SCHEMA)
+    _ensure_cols(con)
     return con
 
 
@@ -222,15 +252,17 @@ def record_tick(row):
         _LOCAL.con = None
 
 
-def _shadow_scaleout(ticks, t1, t2, stop):
+def _shadow_scaleout(ticks, t1, t2, stop, t3=None):
     """Replay ordered option-%-move ticks through the desk's SCALE-OUT discipline — the exits the desk
     actually tells you to take, so the shadow measures YOUR strategy, not a naive all-out:
       · sell 1/2 at +t1, move the stop to BREAKEVEN
       · sell 1/4 at +t2, trail the stop up to +t1
-      · the runner (1/4) exits at the last observed tick / EOD
+      · the runner (1/4) books at +t3 if it gets there, else exits at the last observed tick / EOD
       · a hard stop at -stop before any fill = full -1R
     Returns the portion-weighted blended return %. Fixes both failure modes of the old binary model
-    (spike-then-die was OVERstated as a full T1 win; a big runner was UNDERstated at just T1)."""
+    (spike-then-die was OVERstated as a full T1 win; a big runner was UNDERstated at just T1).
+    t3 is optional: without it the runner never takes profit, which silently made every provider's t3
+    decorative — chip emits a t3 per ticker and it was being discarded here."""
     if not ticks:
         return None
     rem, realized, slvl, hit1, hit2 = 1.0, 0.0, -abs(stop), False, False
@@ -241,6 +273,8 @@ def _shadow_scaleout(ticks, t1, t2, stop):
             realized += 0.50 * t1; rem -= 0.50; hit1 = True; slvl = 0.0        # 1/2 out, stop -> breakeven
         if hit1 and not hit2 and pct >= t2:
             realized += 0.25 * t2; rem -= 0.25; hit2 = True; slvl = t1         # 1/4 out, trail -> +t1
+        if hit2 and t3 and pct >= t3:
+            realized += rem * t3; rem = 0.0; break                            # runner books the final target
         if pct <= slvl:
             realized += rem * slvl; rem = 0.0; break                          # remainder stopped/trailed out
     if rem > 0:
@@ -248,11 +282,11 @@ def _shadow_scaleout(ticks, t1, t2, stop):
     return round(realized, 2)
 
 
-def _shadow_r(con, signal_id, stop, t1, t2):
+def _shadow_r(con, signal_id, stop, t1, t2, t3=None):
     """Would-be blended return% + R for a shadowed signal: scale-out replay of its stored 'shadow' path."""
     rows = con.execute("SELECT opt_pct FROM path WHERE signal_id=? AND phase='shadow' AND opt_pct IS NOT NULL "
                        "ORDER BY ts_utc", (signal_id,)).fetchall()
-    ret = _shadow_scaleout([r[0] for r in rows], t1, t2, stop)
+    ret = _shadow_scaleout([r[0] for r in rows], t1, t2, stop, t3)
     if ret is None or not stop:
         return None, None
     return ret, round(ret / abs(stop), 3)
@@ -285,14 +319,14 @@ def _resync_shadow_r(con):
     from datetime import datetime, timedelta, timezone
     active_cutoff = (datetime.now(timezone.utc) - timedelta(days=_SHADOW_ACTIVE_DAYS)).isoformat()
     rows = con.execute(
-        "SELECT o.signal_id, s.stop_pct, s.t1_pct, s.t2_pct FROM outcomes o "
+        "SELECT o.signal_id, s.stop_pct, s.t1_pct, s.t2_pct, s.t3_pct FROM outcomes o "
         "JOIN signals s ON s.signal_id=o.signal_id WHERE o.kind='SHADOW' AND ("
         "  o.return_pct IS NULL OR EXISTS ("
         "    SELECT 1 FROM path p WHERE p.signal_id=o.signal_id AND p.phase='shadow' AND p.ts_utc > ?))",
         (active_cutoff,)).fetchall()
-    for sid, sp, t1, t2 in rows:
+    for sid, sp, t1, t2, t3 in rows:
         sp = sp or 30; t1 = t1 or 40; t2 = t2 or (t1 * 2)
-        ret, r = _shadow_r(con, sid, sp, t1, t2)
+        ret, r = _shadow_r(con, sid, sp, t1, t2, t3)      # t3 None -> runner rides to the last tick, as before
         if r is not None:
             con.execute("UPDATE outcomes SET return_pct=?, r_multiple=? WHERE signal_id=? AND kind='SHADOW'",
                         (ret, r, sid))

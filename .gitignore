@@ -19,6 +19,10 @@ channels/*/live_signals.md
 # derived data warehouse (rebuild: python3 db.py backfill)
 signal_desk.db
 signal_desk.db-journal
+signal_desk.db.bak-*
+# ad-hoc timestamped rescue copies (safe_io + manual pre-migration backups)
+*.bak
+*.bak.[0-9]*
 ml_dataset.csv
 
 # daily day-stop override (ephemeral, auto-expires)

@@ -340,6 +340,57 @@
   .entry-verdict{margin:6px 0;padding:7px 11px;border:1px solid var(--dim);border-left-width:3px;
     border-radius:9px;font-size:12.5px;line-height:1.5;display:block}
   .entry-trig{margin-top:3px;font-size:12px;color:var(--fg)}
+  /* ── chip live-scalp card ── */
+  .chip-phase{font-weight:700;font-size:12px}
+  .chip-phase.p-manage{color:#f59e0b} .chip-phase.p-win{color:#22c55e} .chip-phase.p-loss{color:#ef4444}
+  .chip-phase.p-done{color:var(--muted)}
+  .chip-ladder{position:relative;height:9px;border-radius:6px;background:#1f2a3d;margin:12px 0 20px;max-width:340px}
+  .chip-ladder .fill{position:absolute;height:100%;border-radius:6px;transition:width .4s ease,left .4s ease}
+  .chip-ladder .peak{position:absolute;top:-3px;width:2px;height:15px;background:#c4b5fd;opacity:.75}
+  .chip-ladder .now{position:absolute;top:-4px;width:3px;height:17px;background:var(--txt);border-radius:2px}
+  .chip-ladder .tick{position:absolute;top:-2px;width:1px;height:13px;background:var(--dim)}
+  .chip-ladder .tick.t.hit{background:#22c55e;width:2px}
+  .chip-ladder .tick.stop{background:#ef4444} .chip-ladder .tick.stop.locked{background:#22c55e}
+  .chip-ladder .lab{position:absolute;top:12px;font-size:9px;color:var(--dim);
+    font-family:'JetBrains Mono',ui-monospace,monospace;transform:translateX(-50%);white-space:nowrap}
+  .chip-narr{margin:6px 0 2px;font-size:11.5px;line-height:1.55;color:var(--muted)}
+  .chip-narr b{color:var(--fg)}
+  .tk.tp.hit{background:rgba(34,197,94,.22);border-color:rgba(34,197,94,.55)} .tk.tp.hit b{color:#4ade80}
+  .tk.stop.locked{border-color:rgba(34,197,94,.5);background:rgba(34,197,94,.1)} .tk.stop.locked b{color:#86efac}
+  /* ── chip reasoning: verdict / sweet-spot / mechanics / trigger / story ── */
+  .chip-verdict{margin:9px 0 4px}
+  .chip-ready{margin:8px 0;font-weight:700;font-size:12.5px;color:#22c55e;animation:readypulse 1.2s ease-in-out infinite}
+  @keyframes readypulse{0%,100%{opacity:1}50%{opacity:.55}}
+  .chip-fill{margin:7px 0;font-size:11.5px;color:var(--fg)} .chip-fill b{font-family:'JetBrains Mono',ui-monospace,monospace}
+  .chip-mech{margin:8px 0}
+  .chip-mech .agg{font-size:12px;color:var(--muted);margin-bottom:5px}
+  .chip-mech .mrow{display:flex;align-items:center;gap:8px;font-size:11px;margin-top:4px}
+  .chip-mech .fac{width:42px;color:var(--dim);font-family:'JetBrains Mono',ui-monospace,monospace}
+  .chip-mech .mbar{flex:0 0 84px;height:8px;border-radius:5px;background:#1f2a3d;overflow:hidden}
+  .chip-mech .mbar i{display:block;height:100%;border-radius:5px}
+  .chip-mech .con{width:38px;text-align:right;font-family:'JetBrains Mono',ui-monospace,monospace}
+  .chip-mech .pl{color:var(--muted);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .chip-trig{margin:8px 0;font-size:12px;color:var(--fg)} .chip-trig.met{color:#86efac}
+  .chip-plan.ghost{opacity:.62}
+  .chip-plan .divider{font-size:9px;color:var(--dim);letter-spacing:.5px;margin:9px 0 4px}
+  .chip-story{margin:10px 0;padding:9px 12px;border:1px solid var(--line);border-left:3px solid #c4b5fd;border-radius:10px;font-size:13px;line-height:1.55;color:var(--fg);background:rgba(168,139,250,.05)}
+  .chip-story .sh{font-size:10px;color:#c4b5fd;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
+  .chip-story .now{color:var(--txt);font-weight:700}
+  .chip-story.p-loss{border-left-color:#ef4444} .chip-story.p-loss .sh{color:#fca5a5}
+  .chip-story.epitaph{border-left-color:var(--muted);background:transparent;color:var(--muted)}
+  .chip-narr-log{margin:4px 0;font-size:11px;color:var(--dim)} .chip-narr-log summary{cursor:pointer;color:var(--muted)}
+  /* ── enriched live scalp: thesis / clock / give-back / drift ── */
+  .chip-thesis{margin:9px 0 4px;padding:8px 12px;border:1px solid;border-left-width:3px;border-radius:10px;font-size:13px;line-height:1.5}
+  .chip-thesis .act{margin-top:3px;font-size:11.5px;color:var(--muted)}
+  .chip-thesis.t-intact{background:rgba(34,197,94,.10);border-color:rgba(34,197,94,.42);color:#4ade80}
+  .chip-thesis.t-weakening{background:rgba(245,158,11,.10);border-color:rgba(245,158,11,.42);color:var(--amber)}
+  .chip-thesis.t-broken{background:rgba(239,68,68,.11);border-color:rgba(239,68,68,.42);color:#fca5a5}
+  .chip-thesis.t-unknown{background:transparent;border-color:var(--line);color:var(--dim)}
+  .chip-clock,.chip-gb,.chip-drift{margin:6px 0;font-size:11.5px;color:var(--fg)}
+  .chip-clock b,.chip-gb b{font-family:'JetBrains Mono',ui-monospace,monospace}
+  .chip-clock .warn{color:var(--amber);font-weight:600}
+  .chip-gb.gb-rule{color:var(--amber)} .chip-gb.gb-exit{color:#fca5a5;font-weight:600}
+  .chip-thesis:empty,.chip-clock:empty,.chip-gb:empty,.chip-drift:empty{display:none}
 </style>
 </head>
 <body>
@@ -377,6 +428,8 @@
     </div>
   </main>
   <aside class="rrail">
+    <div id="chiplive" class="stats"></div>
+    <div id="chipledger" class="stats"></div>
     <div id="daypnl" class="stats"></div>
     <div id="drawdown" class="stats"></div>
     <div id="calibration" class="stats"></div>
@@ -395,7 +448,13 @@ try{chipOnly=JSON.parse(localStorage.getItem('chipOnly'))||0}catch(e){}
 function toggleChip(){chipOnly=chipOnly?0:1;try{localStorage.setItem('chipOnly',JSON.stringify(chipOnly))}catch(e){}refresh();}
 
 // ---- feed sections + the top sorting/filter bar ----
-function secOf(s){const st=s.pos&&s.pos.state;
+function secOf(s){
+  if(s._chipwatch) return 'watch';                 // chip scan candidate → 👀 Watching
+  if(s.provider==='chip'&&s.chip_lifecycle){       // chip scalps bucket by lifecycle phase (not human status)
+    const ph=s.chip_lifecycle.phase;
+    return (ph==='STOPPED'||ph==='TRAILED_OUT'||ph==='RESOLVED')?'closed':'live';
+  }
+  const st=s.pos&&s.pos.state;
   if(s.reentry&&s.reentry.armed)return 'watch';   // an ACTIVE re-entry watch belongs up in Watching, not buried in Closed
   if(st==='OPEN'||st==='PARTIALLY_TRIMMED'||st==='RUNNER')return 'live';
   if(st==='CLOSED'||st==='CUT'||s.status==='CLOSED')return 'closed';
@@ -708,6 +767,83 @@ function renderCalibration(c){
     </div>
     <div style="margin-top:5px;font-size:11px">r(score,R)=<b style="color:${tone[0]}">${r==null?'—':r}</b> ${mono}</div>
     <div style="margin-top:5px;font-size:11px;color:${tone[0]}">${tone[1]} — <span style="color:var(--muted)">${c.verdict}</span></div>`;
+}
+function chipStateBadge(st){
+  const m={holding:['📈','#22c55e','IN SCALP'],scan:['🟢','#22c55e','FIRING'],
+    wait:['⚪','var(--muted)','WATCHING'],cooldown:['⏸','#f59e0b','COOLDOWN'],
+    veto:['🚫','#ef4444','STAND DOWN']};
+  return m[st]||['·','var(--muted)',(st||'—').toUpperCase()];
+}
+function renderChipLive(chip,edge){
+  const el=document.getElementById('chiplive'); if(!el) return;
+  const ce=(edge||{}).chip;
+  const rc=r=>r==null?'var(--dim)':(r>0.05?'#22c55e':r<-0.05?'#ef4444':'var(--fg)');
+  const fmt=r=>r==null?'—':(r>=0?'+':'')+r+'R';
+  // scoreboard — the competition metrics
+  let score;
+  if(ce&&((ce.shadow_n||0)+(ce.realized_n||0))>0){
+    const wr=ce.win_rate!=null?Math.round(ce.win_rate*100)+'%':'—';
+    score=`<div style="display:flex;gap:13px;flex-wrap:wrap;font-size:11.5px;margin:7px 0 3px">
+      <span>expectancy <b style="color:${rc(ce.blended_r)}">${fmt(ce.blended_r)}</b></span>
+      <span>win <b>${wr}</b></span>
+      <span>scalps <b>${(ce.shadow_n||0)+(ce.realized_n||0)}</b></span></div>`;
+  } else {
+    score=`<div style="font-size:11.5px;color:var(--muted);margin:7px 0 3px">no scalps resolved yet — building the track record 🏗️</div>`;
+  }
+  const sess=chip&&chip.session==='open'?'<span style="color:#22c55e">● scanning</span>':'<span style="color:var(--dim)">○ market closed</span>';
+  let rows='';
+  ((chip&&chip.tickers)||[]).forEach(t=>{
+    const [ic,col,lbl]=chipStateBadge(t.state);
+    const dir=t.spot_dir==='up'?'▲':t.spot_dir==='down'?'▼':'';
+    const dcol=t.spot_dir==='up'?'#22c55e':t.spot_dir==='down'?'#ef4444':'var(--dim)';
+    const tape=t.score!=null?`tape <b>${t.score}</b> <span style="color:var(--dim)">${t.grade||''}</span>`:'<span style="color:var(--dim)">tape —</span>';
+    const sd=t.side?`<span style="color:#c4b5fd">${t.side}</span>`:'';
+    rows+=`<div style="padding:6px 0;border-top:1px solid var(--line)">
+      <div style="display:flex;align-items:center;gap:7px;font-size:12.5px">
+        <b>${t.ticker}</b>${sd}${t.primary===false?'<span style="color:var(--dim);font-size:9px">counter</span>':''}
+        <span style="color:${dcol};font-family:'JetBrains Mono',ui-monospace,monospace">${t.spot!=null?'$'+t.spot:'—'} ${dir}</span>
+        <span style="margin-left:auto;color:${col};font-weight:600">${ic} ${lbl}</span></div>
+      <div style="display:flex;gap:8px;font-size:11px;color:var(--muted);margin-top:3px">
+        <span>${tape}</span><span>·</span><span>${t.regime||''}</span>${(t.news&&t.news!=='none')?`<span>· 📰 ${t.news}</span>`:''}</div>
+      <div style="font-size:11.5px;margin-top:3px">${t.reason||''}</div></div>`;
+  });
+  if(!rows) rows=`<div style="font-size:11.5px;color:var(--muted);padding:6px 0">Idle — chip wakes at the 9:30 open.</div>`;
+  let act='';
+  const a=(chip&&chip.activity)||[];
+  if(a.length) act=`<div style="margin-top:7px;padding-top:6px;border-top:1px solid var(--line);font-size:10.5px;color:var(--muted)">`+
+    a.slice(-4).reverse().map(e=>`<div style="margin-top:2px"><span style="color:var(--dim)">${e.t}</span> ${e.msg}</div>`).join('')+`</div>`;
+  el.innerHTML=`<div class="stats-h">🤖 Chip — Live <span style="margin-left:auto;font-weight:500">${sess}</span></div>${score}${rows}${act}`;
+}
+function renderChipLedger(sigs){
+  // Standalone CHIP-ONLY scalp results log (kept separate from real tastytrade trades until go-live).
+  const el=document.getElementById('chipledger'); if(!el) return;
+  const done=(sigs||[]).filter(s=>s.provider==='chip'&&s.chip_lifecycle&&['RESOLVED','STOPPED','TRAILED_OUT'].includes(s.chip_lifecycle.phase));
+  if(!done.length){ el.innerHTML=''; return; }
+  done.sort((a,b)=>Date.parse((b.chip_lifecycle.closed||b.chip_lifecycle.opened||0))-Date.parse((a.chip_lifecycle.closed||a.chip_lifecycle.opened||0)));
+  const rc=r=>r==null?'var(--dim)':r>0.05?'#22c55e':r<-0.05?'#ef4444':'var(--fg)';
+  const fmtR=r=>r==null?'—':(r>=0?'+':'')+r+'R';
+  const grp=g=>{const xs=done.filter(s=>((s.chip||{}).live_grade)===g),rs=xs.map(s=>s.chip_lifecycle.blended_r).filter(r=>r!=null);
+    return {n:xs.length, avg:rs.length?Math.round(rs.reduce((a,b)=>a+b,0)/rs.length*100)/100:null};};
+  const L=grp('live'), E=grp('explore');
+  const rows=done.slice(0,24).map(s=>{
+    const cl=s.chip_lifecycle,m=s.chip||{},g=s.sig||{}, isC=(cl.cp||g.type)==='C';
+    const dcol=isC?'#22c55e':'#ef4444', res=cl.result==='WIN'?'✅':cl.result==='LOSS'?'🔴':'●';
+    const t=(cl.closed||cl.opened||'').slice(11,16);
+    const role=m.direction_role==='counter'?'<span style="color:var(--dim)">ctr</span>':'<span style="color:#c4b5fd">pri</span>';
+    const grade=m.live_grade==='explore'?'<span style="color:var(--amber)">exp</span>':m.live_grade==='live'?'<span style="color:#22c55e">live</span>':'';
+    return `<div style="display:flex;gap:6px;align-items:center;font-size:11px;padding:3px 0;border-top:1px solid var(--line)">
+      <span style="color:var(--dim);width:32px">${t}</span>
+      <b style="width:34px">${g.ticker||'?'}</b>
+      <span style="color:${dcol};font-weight:700;width:12px">${isC?'▲':'▼'}</span>
+      <span style="color:${rc(cl.blended_r)};width:46px;text-align:right;font-family:'JetBrains Mono',ui-monospace,monospace">${fmtR(cl.blended_r)}</span>
+      <span style="width:16px;text-align:center">${res}</span>
+      <span style="margin-left:auto;font-size:9px;letter-spacing:.3px">${role}·${grade}</span></div>`;
+  }).join('');
+  el.innerHTML=`<div class="stats-h">🤖 Chip Scalp Log <span style="margin-left:auto;font-weight:500;color:var(--muted)">${done.length} closed</span></div>
+    <div style="display:flex;gap:14px;font-size:11px;margin:5px 0 2px">
+      <span>live <b style="color:${rc(L.avg)}">${fmtR(L.avg)}</b> <span style="color:var(--dim)">n${L.n}</span></span>
+      <span>explore <b style="color:${rc(E.avg)}">${fmtR(E.avg)}</b> <span style="color:var(--dim)">n${E.n}</span></span></div>
+    <div style="font-size:9px;color:var(--dim);margin-bottom:4px">shadow-only · separate from tastytrade until go-live</div>${rows}`;
 }
 function renderProviderEdge(edge){
   const el=document.getElementById('provideredge'); if(!el) return;
@@ -1484,7 +1620,245 @@ function tapeStrHTML(st){
   const tip=(st.components||[]).map(x=>`${x.k}: ${x.t}`).join(' · ');
   return `<span style="color:${c}" title="${tip}">${st.icon} ${g} ${st.score}</span> <span style="letter-spacing:1px;color:${c}">${st.bars}</span>`;
 }
+// ── chip live-scalp card ──────────────────────────────────────────────────────
+function chipPhaseMeta(cl){                 // [icon, label, toneClass, railColor]
+  const M={ENTERED:['🎯','ENTERED','p-win','#22c55e'],MANAGING:['⚡','MANAGING','p-manage','#f59e0b'],
+    T1_HIT:['🥇','T1 HIT','p-win','#22c55e'],T2_HIT:['🥈','T2 HIT','p-win','#22c55e'],
+    RUNNER:['🏃','RUNNER','p-win','#22c55e'],TRAILED_OUT:['🎏','TRAILED OUT','p-win','#22c55e'],
+    STOPPED:['🛑','STOPPED OUT','p-loss','#ef4444'],RESOLVED:['🏁','CLOSED','p-done','var(--muted)']};
+  if(cl.phase==='RESOLVED'){
+    if(cl.result==='WIN')  return ['✅','WIN','p-win','#22c55e'];
+    if(cl.result==='LOSS') return ['🔴','LOSS','p-loss','#ef4444'];
+    return ['●','SCRATCH','p-done','var(--muted)'];
+  }
+  return M[cl.phase]||['·',(cl.phase||'—'),'p-manage','#f59e0b'];
+}
+function chipLadderHTML(cl){
+  const lo=Math.min(cl.cur_stop_pct==null?-15:cl.cur_stop_pct,-15)-5, hi=(cl.t3_pct||cl.t2_pct||60)+8;
+  const X=p=>Math.max(0,Math.min(100,(p-lo)/(hi-lo)*100));
+  const col=chipPhaseMeta(cl)[3], hit=cl.hit||[false,false,false];
+  const eX=X(0), nowX=X(cl.now_pct||0);
+  const tk=(p,h,lab)=>p==null?'':`<span class="tick t${h?' hit':''}" style="left:${X(p)}%"></span><span class="lab" style="left:${X(p)}%">${lab}</span>`;
+  return `<div class="chip-ladder">
+    <div class="fill" style="left:${Math.min(eX,nowX)}%;width:${Math.abs(nowX-eX)}%;background:${col}"></div>
+    ${cl.peak_pct!=null?`<span class="peak" style="left:${X(cl.peak_pct)}%" title="peak +${cl.peak_pct}%"></span>`:''}
+    <span class="tick stop ${cl.cur_stop_pct>=0?'locked':''}" style="left:${X(cl.cur_stop_pct)}%"></span><span class="lab" style="left:${X(cl.cur_stop_pct)}%">stop</span>
+    <span class="tick" style="left:${eX}%"></span><span class="lab" style="left:${eX}%">in</span>
+    ${tk(cl.t1_pct,hit[0],'T1')}${tk(cl.t2_pct,hit[1],'T2')}${tk(cl.t3_pct,hit[2],'T3')}
+    <span class="now" style="left:${nowX}%" title="now ${cl.now_pct}%"></span></div>`;
+}
+function chipTargetChips(cl){
+  const h=cl.hit||[], lk=cl.cur_stop_pct>=0, r=x=>Math.round(x), p=cl.px||{};
+  const d=v=>v!=null?` $${v}`:'';                  // real $ derived from entry × (1+pct/100)
+  return [`<span class="tk stop ${lk?'locked':''}">🛑 stop <b>${cl.cur_stop_pct>=0?'+':''}${r(cl.cur_stop_pct)}%</b>${d(p.stop)}${lk?' 🔒':''}</span>`,
+    `<span class="tk tp ${h[0]?'hit':''}">🥇 T1 <b>+${r(cl.t1_pct)}%</b>${d(p.t1)}${h[0]?' ✓':''}</span>`,
+    `<span class="tk tp ${h[1]?'hit':''}">🥈 T2 <b>+${r(cl.t2_pct)}%</b>${d(p.t2)}${h[1]?' ✓':''}</span>`,
+    `<span class="tk tp ${h[2]?'hit':''}">🏆 T3 <b>+${r(cl.t3_pct)}%</b>${d(p.t3)}${h[2]?' ✓':''}</span>`].join(' ');
+}
+function chipStopNarr(cl){
+  if(cl.cur_stop_pct==null) return '';
+  if(cl.cur_stop_pct>0) return `TRAILED → +${Math.round(cl.cur_stop_pct)}% 🔒`;
+  if(cl.cur_stop_pct===0) return 'breakeven 🔒';
+  return `initial −${Math.round(Math.abs(cl.cur_stop_pct))}%`;
+}
+// ── chip reasoning render helpers (all pure, all guard their inputs → '' when data absent) ──
+function chipVerdictHTML(cr){
+  if(!cr||!cr.strike||!cr.dte) return '';
+  const s=cr.strike,d=cr.dte, tone=s.verdict==='optimal'?'v-take':s.verdict==='acceptable'?'v-small':'v-skip';
+  return `<div class="chip-verdict verdict ${tone}">🎯 <b>${s.strike!=null?s.strike:''} · ${d.dte!=null?d.dte+'DTE':''}</b> — ${s.why||''}<div class="vr">${d.why||''}</div></div>`;
+}
+function chipReadyHTML(cr){
+  if(!cr) return '';
+  if(cr.ready) return `<div class="chip-ready">🎯 READY — trigger live, fill clean</div>`;
+  return chipTrigHTML(cr.trigger);   // the trigger is the real "waiting on" signal
+}
+function chipFillHTML(f){
+  if(!f||f.spread_pct==null) return '';
+  const col=f.quality==='tight'?'#22c55e':f.quality==='ok'?'#f59e0b':'#ef4444';
+  return `<div class="chip-fill"><span style="color:var(--dim)">fill</span> — market ask $${f.live_px!=null?f.live_px:'—'}, spread <b>${f.spread_pct}%</b> <span style="color:${col}">${f.quality} ${f.ok?'✓':'✗'}</span> <span style="color:var(--dim)">(crosses the spread for a scalp)</span></div>`;
+}
+function chipMechHTML(tape){
+  const factors=tape&&tape.factors;
+  if(!factors||!factors.length) return '';
+  const both=(tape.score_other!=null&&tape.side)?` <span style="color:var(--dim)">· ${tape.side} ${tape.score} vs ${tape.cp_other} ${tape.score_other}</span>`:'';
+  const agg=`tape <b>${tape.score!=null?tape.score:'—'}</b> ${tape.grade||''}${both}`;
+  const rows=factors.map(f=>{
+    const w=Math.round((((f.score||0)+1)/2)*100), col=f.score>0.05?'#22c55e':f.score<-0.05?'#ef4444':'var(--dim)';
+    const con=(f.contribution>=0?'+':'')+(f.contribution!=null?Number(f.contribution).toFixed(2):'—');
+    return `<div class="mrow"><span class="fac">${f.factor}</span><span class="mbar"><i style="width:${w}%;background:${col}"></i></span><span class="con">${con}</span><span class="pl">${f.plain||''}</span></div>`;
+  }).join('');
+  return `<div class="chip-mech"><div class="agg">${agg}</div>${rows}</div>`;
+}
+function chipTrigHTML(tr){
+  if(!tr||!tr.needs) return '';
+  return `<div class="chip-trig ${tr.ready?'met':''}">🧭 ${tr.ready?'trigger met — arming':('needs '+tr.needs)}${(tr.gap!=null&&!tr.ready)?' · '+tr.gap+' to go':''}</div>`;
+}
+function chipGhostPlanHTML(plan){
+  if(!plan) return '';
+  const chip=(ic,lab,o,isStop)=>o&&o.pct!=null?`<span class="tk ${isStop?'stop':'tp'}">${ic} ${lab} ${isStop?'−'+o.pct:(o.pct>=0?'+':'')+o.pct}%${o.px!=null?' $'+o.px:''}</span>`:'';
+  return `<div class="chip-plan ghost"><div class="divider">┈ if filled ┈</div><div class="ticket fallback">${chip('🛑','stop',plan.stop,true)}${chip('🥇','T1',plan.t1)}${chip('🥈','T2',plan.t2)}${chip('🏆','T3',plan.t3)}</div></div>`;
+}
+function chipEntryReadHTML(er){
+  if(!er||!er.strike) return '';
+  const s=er.strike,d=er.dte,t=er.tape_at_entry||{};
+  return `<div class="entry-verdict" style="border-left-color:#c4b5fd"><b style="color:#c4b5fd">🎯 why chip's in</b> — ${s.strike!=null?s.strike:''} ${d&&d.dte!=null?d.dte+'DTE':''} ATM${s.delta!=null?' δ'+Math.abs(s.delta).toFixed(2):''}${t.score!=null?' · tape '+t.score+' '+(t.grade||''):''}</div>`;
+}
+function chipThesisHTML(cl){                       // "is chip's entry reason still true?" — the headline
+  const t=cl.thesis; if(!t||!t.state) return '';
+  const act=t.action?`<div class="act">↳ ${t.action}</div>`:'';
+  return `<div class="chip-thesis t-${t.state}"><b>${t.icon} THESIS ${t.word}</b> — ${t.why}${act}</div>`;
+}
+function chipClockHTML(cl){
+  const c=cl.clock; if(!c||!c.line) return '';
+  const w=c.warn?`<div class="warn">${c.warn}</div>`:'';
+  return `<div class="chip-clock">⏱ ${c.line}${w}</div>`;
+}
+function chipGiveBackHTML(cl){
+  const g=cl.give_back; if(!g||!g.line) return '';
+  const ic=g.level==='exit'?'🛑':g.level==='rule'?'⚠️':'📉';
+  return `<div class="chip-gb gb-${g.level}">${ic} ${g.line}${g.cx?` <b>($${Math.abs(g.cx)}/cx)</b>`:''}</div>`;
+}
+function chipDriftHTML(cl){
+  const d=cl.drift; if(!d||!d.line) return '';
+  return `<div class="chip-drift">📊 ${d.line}</div>`;
+}
+function chipDriftRowsHTML(cl){
+  const d=cl.drift; if(!d||!d.rows||!d.rows.length) return '';
+  const rows=d.rows.map(r=>`<div>${r.flipped?'🔄':'·'} <b>${r.factor}</b> ${r.in>=0?'+':''}${r.in} → ${r.now>=0?'+':''}${r.now} <span style="color:var(--dim)">(${r.d>=0?'+':''}${r.d})</span></div>`).join('');
+  return `<details class="chip-narr-log"><summary>what changed since entry</summary>${rows}</details>`;
+}
+function chipStoryHTML(cl){
+  const R=x=>Math.round(x||0), r=cl.blended_r, why=cl.reason||'the setup';
+  const t1=cl.t1_pct,t2=cl.t2_pct,t3=cl.t3_pct, now=cl.now_pct, peak=cl.peak_pct, stop=cl.cur_stop_pct;
+  const er=cl.entry_read||{}, es=(er.tape_at_entry||{});
+  const tapeAt=es.score!=null?` with ${es.grade||''} tape (${es.score})`:'';
+  let cls='',sh="chip’s story",body='';
+  const P=cl.phase;
+  if(P==='ENTERED'||P==='MANAGING'){
+    const nxt=(!cl.hit||!cl.hit[0])?`working toward T1 at +${t1}% — half comes off there and the stop lifts to breakeven`:'managing the runner';
+    body=`Took ${cl.leg} at $${cl.entry_px} on a ${why}${tapeAt}. Now <span class="now">${now>=0?'+':''}${R(now)}%</span>, ${nxt}. Peak +${R(peak)}%.`;
+  } else if(P==='T1_HIT'){
+    body=`½ booked at +${t1}%, stop lifted to breakeven. <span class="now">Runner working for T2 +${t2}%.</span> Peak +${R(peak)}%.`;
+  } else if(P==='T2_HIT'||P==='RUNNER'){
+    body=`½ booked at +${t1}%, ¼ at +${t2}% — <span class="now">stop trailed to +${R(stop)}%, locked green</span>. Runner riding for T3 +${t3}%. Peak +${R(peak)}%.`;
+  } else if(P==='STOPPED'){
+    cls='p-loss'; body=`Momentum died, lost the level — <span class="now">cut at ${R(now)}% (${r}R), clean</span>. Never reached T1.`;
+  } else if(P==='TRAILED_OUT'){
+    body=`Trailed out at +${R(now)}% after peaking +${R(peak)}% — <span class="now">${r>=0?'+':''}${r}R banked</span>.`;
+  } else if(P==='RESOLVED'){
+    cls='epitaph'; sh='how it went';
+    const bp=cl.blended_pct, ex=cl.result==='WIN'?`rode it to +${R(peak)}%, banked ${bp>=0?'+':''}${R(bp)}%`:cl.result==='LOSS'?`stopped for ${R(bp)}%`:`scratched near flat`;
+    body=`Entered on a ${why}, ${ex} — ${r>=0?'a clean +':''}${r<0?r:(r>=0?'':'')}${r}R.`;
+  } else { body=`Took ${cl.leg} at $${cl.entry_px}. Now ${now>=0?'+':''}${R(now)}%.`; }
+  return `<div class="chip-story ${cls}"><div class="sh">${sh}</div>${body}</div>`;
+}
+function renderChipCard(s){
+  const cl=s.chip_lifecycle||{}, g=s.sig||{};
+  if(cl.entry_px==null) return `<div class="card status-live" style="--tier:#c4b5fd"><div class="sig">${g.ticker||'?'} <span class="badge prov" style="background:rgba(168,139,250,.16);color:#c4b5fd">🤖 chip</span></div><div class="sub">${(chipPhaseMeta(cl))[0]} ${(chipPhaseMeta(cl))[1]}</div></div>`;
+  const title=`${g.ticker||'?'} ${g.strike||''}${g.type||cl.cp||''}`;
+  const done=['STOPPED','TRAILED_OUT','RESOLVED'].includes(cl.phase);
+  const [ic,lbl,tone,rail]=chipPhaseMeta(cl);
+  const now=cl.now_pct, pcol=now==null?'var(--dim)':(now>=0?'#22c55e':'#ef4444');
+  const pnl=now==null?'—':(now>=0?'+':'')+Math.round(now)+'%';
+  const rmoney=cl.blended_r!=null?((cl.blended_r>=0?'+':'')+cl.blended_r+'R'):'—';
+  const bpct=cl.blended_pct!=null?((cl.blended_pct>=0?'+':'')+Math.round(cl.blended_pct)+'%'):'—';
+  const p=cl.px||{};
+  const outTxt=(p.out!=null && p.spread_pct>4)?` (out ≈$${p.out})`:'';   // show the real exit on wide spreads
+  const entryLine=done
+    ? `in $${cl.entry_px} · <b style="color:${pcol}">${bpct}</b> blended · <b>${rmoney}</b>`
+    : (p.mark!=null
+        ? `in $${cl.entry_px} → mark <b>$${p.mark}</b>${outTxt} · <b style="color:${pcol}">${pnl}</b> · <b>${rmoney}</b>`
+        : `in $${cl.entry_px} · now <b style="color:${pcol}">${pnl}</b> · <b>${rmoney}</b>`);
+  const toGo=(!done && p.to_t1_cx!=null)
+    ? `<div class="sub" style="color:var(--muted);font-size:11px">↳ +$${p.to_t1_cx}/cx to T1 · −$${Math.abs(p.to_stop_cx)}/cx to stop</div>` : '';
+  const narr=(cl.narration||[]).map(l=>`<div>${l}</div>`).join('');
+  const stats=`peak +${Math.round(cl.peak_pct||0)}% · trough ${Math.round(cl.trough_pct||0)}% · stop: ${chipStopNarr(cl)}`;
+  const badges=`<span class="badge prov" style="background:rgba(168,139,250,.16);color:#c4b5fd">🤖 chip</span>`;
+  return `<div class="card status-${done?'CLOSED':'live'}" style="--tier:${rail}">
+    <div class="top"><div class="head">
+      <div class="sig">${title} ${badges} <span class="chip-phase ${tone}">${ic} ${lbl}</span></div>
+      <div class="sub mono">${entryLine}</div>
+      <div class="sub" style="color:var(--muted)">${cl.regime||''}${cl.reason?' · '+cl.reason:''}${cl.news&&cl.news!=='none'?' · 📰 '+cl.news:''}</div>
+    </div></div>
+    ${['T1_HIT','T2_HIT','RUNNER'].includes(cl.phase)?chipGiveBackHTML(cl):''}
+    ${chipThesisHTML(cl)}
+    ${chipEntryReadHTML(cl.entry_read)}
+    ${chipLadderHTML(cl)}
+    <div class="ticket">${chipTargetChips(cl)}</div>
+    ${toGo}
+    ${chipClockHTML(cl)}
+    ${['T1_HIT','T2_HIT','RUNNER'].includes(cl.phase)?'':chipGiveBackHTML(cl)}
+    ${chipDriftHTML(cl)}
+    ${chipStoryHTML(cl)}
+    ${chipDriftRowsHTML(cl)}
+    ${narr?`<details class="chip-narr-log"><summary>play-by-play</summary><div class="chip-narr">${narr}</div></details>`:''}
+    <div class="sub" style="color:var(--muted)">${stats}</div></div>`;
+}
+function chipExtHTML(x){                           // "is there room left?" — runway vs the move T1 needs
+  if(!x||x.degraded||x.verdict==='unknown') return '';
+  const M={room:['#22c55e','ROOM'],tight:['#f59e0b','TIGHT'],extended:['#f59e0b','EXTENDED'],
+           unreachable:['#ef4444','UNREACHABLE']};
+  const [c,lbl]=M[x.verdict]||['var(--muted)',String(x.verdict||'').toUpperCase()];
+  const pos=x.pos!=null?Math.round(x.pos*100):null;   // where in the range we'd be buying
+  const bar=pos!=null?`<div style="flex:1;height:6px;background:var(--bg2);border-radius:3px;position:relative;min-width:70px">
+      <div style="position:absolute;left:0;top:0;bottom:0;width:${pos}%;background:${c};opacity:.55;border-radius:3px"></div>
+      <div style="position:absolute;left:calc(${pos}% - 1px);top:-2px;bottom:-2px;width:2px;background:${c}"></div></div>`:'';
+  return `<div class="sub" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+    <span style="color:${c};font-weight:700">📏 ${lbl}</span>${bar}
+    <span class="mono" style="color:var(--dim);font-size:11px">${x.runway_pts!=null?'runway '+x.runway_pts:''}${x.req_pts!=null?' / T1 needs '+Number(x.req_pts).toFixed(2):''}${x.ratio!=null?' ('+x.ratio+'×)':''}${pos!=null?' · buying at '+pos+'% of range':''}</span>
+  </div>${x.note?`<div class="sub" style="color:${c};font-size:11px">${x.note}</div>`:''}`;
+}
+function chipProbsHTML(p){                         // P(T1/T2/T3), P(stop), theta fuse — DISPLAY ONLY
+  if(!p||p.method==='expired'||p.method==='nodelta'||p.t1==null) return '';
+  const pc=v=>v==null?'—':Math.round(v*100)+'%';
+  const fuse=p.fuse_state==='never'?'never':(p.stop_theta_min!=null?p.stop_theta_min+'m':'—');
+  const race=p.t1_first!=null?Math.round(p.t1_first*100):null;
+  const rc=race==null?'var(--muted)':race>=55?'#22c55e':race>=45?'#f59e0b':'#ef4444';
+  return `<div class="sub" style="display:flex;gap:12px;flex-wrap:wrap;align-items:center">
+      <span style="color:var(--dim);font-size:11px">odds</span>
+      <span class="mono">T1 <b style="color:#22c55e">${pc(p.t1)}</b></span>
+      <span class="mono">T2 <b>${pc(p.t2)}</b></span>
+      <span class="mono">T3 <b>${pc(p.t3)}</b></span>
+      <span class="mono">stop <b style="color:#ef4444">${pc(p.stop)}</b></span>
+      ${race!=null?`<span class="mono">T1 first <b style="color:${rc}">${race}%</b></span>`:''}
+      <span class="mono" style="color:var(--dim);font-size:11px">θ-fuse ${fuse}${p.horizon_min?' · '+p.horizon_min+'m view':''}</span>
+    </div>
+    ${p.stale?'<div class="sub" style="color:var(--dim);font-size:10px">estimated vol — odds indicative only</div>':''}`;
+}
+function renderChipWatchCard(s){
+  const t=s.chip_status||{};
+  const M={scan:['🟢','FIRING','#22c55e'],wait:['👀','WATCHING','var(--muted)'],
+    cooldown:['⏸','COOLDOWN','#f59e0b'],veto:['🚫','STAND DOWN','#ef4444']};
+  const [ic,lbl,col]=M[t.state]||['👀','WATCHING','var(--muted)'];
+  const dir=t.spot_dir==='up'?'▲':t.spot_dir==='down'?'▼':'';
+  const dcol=t.spot_dir==='up'?'#22c55e':t.spot_dir==='down'?'#ef4444':'var(--dim)';
+  const gcol=t.grade==='strong'?'#22c55e':t.grade==='moderate'?'#f59e0b':'var(--muted)';
+  const tape=t.score!=null?`tape <b style="color:${gcol}">${t.score}</b> ${t.grade||''}`:'<span style="color:var(--dim)">tape warming up</span>';
+  const cr=t.chip_read&&t.chip_read.available?t.chip_read:null;   // reasoning block (fail-safe if absent)
+  const regime=(cr&&cr.regime_live)||t.regime||'';               // honest live regime, not the static bias
+  const isC=t.side==='C';                                        // direction: unmistakable badge + rail color
+  const dcolr=isC?'#22c55e':'#ef4444', dbg=isC?'rgba(34,197,94,.18)':'rgba(239,68,68,.18)';
+  const dirBadge=t.side?`<span style="background:${dbg};color:${dcolr};font-weight:800;padding:2px 10px;border-radius:6px;font-size:13px;letter-spacing:.6px">${isC?'▲ CALL':'▼ PUT'}</span>`:'';
+  const role=t.primary?'':' <span style="color:var(--dim);font-weight:500;font-size:10px;text-transform:uppercase;letter-spacing:.5px">counter</span>';
+  return `<div class="card status-WATCHING" style="--tier:${dcolr}">
+    <div class="top"><div class="head">
+      <div class="sig"><b style="font-size:19px">${t.ticker||'?'}</b> ${dirBadge}${role} <span class="badge prov" style="background:rgba(168,139,250,.16);color:#c4b5fd">🤖 chip</span>
+        <span style="margin-left:auto;color:${col};font-weight:700;font-size:12px">${ic} ${lbl}</span></div>
+      <div class="sub mono">$${t.spot!=null?t.spot:'—'} <span style="color:${dcol}">${dir}</span> · ${tape} · ${regime}${t.news&&t.news!=='none'?' · 📰 '+t.news:''}</div>
+      <div class="sub" style="color:var(--fg)">${t.reason||'scanning…'}</div>
+    </div></div>
+    ${cr?chipVerdictHTML(cr):''}
+    ${cr?chipReadyHTML(cr):''}
+    ${cr?chipExtHTML(cr.extension):''}
+    ${cr?chipProbsHTML(cr.probs):''}
+    ${cr?chipMechHTML(cr.tape):''}
+    ${cr?chipFillHTML(cr.fill):''}
+    ${cr?chipGhostPlanHTML(cr.plan):''}
+  </div>`;
+}
 function card(s){
+  if(s._chipwatch) return renderChipWatchCard(s);                       // chip scan candidate (Watching)
+  if(s.provider==='chip'&&s.chip_lifecycle) return renderChipCard(s);   // chip owns its own live-scalp card
   const [col,bg]=TIER[s.tier_key]||TIER.LOW;
   const g=s.sig;
   const title=`${g.ticker} ${g.strike}${g.type}`;
@@ -1639,6 +2013,8 @@ async function refresh(){
     renderStats(d.stats);
     renderDayPnl(d.stats&&d.stats.by_day);
     renderDrawdown(d.stats&&d.stats.drawdown,d.account);
+    renderChipLive(d.chip,d.provider_edge);
+    renderChipLedger(d.signals);
     renderCalibration(d.calibration);
     renderExitQuality(d.exit_quality);
     renderProviderEdge(d.provider_edge);
@@ -1655,6 +2031,11 @@ async function refresh(){
     document.getElementById('n').textContent=T.signals!=null?T.signals:S.length;
     document.getElementById('nt').textContent=T.taken!=null?T.taken:S.filter(x=>x.status==='TAKEN'||x.status==='CLOSED').length;
     document.getElementById('ns').textContent=T.skipped!=null?T.skipped:S.filter(x=>x.status==='SKIPPED').length;
+    // chip SCAN candidates → 👀 Watching cards (one per ticker chip is watching but NOT currently in a
+    // scalp — a holding ticker already shows as a live scalp card in Live & taken, so skip it here).
+    const _cw=(((d.chip||{}).tickers)||[]).filter(t=>t.state!=='holding').map(t=>({
+      id:'chipwatch-'+t.ticker+(t.side||''),provider:'chip',_chipwatch:true,chip_status:t,iso:d.now,sig:{ticker:t.ticker}}));
+    S=S.concat(_cw);
     const chipCount=S.filter(x=>x.provider==='chip').length;   // count before filters, for the toggle badge
     S=S.filter(x=>!muted.has(x.provider));            // apply channel filter
     if(chipOnly) S=S.filter(x=>x.provider==='chip');  // "🤖 Chip chips" solo view
@@ -1682,7 +2063,16 @@ async function refresh(){
     const rkey=s=>{const r=s.reentry;return r&&r.armed?('R'+r.strike+(r.type||'')):'';};
     // include the live verdict ACTION so a TAKE/WAIT/SKIP flip re-renders the card (re-gates the plan)
     const vkey=s=>((s.live&&s.live.entry&&s.live.entry.action)||'');
-    const sig=S.map(s=>s.id+s.status+s.score+s.tier_key+((s.plan||{}).contracts||'')+pkey(s)+rkey(s)+vkey(s)).join('|')
+    // chip keys: scalp phase + P&L (live cards), and scan state + tape (watch cards) — re-render on change
+    const ckey=s=>{
+      if(s._chipwatch){const w=s.chip_status||{},r=w.chip_read||{},x=r.extension||{},p=r.probs||{};
+        // extension verdict + P(T1) included: a runway that closes must repaint even at an unchanged tape score
+        return 'W'+(w.side||'')+(w.state||'')+(w.score||'')+Math.round(w.spot||0)+(x.verdict||'')+(x.penalty||'')+(p.t1||'');}
+      // include thesis/clock-band/give-back so a THESIS FLIP at flat P&L still repaints the card
+      const c=s.chip_lifecycle;
+      return c?('C'+c.phase+(c.result||'')+Math.round(c.now_pct||0)
+                +((c.thesis||{}).state||'')+((c.clock||{}).band||'')+((c.give_back||{}).level||'')):'';};
+    const sig=S.map(s=>s.id+s.status+s.score+s.tier_key+((s.plan||{}).contracts||'')+pkey(s)+rkey(s)+vkey(s)+ckey(s)).join('|')
               +'|'+BLOCKED+'|'+Object.keys(window.KILLED||{}).join(',')+'|'+JSON.stringify(secOn);
     if(sig!==feed.dataset.sig){
       feed.dataset.sig=sig;

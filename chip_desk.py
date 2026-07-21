@@ -17,11 +17,14 @@ bars cached 60s (no per-lap historical pulls), all state bounded (≤T book entr
 Chip runs on its own IBKR connection (client_id=82) with its own subscription pool, reaped at cap 80.
 """
 import os, time, json
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import deskpaths as _P
 import market as MK
+import chip_extension as X
+import chip_probs as CP
+import chip_strike as SK
 
 ET = ZoneInfo("America/New_York")
 
@@ -31,13 +34,28 @@ TICKERS = ["SPY", "QQQ"]
 # Per-ticker mechanics. *_pct are OPTION-premium %-moves (what _shadow_scaleout consumes), scaled to each
 # ticker's ATM leverage — index ETFs (tight) get the smallest targets, single names ride wider. These are
 # the fail-open DEFAULTS; chip_mechanics.json (nightly-calibrated) overrides them when present.
+# DTE fields: dte_pref = preferred DTE, dte_max = cap, theta_pct_cap = roll out of 0DTE once daily decay
+# exceeds this % of premium.
+#
+# GEOM g2 (dte_pref 0 -> 1 on the index ETFs + AAPL/NVDA). A fixed premium-% stop is NOT a fixed risk:
+#     k = (s/100) · (0.3989/Δ) · √(T/w)        [IV cancels]
+# so the stop distance measured in σ scales with √T. At 0DTE these same premium %s sit at 0.49-0.71σ —
+# INSIDE the noise (QQQ 0.53σ, P(touch) 0.60). At 1DTE they are 1.08-1.57σ. The premium numbers were never
+# wrong; the instrument was. Replaying the 7/21 QQQ 708C whipsaw tick-for-tick: 0DTE -1.00R (stopped),
+# same 28/22/46/74 on 1DTE -0.04R (scratch). Hence: change the instrument, KEEP the number.
+# Corollary the SNR derivation gives for free: leverage Ω cancels from signal and noise alike, so 0DTE's
+# extra gamma buys no SNR — only theta drag, which is pure loss. 0DTE only wins on >1.53σ moves in 30 min.
 DEFAULT_MECHANICS = {
-    "SPY":  {"stop_pct": 26, "t1_pct": 20, "t2_pct": 42, "t3_pct": 68,  "spread_max": 6,  "strike_inc": 1.0, "regime_bias": "trend"},
-    "QQQ":  {"stop_pct": 28, "t1_pct": 22, "t2_pct": 46, "t3_pct": 74,  "spread_max": 6,  "strike_inc": 1.0, "regime_bias": "trend"},
-    "NVDA": {"stop_pct": 34, "t1_pct": 30, "t2_pct": 62, "t3_pct": 100, "spread_max": 10, "strike_inc": 2.5, "regime_bias": "momentum"},
-    "TSLA": {"stop_pct": 38, "t1_pct": 34, "t2_pct": 70, "t3_pct": 115, "spread_max": 12, "strike_inc": 5.0, "regime_bias": "range"},
-    "AAPL": {"stop_pct": 30, "t1_pct": 24, "t2_pct": 50, "t3_pct": 80,  "spread_max": 8,  "strike_inc": 2.5, "regime_bias": "trend"},
+    # spread_max 6 -> 3 on the index ETFs: SPY/QQQ ATM actually quote 0.5-0.6%, so a 6% cap never bound and
+    # would have waved through a fill costing more than a quarter of T1. Single names left alone — there is
+    # no evidence for a tighter number there, and inventing one is exactly what the SMEs warned against.
+    "SPY":  {"stop_pct": 26, "t1_pct": 20, "t2_pct": 42, "t3_pct": 68,  "spread_max": 3,  "strike_inc": 1.0, "regime_bias": "trend",    "dte_pref": 1, "dte_max": 2},
+    "QQQ":  {"stop_pct": 28, "t1_pct": 22, "t2_pct": 46, "t3_pct": 74,  "spread_max": 3,  "strike_inc": 1.0, "regime_bias": "trend",    "dte_pref": 1, "dte_max": 2},
+    "NVDA": {"stop_pct": 34, "t1_pct": 30, "t2_pct": 62, "t3_pct": 100, "spread_max": 10, "strike_inc": 2.5, "regime_bias": "momentum", "dte_pref": 1, "dte_max": 2},
+    "TSLA": {"stop_pct": 38, "t1_pct": 34, "t2_pct": 70, "t3_pct": 115, "spread_max": 12, "strike_inc": 5.0, "regime_bias": "range",    "dte_pref": 1, "dte_max": 3},
+    "AAPL": {"stop_pct": 30, "t1_pct": 24, "t2_pct": 50, "t3_pct": 80,  "spread_max": 8,  "strike_inc": 2.5, "regime_bias": "trend",    "dte_pref": 1, "dte_max": 2},
 }
+GEOM = "g2"                 # stamped on every emit so g1 (0DTE) and g2 (1DTE) samples never pool in edge stats
 
 MIN_TAPE_MODERATE = 62      # chip's own conviction bar (matches the desk's moderate grade)
 COOLDOWN_S = 900            # 15 min between chip entries on the same ticker (anti-churn)
@@ -47,6 +65,96 @@ LOOP_SLEEP = 5              # scan cadence — 5s is plenty for scalp entries; k
 _MECH_CACHE = {"ts": 0.0, "data": None}
 _NEWS_CACHE = {"ts": 0.0, "data": None}
 _LAST_EMIT = {}             # ticker -> ts of last chip emit (cooldown)
+_TAPE = {}                  # chip's OWN tape cache {ticker: (ts, ind)} — 1-min bars, decoupled from the
+                            # shared 5-min human cache (which is keyed by ticker and would collide)
+
+
+def _chip_indicators(bars):
+    """EMA9/EMA21/RSI/Bollinger over the full recent 1-min series (needs prior-day history so chip can read
+    tape from the OPEN, not ~20 min in), but VWAP + price anchored to TODAY's session only — a multi-day
+    VWAP would be wrong. This is the fix for the open cold-start."""
+    if not bars or len(bars) < 21:
+        return None
+    ind = MK.indicators(bars)
+    if not ind:
+        return None
+    try:
+        import numpy as np
+        today = bars[-1].date.date()
+        tb = [b for b in bars if getattr(b, "date", None) is not None and b.date.date() == today]
+        if tb:
+            h = np.array([b.high for b in tb], float); l = np.array([b.low for b in tb], float)
+            c = np.array([b.close for b in tb], float); v = np.array([b.volume for b in tb], float)
+            tp = (h + l + c) / 3
+            ind["vwap"] = round(float((tp * v).sum() / v.sum()), 2) if v.sum() > 0 else round(float(c[-1]), 2)
+            ind["price"] = round(float(c[-1]), 2)
+    except Exception:
+        pass
+    # Raw closes for the EXTENSION guard. It needs a window (100 min) LONGER than the move being judged,
+    # which is exactly what BB(20)-on-1-min cannot give — 20 bars re-centre on the move you are chasing.
+    # Bounded slice, so this can't grow the cached dict without limit.
+    try:
+        ind["closes"] = [float(b.close) for b in bars[-(X.DEFAULT_HORIZON_MIN + 20):]]
+    except Exception:
+        ind["closes"] = []
+    return ind
+
+
+def _tape(conn, tkr, ttl=45):
+    """Chip's intraday tape on 1-MINUTE bars (2-day pull for the momentum windows, VWAP anchored to today).
+    1-min suits scalping better than 5-min, and the prior-day history means chip reads tape from the open.
+    Cached per ticker, ≤1 pull/45s — decoupled from the shared 5-min human cache."""
+    import time as _t
+    c = _TAPE.get(tkr)
+    if not c or _t.time() - c[0] > ttl:
+        try:
+            ind = _chip_indicators(MK.get_bars(conn, tkr, duration="2 D", size="1 min")) or {}
+        except Exception:
+            ind = {}
+        _TAPE[tkr] = (_t.time(), ind)
+    return _TAPE[tkr][1]
+
+# ── OBSERVER STATE (bounded) — so the UI can show exactly what chip sees + why it acts/waits ──
+CROSS_WINDOW_S = 180        # a VWAP reclaim/breakdown stays a VALID trigger for ~3 min. Without this the
+                            # cross (a one-lap EVENT) had to coincide exactly with tape≥62 (a STATE) on the
+                            # same 5s lap — miss by one lap and the setup was lost. That conjunction is why
+                            # chip produced zero samples for two sessions.
+_LAST_CROSS = {}            # ticker -> (ts, 'up'|'down')
+STATUS = {}                 # ticker -> live status dict (rebuilt each lap; ≤ len(TICKERS))
+ACTIVITY = []               # rolling last-N chip events (emits/notes) for the observer log
+SCAN = {"ts": 0.0, "session": "closed"}
+_PREV_SPOT = {}
+
+
+def _srv():
+    """The RUNNING server module — NEVER `import server`.
+
+    The desk runs as `python server.py`, so the live module is __main__. A plain `import server` builds a
+    SECOND copy of server.py with its OWN SIGNALS list: chip's cards get appended to that orphan copy,
+    logged as CARD, and then wiped when the real server saves over _signals.json. That silently swallowed
+    every chip scalp. Resolve to __main__ when it's the server; fall back to a normal import for tests."""
+    import sys
+    m = sys.modules.get("__main__")
+    if m is not None and hasattr(m, "ingest") and hasattr(m, "SIGNALS"):
+        return m
+    import server as s
+    return s
+
+
+def _activity(msg):
+    ACTIVITY.append({"t": _now_et().strftime("%H:%M:%S"), "msg": msg})
+    del ACTIVITY[:-15]      # keep the last 15 only
+
+
+def snapshot():
+    """Everything the observer UI needs: per-ticker-per-DIRECTION status + a recent-activity log. Bounded
+    (≤ 2×len(TICKERS)). Keys are 'TKR|C' / 'TKR|P' so both scalp directions surface independently."""
+    keys = [f"{t}|{s}" for t in TICKERS for s in ("C", "P")]
+    return {"tickers": [STATUS[k] for k in keys if k in STATUS],
+            "watching": list(TICKERS),
+            "session": SCAN["session"],
+            "last_scan": SCAN["ts"] or None,
+            "activity": ACTIVITY[-15:]}
 
 
 # ─────────────────────────── session / time ───────────────────────────
@@ -60,6 +168,14 @@ def _session_min(now):
         return None
     mins = (now.hour * 60 + now.minute) - (9 * 60 + 30)
     return mins if 0 <= mins <= 390 else None
+
+
+def _mins_to_close(now, dte):
+    """TRADING minutes of decay left until the contract expires. The `+ 390*dte` term is the whole point:
+    without it a 1DTE was told it had a few hours to live when it has that plus a full 390-min session,
+    which understates its remaining extrinsic and makes every theta number wrong by a whole day."""
+    to_bell = (16 * 60) - (now.hour * 60 + now.minute)
+    return max(0, to_bell) + 390 * int(dte or 0)
 
 
 # ─────────────────────────── config files (fail-open) ───────────────────────────
@@ -104,39 +220,141 @@ def _news(tkr):
 
 
 # ─────────────────────────── entry decision (PURE, unit-testable) ───────────────────────────
-def decide(tkr, ind, prev_ind, mech, session_min):
-    """Given the live tape (ind), the previous lap's tape (prev_ind), the ticker's mechanics, and minutes
-    since the open, return an entry spec {cp, regime, reason, score, grade} or None. Pure + deterministic
-    so it can be unit-tested with synthetic indicator dicts.
-
-    Direction comes from the desk's own tape_strength magnitude engine (pick the stronger side); a trade
-    only fires on a TRIGGER — a fresh VWAP reclaim/breakdown (needs prev_ind) or strong momentum — and only
-    when conviction clears the moderate bar. Midday chop (45–300 min) demands a strong grade."""
+def assess(tkr, ind, mech, session_min, side, crossed_up=False, crossed_down=False):
+    """Assess ONE direction (`side` = 'C' or 'P') for an ATM scalp — ALWAYS returns a verdict dict so the
+    observer can show WHY chip acts or waits. The two directions are anti-correlated (a strong call ⇒ an
+    against put), so the caller evaluates BOTH and the stronger one is chip's 'primary' pick; the other is
+    a 'counter' shadow (tagged, kept out of the real edge). TAKE needs: grade not against/weak; score ≥
+    MIN_TAPE_MODERATE; AND a trigger — a fresh VWAP reclaim (C, crossed_up) / breakdown (P, crossed_down)
+    from the FRESH per-lap spot, or strong momentum. Midday-strong gate dropped (shadow data-gen); every
+    TAKE tagged live_grade (live=would pass strict / explore=loosened only). Pure + deterministic."""
+    regime = mech.get("regime_bias", "trend")
     if not ind or ind.get("rsi") is None or not ind.get("vwap") or not ind.get("price"):
-        return None
-    sC, sP = MK.tape_strength("C", ind), MK.tape_strength("P", ind)
-    side = "C" if (sC["score"] or 0) >= (sP["score"] or 0) else "P"
-    st = sC if side == "C" else sP
-    if st["score"] is None or st["grade"] in ("against", "weak"):
-        return None
-    if st["score"] < MIN_TAPE_MODERATE:
-        return None
-    px, vwap = ind["price"], ind["vwap"]
+        return {"verdict": "WAIT", "reason": "no tape data yet", "score": None, "grade": "no-data",
+                "cp": side, "regime": regime}
+    st = MK.tape_strength(side, ind)
+    base = {"cp": side, "regime": regime, "score": st["score"], "grade": st["grade"]}
+    if st["score"] is None:
+        return {**base, "verdict": "WAIT", "reason": "no tape read"}
+    if st["grade"] == "against":
+        return {**base, "verdict": "WAIT", "reason": f"tape against ({st['score']}) — stand down"}
+    if st["grade"] == "weak" or st["score"] < MIN_TAPE_MODERATE:
+        return {**base, "verdict": "WAIT", "reason": f"tape {st['score']} ({st['grade']}) — below the {MIN_TAPE_MODERATE} bar"}
     trig = None
-    if prev_ind and prev_ind.get("price") and prev_ind.get("vwap"):
-        pp, pv = prev_ind["price"], prev_ind["vwap"]
-        if side == "C" and pp <= pv and px > vwap:
-            trig = "VWAP reclaim"
-        elif side == "P" and pp >= pv and px < vwap:
-            trig = "VWAP breakdown"
+    if side == "C" and crossed_up:
+        trig = "VWAP reclaim"
+    elif side == "P" and crossed_down:
+        trig = "VWAP breakdown"
     if not trig and st["grade"] == "strong":
         trig = "strong momentum"
     if not trig:
+        return {**base, "verdict": "WAIT",
+                "reason": f"tape {st['score']} ({st['grade']}), {'call' if side=='C' else 'put'} side — waiting for a trigger"}
+    # would this have passed the STRICT bar? (strict only demanded 'strong' DURING midday 45–300 min)
+    strict_ok = st["grade"] == "strong" or not (session_min is not None and 45 < session_min < 300)
+    return {**base, "verdict": "TAKE", "reason": trig,
+            "live_grade": "live" if strict_ok else "explore", "strict_take": bool(strict_ok)}
+
+
+ARM_MARGIN = 6                  # build the ladder one band EARLY so its quote streams are warm at trigger
+_LADDER_TTL = 20                # the DECISION must be fresh at trigger time; the DISPLAY tolerates 20s
+_LADDER = {}                    # f"{tkr}|{side}" -> (ts, result). Bounded by 2*len(TICKERS).
+
+
+def pick_strike(conn, tkr, side, spot, mech, dte_tuple, now, score, crossed):
+    """Choose the strike by VETO, not by optimiser (see chip_strike's module docstring: under a %-of-premium
+    stop the ladder's expectancy is flat, so ranking on EV would fit noise). Quotes 2N+1 rungs ONLY for an
+    ARMED side, so the steady-state IBKR line cost is ~5 extra streams against reap_subs' cap of 80.
+
+    Returns (chosen_quote, chosen_strike, ladder_result) or (None, atm_strike, None) when not armed — in
+    which case the caller keeps its existing single-ATM behaviour."""
+    inc = mech.get("strike_inc", 1.0)
+    atm = round(spot / inc) * inc
+    armed = bool(crossed or (score is not None and score >= MIN_TAPE_MODERATE - ARM_MARGIN))
+    if not armed:
+        return None, atm, None
+    key = f"{tkr}|{side}"
+    c = _LADDER.get(key)
+    if c and time.time() - c[0] < _LADDER_TTL and c[1].get("spot_ref") == round(spot, 2):
+        return c[1].get("_q"), c[1]["chosen"]["strike"] if c[1].get("chosen") else atm, c[1]
+    dte, expiry = dte_tuple[0], dte_tuple[1]
+    mc = _mins_to_close(now, dte)
+    quotes, qmap = [], {}
+    for k in SK.ladder_strikes(spot, inc):
+        ks = str(int(k)) if float(k).is_integer() else str(k)
+        try:
+            q = MK.option_quote(tkr, ks, side, expiry=expiry, ib=conn)
+        except Exception:
+            continue
+        if not q or q.get("error") or q.get("mid") is None:
+            continue
+        # the theta fuse is a veto input, so it must come from the same engine the card displays
+        fuse_min = fuse_state = None
+        try:
+            pr = CP.touch_probs(spot=spot, strike=k, cp=side, mark=q.get("mid"), entry=q.get("ask") or q.get("mid"),
+                                delta=q.get("delta"), gamma=q.get("gamma"), iv=q.get("iv"),
+                                t1_pct=mech.get("t1_pct"), t2_pct=mech.get("t2_pct"), t3_pct=mech.get("t3_pct"),
+                                cur_stop_pct=-abs(mech.get("stop_pct") or 0), stop_pct=mech.get("stop_pct"),
+                                mins_to_close=mc, dte=dte, ticker=tkr, hold_min=MAX_HOLD_S // 60) or {}
+            fuse_min, fuse_state = pr.get("stop_theta_min"), pr.get("fuse_state")
+        except Exception:
+            pass
+        row = dict(q); row.update(strike=k, fuse_min=fuse_min, fuse_state=fuse_state)
+        quotes.append(row); qmap[k] = q
+    res = SK.select(quotes=quotes, spot=spot, mech=mech, ticker=tkr,
+                    hold_min=MAX_HOLD_S // 60, equity=_equity(), max_risk_pct=1.0)
+    res["spot_ref"] = round(spot, 2)
+    chosen = res.get("chosen")
+    ck = chosen["strike"] if chosen else atm
+    res["_q"] = qmap.get(ck)
+    _LADDER[key] = (time.time(), res)
+    return res["_q"], ck, res
+
+
+def _equity():
+    """Account equity for the 1%-risk veto. Falls back to None (veto skipped) rather than guessing."""
+    try:
+        return float(_srv().E.ACCOUNT)
+    except Exception:
         return None
-    if 45 < session_min < 300 and st["grade"] != "strong":     # midday chop: only high-conviction
-        return None
-    return {"cp": side, "regime": mech.get("regime_bias", "trend"), "reason": trig,
-            "score": st["score"], "grade": st["grade"]}
+
+
+def apply_extension(a, ind, mech, spot, pq, side):
+    """SECOND-STAGE gate: once the actual contract is known, ask whether the move T1 needs still FITS inside
+    the recent range. Runs after assess() because req_pts depends on the option's own premium and delta.
+
+    A TAKE is demoted to WAIT when score − penalty falls under the bar. On the 7/21 QQQ 708C this reads
+    runway 0.42 pts against a T1 needing 0.75 (ratio 0.56, buying at 0.93 of the band) => −17 => 75-17=58,
+    under the 62 bar, and the trade never happens. Base rate on random QQQ side-minutes is 17.6% vetoed, so
+    this is a filter, not a blanket. chip's OWN historical entries veto at ~67% — that gap IS the finding:
+    a VWAP-cross trigger fires precisely when price is already pinned at the band edge.
+
+    Fail-open: any missing input leaves the verdict untouched (penalty 0, verdict "unknown")."""
+    closes = (ind or {}).get("closes") or []
+    mid = (pq or {}).get("mid")
+    delta = (pq or {}).get("delta")
+    req = None
+    if mid and delta and abs(delta) > 1e-6 and mech.get("t1_pct"):
+        req = (mech["t1_pct"] / 100.0 * mid) / abs(delta)
+    ext = X.assess(spot=spot, closes=closes, req_pts=req, side=side)
+    a = {**a, "ext": ext}
+    pen = ext.get("penalty") or 0
+    if not pen or a.get("verdict") != "TAKE" or a.get("score") is None:
+        return a
+    eff = a["score"] - pen
+    a["score_eff"] = eff
+    if eff < MIN_TAPE_MODERATE:
+        a["verdict"] = "WAIT"
+        a["reason"] = (f"extended ({ext['verdict']}) — tape {a['score']}−{pen}={eff} under the "
+                       f"{MIN_TAPE_MODERATE} bar" + (f"; {ext['note']}" if ext.get("note") else ""))
+        a["ext_blocked"] = True
+    return a
+
+
+def decide(tkr, ind, mech, session_min, side, crossed_up=False, crossed_down=False):
+    """Thin wrapper: the entry spec when assess() says TAKE, else None (kept for existing call sites/tests)."""
+    a = assess(tkr, ind, mech, session_min, side, crossed_up, crossed_down)
+    return a if a["verdict"] == "TAKE" else None
 
 
 # ─────────────────────────── book (one open shadow per ticker) ───────────────────────────
@@ -149,7 +367,7 @@ def _release_if_done(book, tkr):
         book.pop(tkr, None)
         return
     try:
-        import server
+        server = _srv()
         sig = next((s for s in server.SIGNALS if s.get("id") == b["sid"]), None)
     except Exception:
         return
@@ -161,38 +379,282 @@ def _release_if_done(book, tkr):
         book.pop(tkr, None)
 
 
+def _rebuild_book(book):
+    """A restart wipes chip's in-memory book, which ORPHANS any still-open scalp: the card loses its live
+    tape read (thesis goes 'no live read') and chip would happily double-enter the same ticker+side.
+    Rebuild from the live chip shadows already in SIGNALS so a restart is transparent."""
+    try:
+        server = _srv()
+        for s in server.SIGNALS:
+            if s.get("provider") != "chip":
+                continue
+            sh, sg = s.get("shadow") or {}, s.get("sig") or {}
+            if sh.get("state") != "live":
+                continue
+            tkr, cp = sg.get("ticker"), sg.get("type")
+            if not tkr or not cp or tkr not in TICKERS:
+                continue
+            opened = time.time()
+            try:
+                opened = datetime.fromisoformat(sh["start_utc"]).timestamp()
+            except Exception:
+                pass
+            key = f"{tkr}|{cp}"
+            book[key] = {"sid": s["id"], "opened": opened, "cp": cp}            # newest wins
+            # restore the COOLDOWN clock too — rebuilding only `book` let a restart bypass COOLDOWN_S
+            # entirely, so chip could re-enter the same ticker+side seconds after coming back up.
+            _LAST_EMIT[key] = max(_LAST_EMIT.get(key, 0), opened)
+        if book:
+            print(f"🤖 chip desk: adopted {len(book)} open scalp(s) after restart: {sorted(book)}", flush=True)
+    except Exception as e:
+        print(f"🤖 chip desk: book rebuild skipped ({e})", flush=True)
+
+
 def _cooling(tkr, now):
     return (now.timestamp() - _LAST_EMIT.get(tkr, 0)) < COOLDOWN_S
 
 
 # ─────────────────────────── emit (through the normal ingest path) ───────────────────────────
-def _emit(conn, tkr, dec, mech, book, now):
-    """Resolve the ATM contract off the live chain, gate on spread, and emit a chip signal via ingest()."""
-    import server
-    spot = MK.spot_quote(tkr, ib=conn)
-    if not spot:
-        return
-    inc = mech.get("strike_inc", 1.0)
-    strike = round(spot / inc) * inc
+def _date_label(ymd):
+    """A round-trip-SAFE label for a snapped expiry: 'MM/DD' (e.g. '07/22'). The slash disambiguates from
+    the premium digits (a 'Jul 22' after '@ 1.20' collides — the '20' misparses as the day). And NEVER emit
+    'NDTE' for N>1 — server's _resolve_expiry turns that into a raw calendar offset, not the LISTED date."""
+    return f"{int(ymd[4:6]):02d}/{int(ymd[6:8]):02d}"
+
+
+def dte_choice(ticker, mech, now, expiries):
+    """Mechanics-aware DTE selector. SINGLE SOURCE shared by build_chip_read (preview) AND _emit (fill).
+    Pure: `expiries` is a pre-fetched, cached, sorted list of YYYYMMDD (from market.list_expiries).
+    Returns (dte, expiry_yyyymmdd, label, why). dte_pref → time-of-day bump (past 1pm, the real 0DTE theta
+    cliff) → dte_max cap → SNAP to nearest LISTED expiry ≥ target. Fail-open to the clock rule if empty.
+    NOTE: no θ%/premium gate — a 0DTE's θ is ~100%/day by construction, so that gate trips always and would
+    kill 0DTE entirely; the late-day cliff (the real risk) is the time-of-day bump."""
+    today = now.strftime("%Y%m%d")
+    if not expiries:                                        # enumeration failed -> legacy clock rule
+        if now.hour < 13:
+            return (0, today, "0DTE", "expiry list unavailable → clock rule (0DTE)")
+        return (1, (now + timedelta(days=1)).strftime("%Y%m%d"), "1DTE", "expiry list unavailable → clock rule (1DTE)")
+    pref = mech.get("dte_pref", 0)
+    dmax = mech.get("dte_max", 1)
+    target, notes = pref, []
+    if pref == 0 and now.hour >= 13:
+        target = 1; notes.append("past 13:00 ET — dodging the 0DTE theta cliff into the close")
+    target = min(target, dmax)
+    target_ymd = (now + timedelta(days=target)).strftime("%Y%m%d")
+    snapped = next((e for e in expiries if e >= target_ymd), expiries[-1])   # nearest listed ≥ target, else last
+    real_dte = (datetime.strptime(snapped, "%Y%m%d").date() - now.date()).days
+    if snapped == today:
+        label = "0DTE"
+    elif real_dte == 1:
+        label = "1DTE"
+    else:
+        label = _date_label(snapped)                        # round-trip-safe explicit date for any snap >1
+    if real_dte != target and target < dmax + 1:
+        notes.append(f"no {target}DTE listed → nearest {label} ({real_dte}DTE)")
+    why = (f"{label} — " + ("; ".join(notes) if notes else
+           ("daily expiry, max gamma" if real_dte == 0 else "per-ticker DTE bias")))
+    return (real_dte, snapped, label, why)
+
+
+_TAPE_WEIGHTS = {"VWAP": 0.35, "EMA": 0.25, "RSI": 0.25, "room": 0.15}   # market.tape_strength blend
+
+
+def build_chip_read(ind, mech, spot, pq, a, now, smin, strike, dte_tuple):
+    """chip's REASONING block for a watch card: strike + DTE verdicts (why optimal), tape decomposition,
+    fill quality, distance-to-trigger, and the would-be plan. Pure — takes the already-computed
+    ind/quote/assess AND the DTE decision (from dte_choice) so it's unit-testable and adds no I/O."""
+    if not (spot and a and a.get("cp") and pq and not pq.get("error") and pq.get("mid")):
+        return {"available": False, "reason": (a or {}).get("reason") or "no quote yet"}
+    cp = a["cp"]
+    smax = mech.get("spread_max", 8)
+    delta, spread = pq.get("delta"), pq.get("spread_pct")
+    ad = abs(delta) if delta is not None else None
+    mid, ask = pq.get("mid"), pq.get("ask")
+    live_px = ask or mid                                # chip fills at the market ask (crosses the spread)
+    # ── strike verdict ──
+    if spread is not None and spread > smax:
+        sv, swhy = "wide", f"spread {spread}%>{smax}% cap — fill cost eats the edge"
+    elif ad is None:
+        sv, swhy = "acceptable", "ATM strike — delta read pending"
+    elif 0.40 <= ad <= 0.60:
+        sv, swhy = "optimal", f"Δ{ad:.2f} ATM — max gamma-per-$ for a scalp, spread {spread}%≤{smax}%"
+    elif 0.30 <= ad <= 0.70:
+        sv, swhy = "acceptable", f"Δ{ad:.2f} near-ATM — fill cost fine (spread {spread}%)"
+    elif ad < 0.30:
+        sv, swhy = "wide", f"Δ{ad:.2f} — too far OTM, theta bleeds the pop (lotto)"
+    else:
+        sv, swhy = "wide", f"Δ{ad:.2f} — deep ITM ties up capital for little gamma"
+    strike_b = {"strike": strike, "delta": delta,
+                "moneyness_pct": round((spot - strike) / strike * 100, 3) if strike else None,
+                "spread_pct": spread, "verdict": sv, "why": swhy}
+    # ── DTE verdict (mechanics-aware — dte_tuple decided by dte_choice against the LISTED expiries) ──
+    dte, expiry, dte_label, dwhy = dte_tuple
+    theta = pq.get("theta")
+    theta_pct = round(abs(theta) / mid * 100) if (theta and mid) else None   # daily decay as % of premium
+    if dte == 0 and theta_pct is not None:                                   # honest DISPLAY note (not a gate)
+        dwhy = dwhy + f"; θ≈{theta_pct}%/day — scalp it quick, bleeds into the close"
+    dte_b = {"dte": dte, "expiry": expiry, "label": dte_label, "theta": theta, "theta_pct": theta_pct,
+             "verdict": dte_label, "why": dwhy, "dte_pref": mech.get("dte_pref", 0)}
+    # ── tape decomposition (BOTH sides scored so the marginality is visible; favor-consistent plain text) ──
+    st = MK.tape_strength(cp, ind)
+    st_other = MK.tape_strength("P" if cp == "C" else "C", ind)
+    cp_other = "P" if cp == "C" else "C"
+    side_word = "calls" if cp == "C" else "puts"
+
+    def _plain(k, sc):
+        if k == "VWAP":
+            return "price on the favorable side of VWAP" if sc > 0.05 else \
+                   "price on the WRONG side of VWAP" if sc < -0.05 else "price right at VWAP"
+        if k == "EMA":
+            return f"EMA trend supports the {side_word}" if sc > 0.05 else \
+                   "EMA trend leans AGAINST" if sc < -0.05 else "EMAs flat — no trend"
+        if k == "RSI":
+            r = ind.get("rsi")
+            tag = " momentum with us" if sc > 0.05 else " momentum against" if sc < -0.05 else " neutral"
+            return (f"RSI {round(r)} —{tag}") if r is not None else "RSI n/a"
+        if k == "room":
+            way = "run (up)" if cp == "C" else "fall (down)"
+            return f"room to {way}" if sc > 0.05 else "pinned at the band — little room" if sc < -0.05 else "mid-channel"
+        return ""
+    factors = [{"factor": c["k"], "score": c["s"], "weight": _TAPE_WEIGHTS.get(c["k"], 0),
+                "contribution": round(c["s"] * _TAPE_WEIGHTS.get(c["k"], 0), 3), "plain": _plain(c["k"], c["s"])}
+               for c in (st.get("components") or [])]
+    aligned = sum(1 for f in factors if f["score"] > 0.05)
+    tape_b = {"score": st.get("score"), "grade": st.get("grade"), "icon": st.get("icon"),
+              "bars": st.get("bars"), "factors": factors, "side": cp,
+              "cp_other": cp_other, "score_other": st_other.get("score"),
+              "summary": f"{aligned}/4 factors aligned — {cp} {st.get('score')} vs {cp_other} {st_other.get('score')}"}
+    # ── FILL QUALITY (chip crosses the spread at the market ask for immediacy — this is fill quality,
+    #    NOT a price to wait for; the tape TRIGGER below is the real go/no-go). ──
+    fill_ok = (spread is not None and spread <= smax)
+    fquality = "tight" if (spread is not None and spread <= smax * 0.5) else "ok" if fill_ok else "wide"
+    fill_b = {"mid": mid, "ask": ask, "live_px": live_px, "spread_pct": spread, "spread_max": smax,
+              "quality": fquality, "ok": bool(fill_ok)}
+    # ── distance-to-trigger (mirrors assess branches) ──
+    px, vwap, score = ind.get("price"), ind.get("vwap"), a.get("score")
+    if a.get("verdict") == "TAKE":
+        trig = {"trigger_type": "ready", "needs": f"trigger live: {a.get('reason')}", "gap": 0, "ready": True}
+    elif a.get("grade") == "against":
+        trig = {"trigger_type": "none", "needs": "tape against — stand down", "gap": None, "ready": False}
+    elif score is not None and score < MIN_TAPE_MODERATE:
+        trig = {"trigger_type": "tape", "needs": f"tape {score} < {MIN_TAPE_MODERATE} bar",
+                "gap": MIN_TAPE_MODERATE - score, "ready": False}
+    elif px and vwap:
+        if cp == "C":
+            trig = {"trigger_type": "vwap_reclaim", "needs": f"reclaim VWAP {vwap} (now {px})",
+                    "gap": round(vwap - px, 2), "ready": False}
+        else:
+            trig = {"trigger_type": "vwap_breakdown", "needs": f"lose VWAP {vwap} (now {px})",
+                    "gap": round(px - vwap, 2), "ready": False}
+    else:
+        trig = {"trigger_type": "tape", "needs": a.get("reason") or "waiting", "gap": None, "ready": False}
+    # ── would-be plan preview (off the ask chip would pay; == the managed plan) ──
+    stop, t1, t2, t3 = mech.get("stop_pct"), mech.get("t1_pct"), mech.get("t2_pct"), mech.get("t3_pct")
+    e = live_px
+    pxat = lambda p: round(e * (1 + p / 100.0), 2) if (e and p is not None) else None
+    plan_b = {"entry": e,
+              "stop": {"pct": stop, "px": round(e * (1 - stop / 100.0), 2) if (e and stop) else None, "r": -1.0},
+              "t1": {"pct": t1, "px": pxat(t1), "r": round(t1 / stop, 2) if (t1 and stop) else None},
+              "t2": {"pct": t2, "px": pxat(t2), "r": round(t2 / stop, 2) if (t2 and stop) else None},
+              "t3": {"pct": t3, "px": pxat(t3), "r": round(t3 / stop, 2) if (t3 and stop) else None}}
+    # ── live regime (honest read) so it doesn't contradict a "midday chop" trigger with a static "trend" ──
+    e9, e21, px2 = ind.get("ema9"), ind.get("ema21"), ind.get("price")
+    sep = abs(e9 - e21) / px2 * 100 if (e9 and e21 and px2) else 0
+    if smin is not None and 45 < smin < 300 and sep < 0.05:
+        regime_live = "midday chop"
+    elif sep < 0.03:
+        regime_live = "range"
+    else:
+        regime_live = "trend"
+    # combined GO signal: only truly "ready" when the tape trigger fires AND the fill is clean
+    ready = bool(trig.get("ready") and fill_b["ok"])
+    # ── EXTENSION: is there room left for the move T1 needs? (attached by apply_extension before this call)
+    ext_b = a.get("ext") or {"verdict": "unknown", "penalty": 0, "degraded": True}
+    # ── PROBABILITIES: P(T1/T2/T3), P(stop), the theta fuse, and the move T1 actually requires. Display-only
+    # by chip_probs' own honesty contract; the ACTION stays on the σ-free terms (t1_first + the fuse).
+    probs_b = None
+    try:
+        mc = _mins_to_close(now, dte)
+        if e and mc:
+            probs_b = CP.touch_probs(spot=spot, strike=strike, cp=cp, mark=mid, entry=e,
+                                     delta=pq.get("delta"), gamma=pq.get("gamma"), iv=pq.get("iv"),
+                                     t1_pct=t1, t2_pct=t2, t3_pct=t3, cur_stop_pct=-abs(stop or 0),
+                                     stop_pct=stop, mins_to_close=mc, dte=dte, ticker=None,
+                                     hold_min=MAX_HOLD_S // 60)
+    except Exception:
+        probs_b = None
+    return {"available": True, "strike": strike_b, "dte": dte_b, "tape": tape_b,
+            "fill": fill_b, "trigger": trig, "plan": plan_b, "regime_live": regime_live, "ready": ready,
+            "extension": ext_b, "probs": probs_b, "ladder": a.get("ladder")}
+
+
+def build_live_read(ind, spot, side, sid, ts):
+    """Live tape read for a ticker chip is CURRENTLY HOLDING — the in-scalp twin of build_chip_read, so the
+    live card can answer "is the entry thesis still true?". PURE: consumes the already-cached 1-min `ind`
+    and the warm per-lap `spot`, so it adds ZERO I/O. `sid` stamps the owning signal so the server can
+    never cross-join this read onto a different scalp on the same ticker+side."""
+    if not ind or not ind.get("price") or not ind.get("vwap"):
+        return None
+    st = MK.tape_strength(side, ind)                       # SAME function used at entry -> comparable
+    is_c = side == "C"
+    px, vwap = ind["price"], ind["vwap"]
+    e9, e21 = ind.get("ema9"), ind.get("ema21")
+    return {"sid": sid, "ts": ts, "side": side, "spot": spot,
+            "score": st.get("score"), "grade": st.get("grade"),
+            "price": px, "vwap": vwap,
+            "vfav": round((px - vwap) / vwap * 100 * (1 if is_c else -1), 3) if vwap else None,
+            "ema_side": (("with" if (e9 > e21) == is_c else "against") if (e9 and e21) else None),
+            "rsi": ind.get("rsi"),
+            "factors": [{"factor": c["k"], "score": c["s"]} for c in (st.get("components") or [])]}
+
+
+def _emit(conn, tkr, dec, mech, book, now, chip_read=None, bookkey=None, role="primary"):
+    """Resolve the ATM contract off the live chain, gate on spread, and emit a chip signal via ingest().
+    Returns None on success, or a (state, reason) tuple when it declines — so the observer sees WHY."""
+    server = _srv()
+    cr = chip_read if (chip_read and chip_read.get("available")) else None
+    if cr:                                              # use the FROZEN preview decision → preview == fill
+        strike = cr["strike"]["strike"]
+        exp, dte_lbl = cr["dte"]["expiry"], cr["dte"]["label"]
+    else:                                               # safety fallback (should not happen from the scan loop)
+        spot = MK.spot_quote(tkr, ib=conn)
+        if not spot:
+            return ("wait", "trigger hit but no underlying quote")
+        inc = mech.get("strike_inc", 1.0)
+        strike = round(spot / inc) * inc
+        exp = now.strftime("%Y%m%d") if now.hour < 13 else (now + timedelta(days=1)).strftime("%Y%m%d")
+        dte_lbl = "0DTE" if now.hour < 13 else "1DTE"
     strike_s = str(int(strike)) if float(strike).is_integer() else str(strike)
-    exp = now.strftime("%Y%m%d")                        # 0DTE — matches _resolve_expiry("0DTE") -> today
     q = MK.option_quote(tkr, strike_s, dec["cp"], expiry=exp, ib=conn)
     if not q or q.get("error") or not q.get("mid"):
-        return
+        return ("wait", f"trigger hit but no quote on {strike_s}{dec['cp']}")
     entry_px = q.get("ask") or q.get("mid")             # a real fillable price -> verified, no price_mismatch
     if not entry_px:
-        return
+        return ("wait", "trigger hit but no fillable price")
     if (q.get("spread_pct") or 99) > mech["spread_max"]:
-        return                                          # too wide to scalp cleanly
+        return ("wait", f"trigger hit but spread {q.get('spread_pct')}% > {mech['spread_max']}% — too wide")
     news = _news(tkr)
+    # freeze the WHY at fill (strike/DTE verdict + tape decomposition + sweet-spot) so the live card can
+    # tell the story's beginning; read back by server._chip_lifecycle via card["chip"].
+    entry_read = None
+    if chip_read and chip_read.get("available"):
+        entry_read = {"strike": chip_read["strike"], "dte": chip_read["dte"],
+                      "tape_at_entry": {"score": chip_read["tape"]["score"], "grade": chip_read["tape"]["grade"],
+                                        "factors": chip_read["tape"]["factors"]},
+                      "trigger": chip_read.get("trigger"),
+                      "fill": {"spread_pct": chip_read["fill"]["spread_pct"],
+                               "quality": chip_read["fill"]["quality"], "px": entry_px}}
     data = {
-        "text": f"{tkr} {strike_s}{dec['cp']} @ {round(entry_px, 2)} 0DTE",
+        "text": f"{tkr} {strike_s}{dec['cp']} @ {round(entry_px, 2)} {dte_lbl}",
         "provider": "chip",
         "msg_id": f"chip-{tkr}-{int(now.timestamp())}",
         "force": True,                                  # deliberate re-entry -> bypass the 4h/48h dedup sweep
         "chip_plan": {k: mech[k] for k in ("stop_pct", "t1_pct", "t2_pct", "t3_pct")},
         "chip_meta": {"regime": dec["regime"], "reason": dec["reason"], "score": dec.get("score"),
-                      "news": news.get("state", "none")},
+                      "live_grade": dec.get("live_grade"), "strict_take": dec.get("strict_take"),
+                      "direction_role": role,          # 'primary' (stronger side) vs 'counter' (data only)
+                      "geom": GEOM,                    # stop-geometry cohort — never pool g1 (0DTE) with g2
+                      "news": news.get("state", "none"), "entry_read": entry_read},
     }
     if os.environ.get("DESK_ENV") == "test":
         data["_allow_test_ingest"] = True               # sandbox only; prod bypasses the guard
@@ -200,48 +662,114 @@ def _emit(conn, tkr, dec, mech, book, now):
         entry = server.ingest(data)
     except Exception as e:
         print(f"🤖 chip emit error {tkr}: {e}", flush=True)
-        return
+        return ("wait", f"emit error: {e}")
     if entry and entry.get("id"):
-        book[tkr] = {"sid": entry["id"], "opened": time.time(), "cp": dec["cp"]}
-        _LAST_EMIT[tkr] = now.timestamp()
-        print(f"🤖 chip {tkr} {strike_s}{dec['cp']} @ {entry_px} "
-              f"({dec['reason']}, tape {dec.get('score')}) → {entry['id']}", flush=True)
+        bk = bookkey or tkr
+        book[bk] = {"sid": entry["id"], "opened": time.time(), "cp": dec["cp"]}
+        _LAST_EMIT[bk] = now.timestamp()
+        line = f"{tkr} {strike_s}{dec['cp']} @ {entry_px}  ({dec['reason']}, tape {dec.get('score')}, {role})"
+        _activity("📈 SCALP " + line)
+        print(f"🤖 chip {line} → {entry['id']}", flush=True)
+        return None
+    return ("wait", "trigger hit but ingest declined the card")
 
 
 # ─────────────────────────── scan loop (daemon thread) ───────────────────────────
 def scan_loop():
     conn = None
     book = {}
-    prev = {}
     print("🤖 chip desk: scan loop started (shadow-only provider 'chip').", flush=True)
+    _rebuild_book(book)          # adopt scalps that were still open across a restart
     while True:
         try:
             if conn is None:
                 conn = MK.connect(client_id=82)
             now = _now_et()
             smin = _session_min(now)
+            SCAN["ts"] = now.timestamp()
             if smin is None:                            # market closed -> reset intraday state, idle
-                prev.clear()
+                _PREV_SPOT.clear()
+                _LAST_CROSS.clear()
                 book.clear()
+                STATUS.clear()
+                SCAN["session"] = "closed"
                 time.sleep(30)
                 continue
+            SCAN["session"] = "open"
             mechs = _load_mechanics()
+            server = _srv()
             for tkr in TICKERS:
                 try:
-                    import server
-                    ind = server._tape_cached(conn, tkr, ttl=60)     # shared bar cache, ≤1 pull/60s/ticker
+                    ind = _tape(conn, tkr)                           # chip's own 1-min tape (session VWAP)
+                    spot = MK.spot_quote(tkr, ib=conn)               # FRESH per lap — cross detection + observer
                     mech = mechs.get(tkr, DEFAULT_MECHANICS.get(tkr, {}))
-                    _release_if_done(book, tkr)
-                    if tkr in book or _cooling(tkr, now):
-                        prev[tkr] = ind
-                        continue
-                    dec = decide(tkr, ind, prev.get(tkr), mech, smin)
-                    prev[tkr] = ind
-                    if not dec:
-                        continue
-                    if _news(tkr).get("veto"):          # hard news/macro veto -> suppress
-                        continue
-                    _emit(conn, tkr, dec, mech, book, now)
+                    ps, vwap = _PREV_SPOT.get(tkr), ind.get("vwap")
+                    _fresh_up = bool(ps is not None and spot and vwap and ps <= vwap and spot > vwap)
+                    _fresh_dn = bool(ps is not None and spot and vwap and ps >= vwap and spot < vwap)
+                    if _fresh_up or _fresh_dn:                   # remember the cross; it stays valid a while
+                        _LAST_CROSS[tkr] = (now.timestamp(), "up" if _fresh_up else "down")
+                    _lc = _LAST_CROSS.get(tkr)
+                    _recent = bool(_lc and (now.timestamp() - _lc[0]) <= CROSS_WINDOW_S)
+                    crossed_up = bool(_recent and _lc[1] == "up")
+                    crossed_down = bool(_recent and _lc[1] == "down")
+                    sdir = ("up" if spot > ps else "down" if spot < ps else None) if (spot and ps) else None
+                    if spot:
+                        _PREV_SPOT[tkr] = spot
+                    news = _news(tkr)
+                    # SHADOW BOTH DIRECTIONS independently (anti-correlated, so usually only one qualifies).
+                    aC = assess(tkr, ind, mech, smin, "C", crossed_up, crossed_down)
+                    aP = assess(tkr, ind, mech, smin, "P", crossed_up, crossed_down)
+                    strong_side = "C" if (aC.get("score") or 0) >= (aP.get("score") or 0) else "P"
+                    exps = None
+                    for side, a in (("C", aC), ("P", aP)):
+                        key = f"{tkr}|{side}"
+                        _release_if_done(book, key)
+                        held = book.get(key)
+                        chip_read = live_read = None
+                        if held and spot:                            # IN a scalp -> live tape for the thesis check
+                            live_read = build_live_read(ind, spot, side, held["sid"], now.timestamp())
+                        if not held and spot:                        # build this side's reasoning + prospective option
+                            inc = mech.get("strike_inc", 1.0)
+                            if exps is None:
+                                try: exps = MK.list_expiries(conn, tkr)
+                                except Exception: exps = []
+                            dt = dte_choice(tkr, mech, now, exps)
+                            # ladder pick when ARMED (veto-only); plain ATM otherwise
+                            pq, _strike, _lad = pick_strike(conn, tkr, side, spot, mech, dt, now,
+                                                            a.get("score"), crossed_up or crossed_down)
+                            if pq is None:
+                                _strike = round(spot / inc) * inc
+                                _ss = str(int(_strike)) if float(_strike).is_integer() else str(_strike)
+                                try:
+                                    pq = MK.option_quote(tkr, _ss, side, expiry=dt[1], ib=conn)
+                                except Exception:
+                                    pq = None
+                            a = {**a, "ladder": _lad}
+                            a = apply_extension(a, ind, mech, spot, pq, side)   # runway gate, needs the quote
+                            chip_read = build_chip_read(ind, mech, spot, pq, a, now, smin, _strike, dt)
+                        if held:
+                            sig = next((s for s in server.SIGNALS if s.get("id") == held["sid"]), None)
+                            pnl = ((sig or {}).get("shadow") or {}).get("now")
+                            state = "holding"
+                            reason = f"holding {side} scalp" + (f" · {pnl:+.0f}%" if pnl is not None else "")
+                        elif _cooling(key, now):
+                            left = int((COOLDOWN_S - (now.timestamp() - _LAST_EMIT.get(key, 0))) / 60) + 1
+                            state, reason = "cooldown", f"cooldown ~{left}m after last {side} scalp"
+                        elif news.get("veto"):
+                            state, reason = "veto", f"news veto — {news.get('note') or 'event risk'}"
+                        else:
+                            state = "scan" if a["verdict"] == "TAKE" else "wait"
+                            reason = a["reason"]
+                        STATUS[key] = {"ticker": tkr, "side": side, "spot": spot, "spot_dir": sdir,
+                                       "score": a.get("score"), "grade": a.get("grade"),
+                                       "regime": a.get("regime"), "cp": side, "primary": side == strong_side,
+                                       "state": state, "reason": reason, "news": news.get("state", "none"),
+                                       "chip_read": chip_read, "live_read": live_read}
+                        if state == "scan":
+                            role = "primary" if side == strong_side else "counter"
+                            r = _emit(conn, tkr, a, mech, book, now, chip_read, key, role)
+                            if r:
+                                STATUS[key]["state"], STATUS[key]["reason"] = r
                 except Exception:
                     continue
             try:

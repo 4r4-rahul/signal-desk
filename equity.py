@@ -64,6 +64,8 @@ def load_withdrawals():
 
 def add_withdrawal(amount, date=None):
     from datetime import datetime, timezone, timedelta
+    if float(amount or 0) <= 0:          # a no-op withdrawal would reset the HWM — refuse it
+        return load_withdrawals()
     d = date or datetime.now(timezone(timedelta(hours=-4))).date().isoformat()
     wl = load_withdrawals()
     wl.append({"date": d, "amount": round(float(amount), 2)})
@@ -92,7 +94,10 @@ def recommended_banked(peak):
 def sleeve_state(start):
     start = float(start)
     events = [(ts, "t", d) for ts, d in _realized_events()]           # actual realized $ per closed trade
-    events += [(w["date"] + "T23:59", "w", w["amount"]) for w in load_withdrawals()]
+    # only REAL withdrawals (amount > 0) reset the HWM. A zero/no-op entry must never
+    # reset it — that silently disarms the drawdown throttle and the -20% halt.
+    events += [(w["date"] + "T23:59", "w", w["amount"])
+               for w in load_withdrawals() if float(w.get("amount") or 0) > 0]
     events.sort()
 
     eq = hwm = peak = start

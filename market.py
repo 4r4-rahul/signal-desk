@@ -210,6 +210,39 @@ def _contract(ticker):
 
 
 _STK_CACHE = {}         # ticker -> qualified Stock/Index contract (conId is stable)
+_EXP_CACHE = {}         # ticker -> {"day": YYYYMMDD, "exps": [sorted listed expirations >= today]}
+
+
+def list_expiries(ib, ticker):
+    """Sorted list of an option root's LISTED expirations (YYYYMMDD >= today), cached per ticker with a
+    DAILY TTL — expiries only roll across days. One reqSecDefOptParams def-request (NOT a streaming line,
+    so it doesn't touch the reap_subs 80-line budget). Fail-open -> keep yesterday's list, else []."""
+    today = _et_today()
+    tk = ticker.upper()
+    c = _EXP_CACHE.get(tk)
+    if c and c["day"] == today:
+        return c["exps"]
+    exps = (c or {}).get("exps", [])
+    try:
+        stk = _STK_CACHE.get(tk)
+        if stk is None:
+            stk = _contract(tk); ib.qualifyContracts(stk); _STK_CACHE[tk] = stk
+        chains = ib.reqSecDefOptParams(stk.symbol, "", stk.secType, stk.conId)
+        s = set()
+        for ch in chains:                                   # union expirations across exchanges
+            s |= set(getattr(ch, "expirations", None) or [])
+        got = sorted(e for e in s if e >= today)
+        if got:
+            exps = got                                      # only replace on a good read
+    except Exception:
+        pass                                                # keep prior list rather than go blank
+    _EXP_CACHE[tk] = {"day": today, "exps": exps}
+    return exps
+
+
+def _et_today():
+    from datetime import datetime, timezone, timedelta
+    return datetime.now(timezone(timedelta(hours=-4))).strftime("%Y%m%d")
 
 
 def _spot_px(t):
@@ -399,13 +432,15 @@ def realized_vol(bars):
     return float(r.std() * np.sqrt(78 * 252))             # ~78 five-min bars/day, annualized
 
 
-def context(ticker, sig_type, ib=None, strike=None, expiry=None):
+def context(ticker, sig_type, ib=None, strike=None, expiry=None, want_equity=False):
     """One-shot: connect (if needed), pull bars, return indicators + technical + option read + realized vol.
-    `expiry` (yyyymmdd) prices the SIGNAL'S contract — without it the nearest/0DTE is used (wrong for 7/9 etc.)."""
+    `expiry` (yyyymmdd) prices the SIGNAL'S contract — without it the nearest/0DTE is used (wrong for 7/9 etc.).
+    want_equity=False: fetching the balance on EVERY signal piles up account-summary subscriptions
+    (IBKR Error 322) and is unused unless EQUITY_SOURCE=ibkr."""
     own = ib is None
     try:
         if own: ib = connect()
-        eq = equity(ib)                                   # live balance (for compounding)
+        eq = equity(ib) if want_equity else None          # live balance (only when compounding off IBKR)
         bars = get_bars(ib, ticker)
         ind = indicators(bars)
         rv = realized_vol(bars)

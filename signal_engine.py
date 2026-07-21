@@ -147,7 +147,8 @@ _SKIP_TK = NOT_TICKERS
 
 # Tickers that are ALSO common English words — matching them lowercase mid-sentence is how
 # Prince's "Filled now" became a ServiceNow card. These only count when written UPPERCASE (or $-prefixed).
-AMBIG_TK = {"NOW", "ARM", "COIN", "HOOD", "BULL", "COST", "APP", "GRAB", "HIVE", "BILL", "ALL", "OPEN", "RUN", "PLAY"}
+AMBIG_TK = {"NOW", "ARM", "COIN", "HOOD", "BULL", "COST", "APP", "GRAB", "HIVE", "BILL", "ALL", "OPEN", "RUN", "PLAY",
+            "ET", "AM", "PM"}   # ET/AM/PM: real tickers but overwhelmingly timezone/time abbrevs in prose
 
 
 def _find_ticker(text):
@@ -172,26 +173,26 @@ def _resolve_ticker(text, mstart, provider, strike):
         if u not in _SKIP_TK or u in KNOWN_TK:            # a cashtag is EXPLICIT — $now really is ServiceNow
             return ALIAS.get(u, u)
     pre = text[:mstart]                                   # 2) nearest ticker-ish token before strike
-    for _i, tok in enumerate(reversed(re.findall(r'[A-Za-z]{1,5}', pre))):
+    # WHOLE short words only (\b…\b): never fragment a long word — 'operationaLLY' must NOT yield LLY.
+    for _i, tok in enumerate(reversed(re.findall(r'\b[A-Za-z]{1,5}\b', pre))):
         u = tok.upper()
-        # ambiguous common-word tickers (now/arm/coin/hood…) in lowercase only count in TICKER POSITION
-        # (within 2 tokens of the strike, e.g. mike's 'hood 80c') — never as distant sentence words
-        _ambig_block = (not tok.isupper()) and _i > 1
         if u in _SKIP_TK:
             continue
+        # ambiguous common-word/abbrev tickers (ET/PM/now/arm/coin/all/open…) only count in TICKER POSITION
+        # (within ~2 tokens of the strike, e.g. mike's 'hood 80c') — NEVER as distant prose, in ANY case.
+        # This is what kills 'PM ET | Jul' -> ET and 'coin flip' -> COIN.
+        _amb = (u in AMBIG_TK) or (u in ALIAS and ALIAS[u] in AMBIG_TK)
+        if _amb and _i > 1:
+            continue
         if u in ALIAS:
-            if ALIAS[u] in AMBIG_TK and _ambig_block:     # distant lowercase 'coin flip' ≠ COIN
-                continue
             return ALIAS[u]
         if tok.isupper() and len(tok) >= 2:               # providers write tickers in CAPS
             return u
         if u in KNOWN_TK:                                 # known symbol in any case (mike's lowercase)
-            if u in AMBIG_TK and _ambig_block:            # 'arm the stop'/'filled now' ≠ ARM/NOW tickers
-                continue
             return u
         if len(tok) == 1 and tok in ("C", "F"):
             return u
-    for tok in reversed(re.findall(r'[A-Za-z]{3,6}', pre)):   # 2b) typo-tolerant ticker (msttr -> MSTR)
+    for tok in reversed(re.findall(r'\b[A-Za-z]{3,6}\b', pre)):   # 2b) typo-tolerant ticker (msttr -> MSTR)
         u = tok.upper()
         if u in _SKIP_TK or u in KNOWN_TK:
             continue
@@ -235,7 +236,9 @@ def _parse_premium(text, pos):
     for scope in (text[pos:pos + 42], text):
         # decimal premium: optional integer part + dot + 1-2 fractional, digits IMMEDIATELY after the dot
         # (no space) — otherwise a sentence period like "today. 1.35" is misread as ".1" = 0.10.
-        m = re.search(r'@?\s*((?:\d{1,3})?\.\d{1,2})\b', scope)
+        # trailing "s" is the "~80 cents" shorthand (".80s", "1.20s") — must not block the match, but the
+        # (?![\d.]) terminator still stops a truncated read of a longer decimal (".850" -> never ".85").
+        m = re.search(r'@?\s*((?:\d{1,3})?\.\d{1,2})s?(?![\d.])', scope)
         if m:
             v = float(m.group(1))
             if 0.03 <= v <= 60:
@@ -372,15 +375,17 @@ def parse_signal(s, provider=None):
     m, typ, assumed, strike = None, None, False, None
     for mm in _STRIKE_RE.finditer(text):                        # strike + C/P suffix (e.g. 750C, $73c)
         typ = mm.group(2).upper(); m = mm; strike = mm.group(1); break
-    if not m:                                                   # "$300 ... Calls": $-strike + call/put word
-        dm = re.search(r'\$(\d{2,5}(?:\.\d{1,2})?)', text)      #   ($-prefixed strike beats a date's "10")
+    if not m:                                                   # strike ADJACENT to "call"/"put" ("210 calls")
+        mm = _WORD_LEG_RE.search(text)                          #   MUST run before the loose $-scan below:
+        if mm:                                                  #   the strike sits right before the word, so
+            typ = "C" if mm.group(2).lower().startswith("c") else "P"; m = mm; strike = mm.group(1)
+    if not m:                                                   # fallback: $-strike + a call/put word ANYWHERE
+        # ONLY when no adjacent "NNN call/put" exists — else this grabs a "Price target $212" / "$250 level"
+        # number as the strike (Prince's callouts state the strike as "210 calls", target separately).
+        dm = re.search(r'\$(\d{2,5}(?:\.\d{1,2})?)', text)
         wm = re.search(r'\b(call|put)s?\b', text, re.I)
         if dm and wm:
             typ = "C" if wm.group(1).lower().startswith("c") else "P"; m = dm; strike = dm.group(1)
-    if not m:                                                   # strike + word "call"/"put" (digit before)
-        mm = _WORD_LEG_RE.search(text)
-        if mm:
-            typ = "C" if mm.group(2).lower().startswith("c") else "P"; m = mm; strike = mm.group(1)
     if not m:                                                   # Mike's word order: "call/put … on STRIKE"
         mm = _CALLPUT_ON_RE.search(text) or _ON_CALLPUT_RE.search(text)
         if mm:
@@ -771,21 +776,30 @@ def setup_grade(ticket, tier_key, lotto, chase_pct=0, delta=None, zero_dte=False
 
 
 _ENTRY_VERB = re.compile(r'\b(took|taking|buy(?:ing)?|bought|brought|add(?:ing|ed)?|grabb?ed|'
-                         r'swinging|entered|entering|entry|re-?enter|got in|i(?:\'| a)m in)\b', re.I)
-# a FIRM fill confirmation — the provider states they are actually in at a price
+                         r'swinging|entered|entering|re-?enter|got in|i(?:\'| a)m in)\b', re.I)
+# NOTE: bare "entry" (the NOUN) is deliberately NOT an entry verb — Prince writes "0.85 entry" / "2.10 entry"
+# to state a PLANNED entry PRICE while only WATCHING; treating it as "I entered" mis-carded watches as fills.
+# a FIRM fill/in confirmation — the provider states they are actually IN (blocks a watch classification)
+_FIRM_ENTRY = re.compile(r'\b(?:filled|took|bought|entered|grabb?ed|adding|i(?:\'| a)?m in|got in)\b'
+                         r'|(?:^|[.!]\s+)in\s+\$?[a-z]{1,5}\b'          # "In AAPL 325 put" (sentence-initial)
+                         r'|\b(?:in|filled)\s*(?:@|at)\s*\$?\d', re.I)
 _FILL_VERB = re.compile(r'\b(?:in|got in|i(?:\'| a)?m in)\s*(?:@|at)\s*\$?\d'
                         r'|\b(?:filled|entered|took it)\s*(?:@|at)?\s*\$?\d'
                         r'|(?:@|\bat)\s*\$?\d.{0,12}\bfill(?:ed)?\b', re.I)
-# WATCH intent — flagged/eyeing a setup but NOT in yet ("Watch $X", "might be a play", "may pivot", "Watching")
+# WATCH intent — eyeing/considering a setup but NOT in. Includes Prince's phrasings: "looks nice", "let's
+# see", "limit order set" (a resting order, not a fill), "leaning".
 _WATCH_RE = re.compile(r'\b(watch(?:ing|list)?|on watch|keep(?:ing)? an eye|eye ?ing|on (?:my )?radar'
                        r'|might be a play|could be a play|may(?:be)? a play|watch for'
-                       r'|may(?: need)? (?:to )?pivot|might pivot|thinking about|considering)\b', re.I)
+                       r'|may(?: need)? (?:to )?pivot|might pivot|thinking about|considering'
+                       r'|looks? (?:nice|good|clean|strong|solid|interesting)|let\'?s see|see the close'
+                       r'|limit order (?:set|in)|leaning|if it breaks|waiting (?:for|on))\b', re.I)
 
 
 def is_watch(text):
-    """A setup the provider is WATCHING (not filled). Watch language present, no firm entry/fill verb."""
+    """A setup the provider is WATCHING (not filled): watch/consideration language present, and NO firm
+    'I'm actually in / filled' marker. A planned-entry PRICE ("2.10 entry") does NOT count as being in."""
     t = text or ""
-    return bool(_WATCH_RE.search(t)) and not _ENTRY_VERB.search(t) and not _FILL_VERB.search(t)
+    return bool(_WATCH_RE.search(t)) and not _FIRM_ENTRY.search(t) and not _FILL_VERB.search(t)
 
 
 def analyze(text, seg, provider=None):
