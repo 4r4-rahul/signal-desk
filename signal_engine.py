@@ -262,6 +262,31 @@ def _parse_premium(text, pos):
 
 _STRIKE_RE = re.compile(r'(?<![\d.])(\d{1,5}(?:\.\d{1,2})?)\s*([cp])\b', re.I)
 _WORD_LEG_RE = re.compile(r'(?<![\d.])\$?(\d{1,5}(?:\.\d{1,2})?)\s*(call|put)s?\b', re.I)
+
+# Spans that are DATES, never strikes. Blanked (same length, so every other offset is preserved) before
+# any strike scan runs. Prince's "In SMCI july 31 / 1.67 per contract" states NO strike -- "july 31" is the
+# expiry -- but the bare "STRIKE PREMIUM" shorthand happily read `31` as the strike and `1.67` as the
+# premium, carding an SMCI 31C that quotes $0.21 against a stated $1.67. Same failure family as reading a
+# price target as a strike: a number that already means something else must not be reused.
+_DATE_SPAN_RES = [
+    re.compile(r'\b\d{1,2}\s*(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\b', re.I),
+    re.compile(r'\b(?:jan|feb|mar|apr|may|jun|jul|aug|sept?|oct|nov|dec)[a-z]*\.?\s*\d{1,2}\b', re.I),
+    re.compile(r'\b\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b'),
+    re.compile(r'\b\d\s*dte\b', re.I),
+]
+
+
+def _mask_dates(text):
+    """Blank out date substrings so their digits can't be picked up as a strike. Length-preserving, so
+    match offsets elsewhere in the string are unaffected. Premiums are untouched (1.67 is not a date)."""
+    if not text:
+        return text
+    out = list(text)
+    for rx in _DATE_SPAN_RES:
+        for mm in rx.finditer(text):
+            for i in range(mm.start(), mm.end()):
+                out[i] = " "
+    return "".join(out)
 # "TICKER STRIKE at/@ PREMIUM" with NO c/p and no call/put word (e.g. "NVDA 200 at 0.10") -> default CALL
 _BARE_LEG_RE = re.compile(r'(?<![\d.])(\d{2,5}(?:\.\d{1,2})?)\s*(?:@|\bat\b)\s*\$?\d{0,3}\.\d{1,2}', re.I)
 # Mike shorthand: "TICKER STRIKE PREMIUM" space-separated, NO c/p (e.g. "META 675 2.5", "NVDA 212.5 .14",
@@ -373,6 +398,7 @@ def parse_signal(s, provider=None):
     if re.match(r'\s*(sold|all ?out|out\b|trimm?ed|cutting|closing|secure|scal(ed|ing)|de-?risk)\b', low):
         return None
     m, typ, assumed, strike = None, None, False, None
+    text = _mask_dates(text)      # a DATE's digits can never be the strike -- see _mask_dates
     for mm in _STRIKE_RE.finditer(text):                        # strike + C/P suffix (e.g. 750C, $73c)
         typ = mm.group(2).upper(); m = mm; strike = mm.group(1); break
     if not m:                                                   # strike ADJACENT to "call"/"put" ("210 calls")
