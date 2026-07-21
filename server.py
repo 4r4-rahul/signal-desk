@@ -6,10 +6,13 @@ web dashboard with live cards + Take/Skip (which log to the tracker).
 Run:   python3 server.py         (open http://localhost:8787 in a browser)
 Env:   ACCOUNT=15000 RISK_PCT=1  python3 server.py
 """
-import json, http.server
+import json, http.server, gzip
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import os, re
+
+GZIP_MIN = 1400        # ~one MTU; below this the gzip header costs more than it saves
+GZIP_LEVEL = 6         # 6 is the knee: level 9 buys <2% more on this JSON for ~3x the CPU
 import deskpaths as _P                       # env-controlled DATA root (prod: identical to code dir)
 import signal_engine as E
 import tracker as T
@@ -2017,15 +2020,10 @@ def act(data):
 
 class H(http.server.BaseHTTPRequestHandler):
     def _send(self, code, body, ctype="application/json"):
-        self.send_response(code)
-        self.send_header("Content-Type", ctype)
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
-        self.end_headers()
         # NaN/Infinity (from empty IBKR quotes) is INVALID JSON — Python emits it, but the browser's
         # JSON.parse rejects it and blanks the whole dashboard. Scrub to null at the single output point.
         if isinstance(body, bytes):
-            self.wfile.write(body)
+            out = body
         else:
             # One-pass strict encode (allow_nan=False rejects NaN/Inf — invalid browser JSON that blanks the
             # dashboard). Quotes are scrubbed at the SOURCE so the common path never trips; the fallback
@@ -2034,7 +2032,26 @@ class H(http.server.BaseHTTPRequestHandler):
                 out = json.dumps(body, default=str, allow_nan=False).encode()
             except ValueError:
                 out = json.dumps(_scrub_nan(body), default=str).encode()
-            self.wfile.write(out)
+        # gzip: /api/signals is ~250 KB of highly repetitive JSON polled every 2.5s. Compressing it is a
+        # ~7x cut (251 -> 36 KB) for ~2ms of CPU, and the browser decompresses natively. Threshold keeps
+        # tiny replies uncompressed, where the 20-byte gzip header would cost more than it saves.
+        enc = None
+        if len(out) >= GZIP_MIN and "gzip" in (self.headers.get("Accept-Encoding") or ""):
+            try:
+                out = gzip.compress(out, GZIP_LEVEL)
+                enc = "gzip"
+            except Exception:
+                enc = None
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        if enc:
+            self.send_header("Content-Encoding", enc)
+            self.send_header("Vary", "Accept-Encoding")
+        self.send_header("Content-Length", str(len(out)))     # was absent -> forced connection-close framing
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.end_headers()
+        self.wfile.write(out)
 
     def do_OPTIONS(self): self._send(200, {})
 
