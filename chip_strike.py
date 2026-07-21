@@ -85,12 +85,24 @@ def _veto(q, *, spot, mech, ticker, hold_min, equity, max_risk_pct):
             return "fuse unknown"                      # FAIL CLOSED: it is a safety filter
         if hold_min and fuse < FUSE_HOLD_MULT * hold_min:
             return f"theta fuse {int(fuse)}m<{int(FUSE_HOLD_MULT*hold_min)}m"
-    stop_pct = mech.get("stop_pct")
-    if equity and stop_pct:
-        risk = stop_pct / 100.0 * px * 100.0
-        if risk > equity * (max_risk_pct / 100.0):
-            return f"risk ${risk:.0f}>${equity*max_risk_pct/100.0:.0f} cap"
+    # NB: the 1% risk cap is deliberately NOT a veto here. It vetoes ITM-first (highest premium first), so
+    # it inverted this module's whole objective: at $9.5k it eliminated 706/707/708/709 and left 710 -- the
+    # HIGHEST-leverage rung -- as the "lowest-leverage survivor". Risk belongs to SIZE, not to strike.
+    # See size_for() below; the caller refuses the trade when even one contract breaches the cap.
     return None
+
+
+def size_for(px, stop_pct, equity, max_risk_pct=1.0):
+    """Contracts affordable under the risk cap, and the $ risk of one. Returns (qty, risk_per_contract).
+    qty == 0 means NOT TRADEABLE at this equity — the caller must refuse, never walk OTM to make it fit.
+    (QQQ 1DTE ATM at a 28% stop is ~$125/contract, which breaches a $95 cap on ~95% of entries: that is a
+    real 'this instrument is too big for this account' signal and must not be silently routed around.)"""
+    if not px or not stop_pct:
+        return 0, None
+    risk = stop_pct / 100.0 * px * 100.0
+    if not equity:
+        return 1, round(risk, 2)              # no equity known -> don't fabricate a limit
+    return int(equity * (max_risk_pct / 100.0) // risk), round(risk, 2)
 
 
 def select(*, quotes, spot, mech, ticker=None, hold_min=60, equity=None, max_risk_pct=1.0):

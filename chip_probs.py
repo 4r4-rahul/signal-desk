@@ -141,6 +141,13 @@ def touch_probs(*, spot, strike, cp, mark, entry, delta, gamma, iv,
     T_dif = min(float(hold_min), T_dec) if hold_min else T_dec
     tte_yr = (T_dec / 60.0) / TRADING_HOURS_YR         # decay clock -> also the σ-inversion basis
     dif_yr = (T_dif / 60.0) / TRADING_HOURS_YR
+    # Extrinsic burns on the WALL CLOCK, not on trading minutes. Using trading minutes made a 1DTE look
+    # like it had 430 minutes of decay to spend when it has 1480, overstating theta drag ~3.4x and
+    # shortening the fuse by the same factor. That is not cosmetic: the fuse is a HARD VETO in
+    # chip_strike._veto, so a too-short fuse silently rejects perfectly good rungs. `hold`/`T_dif` are real
+    # elapsed minutes, so they stay as-is and are now measured against the same wall clock.
+    _onf = overnight_factor(T_dec, dte)
+    T_cal = T_dec * (_onf ** 2)                        # = T_dec * (calendar/trading) minutes
     sig, sig_src, sig_stale = _sigma(iv, mark, spot, strike, tte_yr, ticker,
                                      overnight_factor(T_dec, dte))
     # SELF-CHECK: the mark-inversion branch is internally self-consistent, so when both are available a
@@ -160,10 +167,10 @@ def touch_probs(*, spot, strike, cp, mark, entry, delta, gamma, iv,
     extrinsic = max(0.0, mark - intrinsic)
     at = lambda p: entry * (1.0 + (p or 0) / 100.0)     # premium level for a %-of-entry target
 
-    def _mark_at(t):                                    # extrinsic decays ≈ √(remaining/total)
-        if T_dec <= 0:
+    def _mark_at(t):                                    # extrinsic decays ≈ √(remaining/total), WALL clock
+        if T_cal <= 0:
             return intrinsic
-        return intrinsic + extrinsic * math.sqrt(max(0.0, (T_dec - t) / T_dec))
+        return intrinsic + extrinsic * math.sqrt(max(0.0, (T_cal - t) / T_cal))
 
     def _p_target(target_px, up):
         """Chord-fit the (convex) drifting log-barrier, then one closed-form first-passage."""
@@ -200,7 +207,7 @@ def touch_probs(*, spot, strike, cp, mark, entry, delta, gamma, iv,
         elif r >= 1.0:
             fuse, fuse_state = 0, "now"            # stop already at/above the mark
         else:
-            fuse, fuse_state = int(round(T_dec * (1.0 - r * r))), "min"
+            fuse, fuse_state = int(round(T_cal * (1.0 - r * r))), "min"
     # ── σ-FREE #2: gambler's ruin — does T1 come BEFORE the stop? (independent of σ and T) ──
     t1_first = None
     if not hit[0]:

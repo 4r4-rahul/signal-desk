@@ -326,7 +326,25 @@ def pick_strike(conn, tkr, side, spot, mech, dte_tuple, now, score, crossed):
                     hold_min=MAX_HOLD_S // 60, equity=_equity(), max_risk_pct=1.0)
     res["spot_ref"] = round(spot, 2)
     chosen = res.get("chosen")
-    ck = chosen["strike"] if chosen else atm
+    # SIZE the chosen rung against the 1% cap. If one contract already breaches it, the instrument is too
+    # big for this account -- refuse. Previously the cap lived inside the strike VETOES, which both
+    # inverted the objective (it eliminated ITM first) and FAILED OPEN: below ~$7k every rung was vetoed,
+    # select() returned chosen=None, and this function then handed back a bare ATM quote with no risk,
+    # delta or fuse check at all. Harmless while shadow-only; a live-money hole at go-live.
+    if chosen:
+        qty, risk1 = SK.size_for(chosen.get("premium"), mech.get("stop_pct"), _equity(), 1.0)
+        res["qty"], res["risk_per_contract"] = qty, risk1
+        if qty < 1:
+            res["degraded"] = True
+            res["note"] = f"${risk1:.0f} risk/contract over the 1% cap — not tradeable at this equity"
+            res["_q"] = None
+            _LADDER[key] = (time.time(), res)
+            return None, atm, res           # fail CLOSED: no quote -> caller emits nothing
+    if not chosen:                          # no rung cleared the vetoes -> refuse, don't fall back to ATM
+        res["_q"] = None
+        _LADDER[key] = (time.time(), res)
+        return None, atm, res
+    ck = chosen["strike"]
     res["_q"] = qmap.get(ck)
     _LADDER[key] = (time.time(), res)
     return res["_q"], ck, res
@@ -755,7 +773,10 @@ def scan_loop():
                             # ladder pick when ARMED (veto-only); plain ATM otherwise
                             pq, _strike, _lad = pick_strike(conn, tkr, side, spot, mech, dt, now,
                                                             a.get("score"), crossed_up or crossed_down)
-                            if pq is None:
+                            # _lad is None  -> side not armed: plain ATM quote, unchanged behaviour.
+                            # _lad is not None with no quote -> the ladder REFUSED (risk cap / all vetoed).
+                            # Those are different, and collapsing them is what made the cap fail open.
+                            if pq is None and _lad is None:
                                 _strike = round(spot / inc) * inc
                                 _ss = str(int(_strike)) if float(_strike).is_integer() else str(_strike)
                                 try:
@@ -763,6 +784,9 @@ def scan_loop():
                                 except Exception:
                                     pq = None
                             a = {**a, "ladder": _lad}
+                            if pq is None and _lad is not None:
+                                a = {**a, "verdict": "WAIT",
+                                     "reason": _lad.get("note") or "no strike cleared the risk/veto checks"}
                             a = apply_extension(a, ind, mech, spot, pq, side)   # runway gate, needs the quote
                             chip_read = build_chip_read(ind, mech, spot, pq, a, now, smin, _strike, dt)
                         if held:

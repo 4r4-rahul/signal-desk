@@ -276,7 +276,13 @@ def _shadow_scaleout(ticks, t1, t2, stop, t3=None):
         if hit2 and t3 and pct >= t3:
             realized += rem * t3; rem = 0.0; break                            # runner books the final target
         if pct <= slvl:
-            realized += rem * slvl; rem = 0.0; break                          # remainder stopped/trailed out
+            # Book at the OBSERVED tick, not at the level. Booking at `slvl` assumed a fill exactly at the
+            # stop, discarding the gap between the last good tick and the one that breached it. Median
+            # inter-tick gap is 63s (p90 88s) and an option routinely traverses several percent in that
+            # time, so the old form gifted +0.65R per stopped shadow (+0.52R on the population mean) --
+            # and DIFFERENTIALLY: sulker +1.37R, mike +1.07R, chip +0.09R. It was ranking providers by how
+            # coarsely their paths happened to be sampled. min() keeps it a stop, never a windfall.
+            realized += rem * min(pct, slvl); rem = 0.0; break
     if rem > 0:
         realized += rem * ticks[-1]                                           # runner exits at last observed tick
     return round(realized, 2)
