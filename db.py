@@ -298,8 +298,15 @@ def _shadow_r(con, signal_id, stop, t1, t2, t3=None):
     return ret, round(ret / abs(stop), 3)
 
 
-_PATH_RETAIN_DAYS = 30       # keep ~30 days of ticks — longer than any option DTE, so ended shadows keep
-                             # a full path for their FINAL score; anything older can't change again
+# RETAIN THE FULL TICK HISTORY. The original 30 days was reasoned from SCORING ("an ended shadow can't
+# change again, so its path is spent") — but the path is not just an input to the score, it is the primary
+# research asset: the minute-by-minute story of how every provider's call actually behaved, which is the
+# only thing that can ever reveal a repeatable pattern. Deleting it optimises for a use we don't have
+# (rescoring) at the cost of the one we do (finding edge).
+# Cost is trivial: ~4.5k ticks/day at ~320 bytes = ~370 MB/year, against a DB currently at 17 MB.
+# Caught 18 days before the first deletion would have fired — nothing has been lost.
+# If size ever bites, DOWNSAMPLE old paths (keep entry/peak/trough/exit + every Nth tick), never delete.
+_PATH_RETAIN_DAYS = 3650     # ~10 years == keep everything; see note above before lowering this
 _SHADOW_ACTIVE_DAYS = 3      # a shadow whose path last grew within N days is still "live" -> worth re-scoring
 _LAST_PRUNE = [0.0]          # once/hour gate (list so it's mutable from the nested call)
 
