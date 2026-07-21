@@ -256,6 +256,8 @@ def load_signals():
 
 SIGNALS_CAP = 350   # in-memory ceiling — mirrors the 250 disk window with headroom for kept-alive cards
 CHIP_LOG_KEEP = 24  # keep the last N completed chip scalps as the persistent per-provider trade-log
+SHADOW_TICK_BATCH = 40   # live shadows ticked per heavy lap, ROTATING so every one is covered (see below)
+_SHADOW_RR = [0]         # rotation offset (list so the monitor loop can mutate it)
 
 
 def trim_signals():
@@ -513,7 +515,9 @@ def _init_shadow(entry):
     if entry.get("shadow"):
         return
     tk, sg = entry.get("ticket") or {}, entry.get("sig") or {}
-    ref = tk.get("limit") or sg.get("premium")
+    # fillable ticket -> stated premium -> live quote mid. The last fallback matters: a callout with no
+    # stated price is still fully shadowable off the real market, and refusing lost the whole trade story.
+    ref = tk.get("limit") or sg.get("premium") or (entry.get("opt") or {}).get("mid")
     if not ref:
         return
     entry["shadow"] = {"ref": ref, "stop_pct": (entry.get("plan") or {}).get("stop_pct") or tk.get("stop_pct") or 30,
@@ -1141,7 +1145,21 @@ def monitor_loop():
             today = datetime.now(ET).strftime("%Y%m%d")
             now_utc = datetime.now(timezone.utc).isoformat()
             dirty = False
-            for s in shadows[-20:]:
+            # ROUND-ROBIN, not "newest 20". The old `shadows[-20:]` silently starved every shadow beyond
+            # the 20 most recent: on a busy multi-provider day the older ones stopped receiving path ticks
+            # entirely, so their story just stopped being recorded mid-trade. Rotating covers ALL live
+            # shadows while keeping per-lap work (and the IBKR line budget) bounded. At 40/lap and ~30s
+            # between heavy laps, a shadow is re-touched well inside reap_subs' 90s idle window, so its
+            # stream stays warm rather than churning.
+            if shadows:
+                _n = len(shadows)
+                _k = min(_n, SHADOW_TICK_BATCH)
+                _off = _SHADOW_RR[0] % _n
+                _batch = (shadows + shadows)[_off:_off + _k]
+                _SHADOW_RR[0] = (_off + _k) % _n
+            else:
+                _batch = []
+            for s in _batch:
                 try:
                     sh, sg = s["shadow"], s["sig"]
                     if sh.get("state") in ("WIN", "LOSS"):        # migrate old resolved -> keep tracking the full life
@@ -1691,7 +1709,12 @@ def ingest(data):
     # AUTO-SHADOW every carded signal (ALL providers) at ingest so provider edge is COMPLETE — a signal
     # you neither take nor dismiss still resolves to a would-be outcome, killing selection bias. Taken ->
     # becomes a real position (drops out of the shadow filter); anything else -> shadow-tracked. Junk isn't.
-    if not (entry.get("junk") or {}).get("block") and (entry.get("sig") or {}).get("premium"):
+    # Ref price: the provider's stated premium OR the live fillable ticket OR the live quote mid. A signal
+    # with no STATED premium ("grabbing NVDA 200c here") is still perfectly shadowable off the real market,
+    # and dropping it lost the trade's whole story for no reason.
+    _sref = ((entry.get("sig") or {}).get("premium") or (entry.get("ticket") or {}).get("limit")
+             or (entry.get("opt") or {}).get("mid"))
+    if not (entry.get("junk") or {}).get("block") and _sref:
         _init_shadow(entry)
     SIGNALS.append(entry)
     save_signals()
