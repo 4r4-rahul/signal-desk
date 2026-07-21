@@ -86,11 +86,33 @@ def _touch(a, mu_T, sig_sqrt_T, up=True):
     return _N(z1) + math.exp(ex) * _N(z2)
 
 
-def _sigma(iv, mark, spot, strike, tte_yr, ticker):
+def overnight_factor(mins_to_close, dte):
+    """sqrt(calendar hours / trading hours) to expiry — the term that makes the calendar->trading-time
+    conversion correct when the window CONTAINS AN OVERNIGHT. Derived from mins_to_close and dte alone, so
+    this module stays clock-free and pure.
+
+    This is exactly 1.0 for a same-session 0DTE, which is why the bare SIG_CAL_TO_TRADING constant looked
+    right when it was validated against a 0DTE quote — and then went silently wrong the day chip's default
+    moved to 1DTE. At 1DTE/15:20 the missing factor is 1.855, i.e. sigma was understated by ~46%.
+    (Approximation: ignores weekends, so a Friday 1DTE over-states calendar time. Bounded and conservative
+    in the direction of a WIDER sigma, and the action path is sigma-free regardless.)"""
+    d = int(dte or 0)
+    if d <= 0 or not mins_to_close or mins_to_close <= 0:
+        return 1.0
+    m0 = max(0.0, float(mins_to_close) - 390.0 * d)      # minutes left in TODAY's session
+    cal = m0 + 1440.0 * d                                # wall-clock minutes to the expiry bell
+    return math.sqrt(cal / float(mins_to_close))
+
+
+def _sigma(iv, mark, spot, strike, tte_yr, ticker, on_factor=1.0):
     """implied → mark-inverted (Brenner–Subrahmanyam, ATM only) → per-ticker default."""
     if iv and SIG_MIN <= iv <= SIG_MAX:
-        return float(iv) * SIG_CAL_TO_TRADING, "iv", False    # calendar-annualised -> trading-time
-    if mark and spot and tte_yr > 0 and strike and abs(spot - strike) / spot < 0.015:
+        # calendar-annualised (IBKR) -> trading-time, INCLUDING the overnight term
+        return float(iv) * SIG_CAL_TO_TRADING * on_factor, "iv", False
+    # Brenner-Subrahmanyam assumes the premium is ~ALL extrinsic, so the band must be judged against the
+    # PREMIUM, not the spot. The old `|S-K|/S < 1.5%` was $11 on SPY: a $2.28 ITM call priced ~$3 is 76%
+    # intrinsic and inverts to a sigma ~1.6x too high. abs(spot-strike) bounds intrinsic without needing cp.
+    if mark and spot and tte_yr > 0 and strike and abs(spot - strike) <= 0.05 * mark:
         s = mark / (0.3989 * spot * math.sqrt(tte_yr))
         if SIG_MIN <= s <= SIG_MAX:
             return s, "mark", False
@@ -119,7 +141,18 @@ def touch_probs(*, spot, strike, cp, mark, entry, delta, gamma, iv,
     T_dif = min(float(hold_min), T_dec) if hold_min else T_dec
     tte_yr = (T_dec / 60.0) / TRADING_HOURS_YR         # decay clock -> also the σ-inversion basis
     dif_yr = (T_dif / 60.0) / TRADING_HOURS_YR
-    sig, sig_src, sig_stale = _sigma(iv, mark, spot, strike, tte_yr, ticker)
+    sig, sig_src, sig_stale = _sigma(iv, mark, spot, strike, tte_yr, ticker,
+                                     overnight_factor(T_dec, dte))
+    # SELF-CHECK: the mark-inversion branch is internally self-consistent, so when both are available a
+    # large disagreement means the IV conversion is wrong. This is precisely what would have caught the
+    # 1DTE bug on its first card instead of a review. Surfaced, never acted on.
+    sig_check = None
+    if sig_src == "iv" and mark and spot and strike and tte_yr > 0 and abs(spot - strike) <= 0.05 * mark:
+        s_mark = mark / (0.3989 * spot * math.sqrt(tte_yr))
+        if SIG_MIN <= s_mark <= SIG_MAX and sig > 0:
+            r = s_mark / sig
+            if r > 1.30 or r < 0.77:
+                sig_check = round(r, 2)
     sst = sig * math.sqrt(dif_yr)                      # diffusion over the HOLD, not to the bell
     if sst <= 0:
         return {"method": "nosigma", "stale": True, "tte_min": round(T_dec)}
@@ -184,7 +217,7 @@ def touch_probs(*, spot, strike, cp, mark, entry, delta, gamma, iv,
            "t3": 1.0 if hit[2] else (_clampp(p3) if p3 is not None else None),
            "stop": _clampp(ps) if ps is not None else None,
            "t1_first": t1_first,
-           "sigma": round(sig, 4), "sigma_src": sig_src,
+           "sigma": round(sig, 4), "sigma_src": sig_src, "sigma_disagree": sig_check,
            "tte_min": int(round(T_dec)), "horizon_min": int(round(T_dif)), "dte": dte,
            "req_now_pts": round(req_now, 2) if req_now is not None else None,
            "req_eod_pts": round(req_eod, 2) if req_eod is not None else None,

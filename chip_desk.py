@@ -78,6 +78,7 @@ def _chip_indicators(bars):
     ind = MK.indicators(bars)
     if not ind:
         return None
+    tb = None                       # today's bars; stays None if the block below fails -> fall back to `bars`
     try:
         import numpy as np
         today = bars[-1].date.date()
@@ -93,8 +94,13 @@ def _chip_indicators(bars):
     # Raw closes for the EXTENSION guard. It needs a window (100 min) LONGER than the move being judged,
     # which is exactly what BB(20)-on-1-min cannot give — 20 bars re-centre on the move you are chasing.
     # Bounded slice, so this can't grow the cached dict without limit.
+    # SESSION-FILTERED, like the VWAP above. Slicing the raw 2-day pull meant that for the first ~100
+    # minutes of every session the band straddled the overnight gap: sd was then driven by the gap, not by
+    # intraday range. Measured on 60 sessions, 39% of triggers had a straddling window and the penalty
+    # disagreed with a session-only window on 69% of pre-11:10 cases. Under MIN_BARS the guard degrades
+    # honestly (penalty 0) instead of silently reading a bimodal mixture.
     try:
-        ind["closes"] = [float(b.close) for b in bars[-(X.DEFAULT_HORIZON_MIN + 20):]]
+        ind["closes"] = [float(b.close) for b in (tb or bars)][-(X.DEFAULT_HORIZON_MIN + 20):]
     except Exception:
         ind["closes"] = []
     return ind
@@ -108,7 +114,10 @@ def _tape(conn, tkr, ttl=45):
     c = _TAPE.get(tkr)
     if not c or _t.time() - c[0] > ttl:
         try:
-            ind = _chip_indicators(MK.get_bars(conn, tkr, duration="2 D", size="1 min")) or {}
+            # 3 D (not 2 D) so EMA315 gets 945+ bars of seed: at 780 the truncated-seed residual is 7.1e-3,
+            # at 1170 it is 5.9e-4. Same single historical request — no extra streaming line, no extra
+            # pacing cost against IBKR's 60-per-10-min budget.
+            ind = _chip_indicators(MK.get_bars(conn, tkr, duration="3 D", size="1 min")) or {}
         except Exception:
             ind = {}
         _TAPE[tkr] = (_t.time(), ind)
@@ -240,6 +249,18 @@ def assess(tkr, ind, mech, session_min, side, crossed_up=False, crossed_down=Fal
         return {**base, "verdict": "WAIT", "reason": f"tape against ({st['score']}) — stand down"}
     if st["grade"] == "weak" or st["score"] < MIN_TAPE_MODERATE:
         return {**base, "verdict": "WAIT", "reason": f"tape {st['score']} ({st['grade']}) — below the {MIN_TAPE_MODERATE} bar"}
+    # LONG-LOOKBACK TREND GATE. Binary, sign-only, sigma-FREE — it reads an EMA ordering, not a magnitude,
+    # so no volatility input can flip it. Measured over 220 triggers / 60 sessions: trades agreeing with
+    # this trend returned +0.046R, trades fighting it -0.261R, delta +0.303R (day-block bootstrap 95% CI
+    # [+0.050, +0.539], P(delta>0) = 0.991). Deliberately NOT a score penalty — the score is not predictive
+    # enough to tune on (raising the bar 74->76 gives z=+0.38; dwell/hysteresis gives nothing), so a
+    # penalty would just reintroduce a surface to overfit. Fail-open when the EMAs are absent.
+    e135, e315 = ind.get("ema135"), ind.get("ema315")
+    if e135 is not None and e315 is not None:
+        if (e135 > e315) != (side == "C"):
+            return {**base, "verdict": "WAIT", "htf": {"ema135": e135, "ema315": e315, "agrees": False},
+                    "reason": f"against the ~5h trend (EMA135 {e135} {'<' if e135 < e315 else '>'} EMA315 {e315})"}
+        base = {**base, "htf": {"ema135": e135, "ema315": e315, "agrees": True}}
     trig = None
     if side == "C" and crossed_up:
         trig = "VWAP reclaim"
@@ -320,16 +341,20 @@ def _equity():
 
 
 def apply_extension(a, ind, mech, spot, pq, side):
-    """SECOND-STAGE gate: once the actual contract is known, ask whether the move T1 needs still FITS inside
-    the recent range. Runs after assess() because req_pts depends on the option's own premium and delta.
+    """OBSERVE-ONLY. Computes the runway read and attaches it to the card and the emit record; it does NOT
+    gate entries.
 
-    A TAKE is demoted to WAIT when score − penalty falls under the bar. On the 7/21 QQQ 708C this reads
-    runway 0.42 pts against a T1 needing 0.75 (ratio 0.56, buying at 0.93 of the band) => −17 => 75-17=58,
-    under the 62 bar, and the trade never happens. Base rate on random QQQ side-minutes is 17.6% vetoed, so
-    this is a filter, not a blanket. chip's OWN historical entries veto at ~67% — that gap IS the finding:
-    a VWAP-cross trigger fires precisely when price is already pinned at the band edge.
+    It WAS a gate for a few hours on 2026-07-21 and the evidence killed it. Replayed over 220 triggers on
+    60 sessions: trades it blocked returned −0.037R, trades it passed returned −0.053R — delta −0.016,
+    z = −0.12. It blocked 66% of trend-agreeing trades and 75% of trend-fighting ones, a 9pp gap
+    indistinguishable from noise. It is not a filter; it is a random 69% decimation of the sample, and it
+    tripled the sessions needed to learn anything (24 -> 71).
 
-    Fail-open: any missing input leaves the verdict untouched (penalty 0, verdict "unknown")."""
+    The ~67% veto rate on chip's own entries — which the first version cited as evidence the guard was
+    finding something real — is just the base rate of the statistic, not discrimination.
+
+    Kept computed (not deleted) because `ext` is logged on every emit: once ~150 chip signals carry it,
+    whether runway predicts anything becomes a question data can answer instead of argument."""
     closes = (ind or {}).get("closes") or []
     mid = (pq or {}).get("mid")
     delta = (pq or {}).get("delta")
@@ -339,15 +364,8 @@ def apply_extension(a, ind, mech, spot, pq, side):
     ext = X.assess(spot=spot, closes=closes, req_pts=req, side=side)
     a = {**a, "ext": ext}
     pen = ext.get("penalty") or 0
-    if not pen or a.get("verdict") != "TAKE" or a.get("score") is None:
-        return a
-    eff = a["score"] - pen
-    a["score_eff"] = eff
-    if eff < MIN_TAPE_MODERATE:
-        a["verdict"] = "WAIT"
-        a["reason"] = (f"extended ({ext['verdict']}) — tape {a['score']}−{pen}={eff} under the "
-                       f"{MIN_TAPE_MODERATE} bar" + (f"; {ext['note']}" if ext.get("note") else ""))
-        a["ext_blocked"] = True
+    if a.get("score") is not None and pen:
+        a["score_eff"] = a["score"] - pen          # recorded for later analysis; NOT acted on
     return a
 
 

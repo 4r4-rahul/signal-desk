@@ -322,9 +322,20 @@ def indicators(bars):
     tp = (h + l + c) / 3
     vwap = float((tp * v).sum() / v.sum()) if v.sum() > 0 else float(c[-1])
     sma20, sd20 = float(c[-20:].mean()), float(c[-20:].std())
-    return {"price": round(float(c[-1]), 2), "vwap": round(vwap, 2),
-            "rsi": _rsi(c), "ema9": round(_ema(c[-30:], 9), 2), "ema21": round(_ema(c[-40:], 21), 2),
-            "bb_up": round(sma20 + 2 * sd20, 2), "bb_mid": round(sma20, 2), "bb_low": round(sma20 - 2 * sd20, 2)}
+    out = {"price": round(float(c[-1]), 2), "vwap": round(vwap, 2),
+           "rsi": _rsi(c), "ema9": round(_ema(c[-30:], 9), 2), "ema21": round(_ema(c[-40:], 21), 2),
+           "bb_up": round(sma20 + 2 * sd20, 2), "bb_mid": round(sma20, 2), "bb_low": round(sma20 - 2 * sd20, 2)}
+    # LONG-LOOKBACK trend (chip only; absent on the 5-min human path, which never has this many bars).
+    # The longest thing chip could previously see was EMA21 ~ 40 min — SHORTER THAN ITS OWN 60-min hold —
+    # so ~30% of its entries were counter-trend pops into a horizon where SPY/QQQ measurably mean-revert
+    # (variance ratio 0.835 at 60 min, z = -21.9). On 1-min bars these spans are the 15-minute EMA9/EMA21
+    # (15x9=135, 15x21=315): measured 95.5% identical selection, so a coarser bar adds nothing but lag.
+    # Lookback = 3x span keeps the truncated-seed residual under 1e-3.
+    if len(c) >= 405:
+        out["ema135"] = round(_ema(c[-405:], 135), 2)
+    if len(c) >= 945:
+        out["ema315"] = round(_ema(c[-945:], 315), 2)
+    return out
 
 
 def technical(sig_type, ind):
