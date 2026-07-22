@@ -567,7 +567,16 @@ def _init_shadow(entry):
     ref = tk.get("limit") or sg.get("premium") or (entry.get("opt") or {}).get("mid")
     if not ref:
         return
-    entry["shadow"] = {"ref": ref, "stop_pct": (entry.get("plan") or {}).get("stop_pct") or tk.get("stop_pct") or 30,
+    # `ref` is the DECISION reference (what the card quotes). `fill` is what you would actually PAY for
+    # it — the ask. Everything the desk SCORES runs off `fill`; only the card's headline % still reads
+    # off `ref`. Derived by the same ladder db uses to reconstruct history, so live and backfilled
+    # shadows are costed identically. chip_desk._emit already prices its own entry at the ask, so this
+    # is also what finally puts chip and the human providers on one measuring stick.
+    _o = entry.get("opt") or {}
+    _fill, _fsrc = (DB._shadow_entry_px(ref, _o.get("bid"), _o.get("ask"), _o.get("mid"), None)
+                    if DB else (ref, "no_db"))
+    entry["shadow"] = {"ref": ref, "fill": _fill, "fill_src": _fsrc,
+                       "stop_pct": (entry.get("plan") or {}).get("stop_pct") or tk.get("stop_pct") or 30,
                        "t1_pct": tk.get("t1_pct") or 30,
                        "expiry": _resolve_expiry(sg) or (entry.get("opt") or {}).get("expiry"),
                        "start_utc": datetime.now(timezone.utc).isoformat(), "state": "live",
@@ -1237,8 +1246,10 @@ def monitor_loop():
                     if exp and exp < today:                       # contract expired -> END its life
                         sh["state"], sh["ended_utc"] = "ended", now_utc
                         if not sh.get("result"):
-                            sh["result"] = ("WIN" if sh.get("peak", 0) >= sh["t1_pct"]
-                                            else "LOSS" if sh.get("trough", 0) <= -sh["stop_pct"] else "SCRATCH")
+                            _pk = sh.get("peak_net", sh.get("peak", 0))       # net where observed, else mid
+                            _tr = sh.get("trough_net", sh.get("trough", 0))
+                            sh["result"] = ("WIN" if _pk >= sh["t1_pct"]
+                                            else "LOSS" if _tr <= -sh["stop_pct"] else "SCRATCH")
                         # ...and RETIRE the card. Ending the shadow was not enough: status stayed "NEW", so
                         # every morning the board offered yesterday's dead 0DTEs as live trades. Found 4 of
                         # them sitting actionable at today's open, all on 07/21 contracts. Status only, so
@@ -1254,20 +1265,36 @@ def monitor_loop():
                     sh["now"] = pct
                     sh["peak"] = round(max(sh.get("peak", 0), pct), 1)
                     sh["trough"] = round(min(sh.get("trough", 0), pct), 1)
+                    # NET mark: what you'd actually book — sell the BID against the ASK you paid, less
+                    # the round-trip commission. This, not `pct`, is the basis the score is settled on
+                    # (db._shadow_r replays the same arithmetic off the stored path). A tick with no
+                    # two-sided quote is not an exit opportunity (IBKR sends -1 outside RTH), so it
+                    # leaves the net mark untouched rather than marking to a `last` print.
+                    if sh.get("fill") and DB and DB._tradeable(q.get("bid"), q.get("ask")):
+                        _npct = round((q["bid"] / sh["fill"] - 1) * 100
+                                      - DB.RT_COST_PER_CT / (sh["fill"] * 100.0) * 100.0, 1)
+                        sh["now_net"] = _npct
+                        sh["peak_net"] = round(max(sh.get("peak_net", _npct), _npct), 1)
+                        sh["trough_net"] = round(min(sh.get("trough_net", _npct), _npct), 1)
                     # stash the live quote we already have — powers live θ + the real exit (bid) on the card
                     sh["mark"], sh["bid"], sh["ask"] = q.get("mid"), q.get("bid"), q.get("ask")
                     sh["spread_pct"], sh["theta"], sh["delta"] = q.get("spread_pct"), q.get("theta"), q.get("delta")
                     sh["gamma"], sh["iv"] = q.get("gamma"), q.get("iv")   # gamma moves P(T1) ~16 pts; iv is σ
                     _path_tick(s["id"], "shadow", q, sg["ticker"], sh["ref"], sh, sh.get("start_utc"), conn)
                     if not sh.get("result"):                      # disciplined result = whichever we'd hit FIRST
-                        if pct <= -sh["stop_pct"]:
+                        # Judge the label on the NET mark so it can never contradict the scored R (a
+                        # mid-marked "WIN" that settles negative after the spread is worse than useless).
+                        # Falls back to the mid mark only while no two-sided quote has been seen.
+                        _jp = sh.get("now_net") if sh.get("now_net") is not None else pct
+                        if _jp <= -sh["stop_pct"]:
                             sh["result"], sh["result_pct"] = "LOSS", -sh["stop_pct"]
-                        elif pct >= sh["t1_pct"]:
+                        elif _jp >= sh["t1_pct"]:
                             sh["result"], sh["result_pct"] = "WIN", sh["t1_pct"]
                     if q["mid"] <= 0.02:                          # decayed to ~worthless -> END its life
                         sh["state"], sh["ended_utc"] = "ended", now_utc
                         if not sh.get("result"):
-                            sh["result"] = "LOSS" if sh.get("trough", 0) <= -sh["stop_pct"] else "SCRATCH"
+                            sh["result"] = ("LOSS" if sh.get("trough_net", sh.get("trough", 0))
+                                            <= -sh["stop_pct"] else "SCRATCH")
                     dirty = True
                 except Exception:
                     continue

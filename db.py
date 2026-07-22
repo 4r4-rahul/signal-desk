@@ -103,6 +103,14 @@ def _f(x):
 # only migration path SQLite gives us. Append-only: never rename or drop, and keep the tuple ordered.
 _ADDED_COLS = (
     # (table, column, type-and-default)
+    # --- execution-cost re-scoring of SHADOW outcomes (see SHADOW_BASIS). The pre-fix MID-in/MID-out
+    #     score is preserved alongside the new one so the change is auditable and reversible. ---
+    ("outcomes", "r_mid",          "REAL"),   # PRE-FIX r_multiple  (mid-in / mid-out, no costs)
+    ("outcomes", "return_pct_mid", "REAL"),   # PRE-FIX return_pct  (ditto)
+    ("outcomes", "entry_fill_px",  "REAL"),   # the ASK we charge the shadow for the entry
+    ("outcomes", "cost_pct",       "REAL"),   # commission+fees as % of premium paid
+    ("outcomes", "score_basis",    "TEXT"),   # basis version + any degradation flag (see SHADOW_BASIS)
+    ("outcomes", "n_tick_tradeable", "INTEGER"),  # ticks carrying a two-sided quote (exit opportunities)
 )
 
 
@@ -288,14 +296,145 @@ def _shadow_scaleout(ticks, t1, t2, stop, t3=None):
     return round(realized, 2)
 
 
+# ---------------- EXECUTION COST: what the shadow actually costs to trade ----------------
+# The shadow existed to measure provider edge, and that edge drives size_mult -> real money on
+# tastytrade. It was measured MID-in / MID-out with no commission: an entry nobody can get, an exit
+# nobody will pay you, and a broker who works for free. chip_desk._emit meanwhile priced ITS entry at
+# the ASK, so chip and the human providers were not even on the same measuring stick.
+#
+# CONVENTION (v1) — you are a retail buyer of debit options with no size and no edge in the queue:
+#   ENTRY  = the ASK. You are lifting the offer. `ticket.limit` (mid + 0.3x half-spread) is what you
+#            *hope* to pay; the ask is what you *do* pay when the tape is moving, which is exactly when
+#            these signals fire. Assuming a mid fill is assuming you are the liquidity provider.
+#   EXIT   = the BID. Same argument, other direction.
+#   COST   = a flat per-contract round trip, charged once against the whole position (the scale-out
+#            closes in three pieces but closes the same number of contracts it opened, and tastytrade
+#            charges commission only to OPEN an equity option).
+# A tick is an EXIT OPPORTUNITY only if it carries a two-sided quote. ~50% of stored shadow ticks do
+# not: IBKR returns -1 for bid/ask outside RTH and market._read_ticker passes that through while
+# falling back to `last` for the mid. Booking a stop against an overnight `last` print is booking a
+# fill nobody could have gotten. Those ticks stay in `path` (nothing is deleted) — they are simply not
+# treated as places you could have transacted.
+OPEN_COMM_PER_CT  = 1.00   # tastytrade: $1.00/contract to OPEN an equity option
+OPEN_FEES_PER_CT  = 0.15   # exchange/regulatory/clearing, per contract
+CLOSE_COMM_PER_CT = 0.00   # tastytrade: closing an equity option is commission-free
+CLOSE_FEES_PER_CT = 0.15   # ORF/OCC still apply on the way out
+RT_COST_PER_CT = OPEN_COMM_PER_CT + OPEN_FEES_PER_CT + CLOSE_COMM_PER_CT + CLOSE_FEES_PER_CT   # $1.30
+
+SHADOW_BASIS = "askbid_comm_v1"      # bump this to force a one-time re-score of every shadow
+_DEFAULT_HALF_SPREAD = 0.05          # last-resort modelled half-spread when no quote was ever observed
+_REF_BAND = (0.25, 4.0)              # a quote this far from `ref` is a different CONTRACT, not a spread and
+                                     # not a chase. Same 4x threshold server.py already uses to raise
+                                     # price_mismatch -- one definition of "misparsed", used in both places.
+
+
+def _tradeable(bid, ask):
+    """A two-sided quote you could actually transact against. IBKR's 'no data' sentinel is -1, NOT NULL,
+    so `bid is not None` is not enough — that was the trap."""
+    return bid is not None and ask is not None and bid > 0 and ask > 0 and ask >= bid
+
+
+def _ref_scale(ref, card_mid):
+    """Factor that maps PATH prices onto `ref`'s price scale.
+
+    Normally 1.0. It is not 1.0 when the shadow's reference price and the contract actually being
+    quoted are an order of magnitude apart — a misparse (wrong strike/expiry, or a number that was
+    never a premium), which the desk flags separately as price_mismatch. Such a shadow is already
+    meaningless; the job here is to make sure the cost fix leaves it exactly as meaningless as it was
+    rather than silently re-basing it onto a different contract and inventing a new answer.
+
+    Derived from immutable inputs only (never from a stored fill), so it is identical on every replay —
+    which is what makes the re-score idempotent."""
+    ref, cm = _f(ref), _f(card_mid)
+    if not ref or not cm or ref <= 0 or cm <= 0:
+        return 1.0
+    lo, hi = _REF_BAND
+    return 1.0 if lo <= cm / ref <= hi else ref / cm
+
+
+def _shadow_entry_px(ref, card_bid, card_ask, card_mid, first_tick):
+    """The price the trader would actually PAY, and where it came from. Degrades in documented steps:
+      1. card_ask            — the ask from the same quote snapshot that produced `ref`. Exact.
+      2. first_tradeable_ask — the first two-sided ask on the path. Exact, slightly later.
+      3. rel_spread_on_ref   — (1) and (2) are out of band vs `ref`, i.e. the card quote and the shadow
+                               reference describe DIFFERENT contracts (a misparse; the desk flags these
+                               separately as price_mismatch). Substituting the absolute ask would
+                               silently re-base the signal onto another contract, so instead we apply
+                               the OBSERVED RELATIVE half-spread to `ref` and keep the scales aligned.
+      4. modelled            — no quote was ever observed. Gross `ref` up by _DEFAULT_HALF_SPREAD.
+    Never returns the mid: reverting to mid is the bug being fixed."""
+    ref = abs(_f(ref) or 0) or 0.01
+    lo, hi = _REF_BAND
+    if _f(card_ask) and card_ask > 0 and lo <= card_ask / ref <= hi:
+        return round(card_ask, 4), "card_ask"
+    if first_tick and _f(first_tick.get("ask")) and first_tick["ask"] > 0 \
+            and lo <= first_tick["ask"] / ref <= hi:
+        return round(first_tick["ask"], 4), "first_tradeable_ask"
+    if _f(card_ask) and _f(card_mid) and card_ask > 0 and card_mid > 0:
+        return round(ref * (1 + (card_ask - card_mid) / card_mid), 4), "rel_spread_on_ref"
+    return round(ref * (1 + _DEFAULT_HALF_SPREAD), 4), "modelled_half_spread"
+
+
 def _shadow_r(con, signal_id, stop, t1, t2, t3=None):
-    """Would-be blended return% + R for a shadowed signal: scale-out replay of its stored 'shadow' path."""
-    rows = con.execute("SELECT opt_pct FROM path WHERE signal_id=? AND phase='shadow' AND opt_pct IS NOT NULL "
+    """Would-be blended return% + R for a shadowed signal, on BOTH bases.
+
+    Returns (ret_honest, r_honest, ret_mid, r_mid, meta) where the honest pair is ASK-in / BID-out with
+    the round-trip commission charged, and the mid pair is the legacy MID-in / MID-out score kept for
+    audit. Both come from the same stored path, so the delta is purely the cost model."""
+    rows = con.execute("SELECT opt_pct, opt_mid, bid, ask FROM path WHERE signal_id=? AND phase='shadow' "
                        "ORDER BY ts_utc", (signal_id,)).fetchall()
-    ret = _shadow_scaleout([r[0] for r in rows], t1, t2, stop, t3)
-    if ret is None or not stop:
-        return None, None
-    return ret, round(ret / abs(stop), 3)
+    if not rows or not stop:
+        return None, None, None, None, {}
+
+    # --- legacy MID basis (unchanged arithmetic, kept for the audit columns) ---
+    ret_mid = _shadow_scaleout([r[0] for r in rows if r[0] is not None], t1, t2, stop, t3)
+    r_mid = round(ret_mid / abs(stop), 3) if ret_mid is not None else None
+
+    sg = con.execute("SELECT bid, ask, mid, limit_px, premium FROM signals WHERE signal_id=?",
+                     (signal_id,)).fetchone()
+    o = con.execute("SELECT entry_px, entry_fill_px, score_basis FROM outcomes WHERE signal_id=?",
+                    (signal_id,)).fetchone()
+    ref = (o[0] if o else None) or (sg[3] if sg else None) or (sg[4] if sg else None) or (sg[2] if sg else None)
+    if not ref:
+        return None, None, ret_mid, r_mid, {}
+
+    trade = [{"mid": r[1], "bid": r[2], "ask": r[3]} for r in rows if _tradeable(r[2], r[3])]
+    # A fill already charged on the CURRENT basis is reused verbatim -> re-running cannot drift, and a
+    # live shadow's entry can't wander as later ticks arrive. Also honours the fill the CARD stamped at
+    # ingest (basis still NULL, first score). A basis bump re-derives from scratch.
+    prior = str(o[2]) if (o and o[2]) else ""
+    fill = (o[1] if (o and o[1] and (not prior or prior.startswith(SHADOW_BASIS))) else None)
+    if fill:
+        # Reusing the value must not lose HOW it was obtained — inherit the entry marker the first
+        # scoring stamped, or the audit trail quietly upgrades a modelled entry to a real one.
+        src = "modelled_half_spread" if "modelled_entry" in prior else "stored_fill"
+    else:
+        fill, src = _shadow_entry_px(ref, sg[0] if sg else None, sg[1] if sg else None,
+                                     sg[2] if sg else None, trade[0] if trade else None)
+    fill = max(fill, 0.01)
+    # Path prices live on the CARD's scale; the entry lives on `ref`'s. They are the same scale unless
+    # the signal was a misparse, in which case both are rescaled together. Computed from ref+card_mid
+    # ONLY -- deriving it from `src` made a reused fill silently drop the rescale on the second pass.
+    k = _ref_scale(ref, sg[2] if sg else None)
+
+    if trade:
+        ticks, basis = [round((t["bid"] * k / fill - 1) * 100, 1) for t in trade], SHADOW_BASIS
+    else:
+        # DEGRADED: this shadow never once carried a two-sided quote (thin contract, or every tick landed
+        # outside RTH). Rather than silently marking to mid, synthesise the bid as mid minus a modelled
+        # half-spread and STAMP the outcome so the row is identifiable and discountable.
+        ticks = [round((r[1] * (1 - _DEFAULT_HALF_SPREAD) * k / fill - 1) * 100, 1)
+                 for r in rows if r[1] is not None]
+        basis = SHADOW_BASIS + "|degraded_no_two_sided_quote"
+    ret = _shadow_scaleout(ticks, t1, t2, stop, t3)
+    if ret is None:
+        return None, None, ret_mid, r_mid, {}
+    cost_pct = RT_COST_PER_CT / (fill * 100.0) * 100.0        # $/contract as a % of premium paid
+    ret = round(ret - cost_pct, 2)
+    return (ret, round(ret / abs(stop), 3), ret_mid, r_mid,
+            {"fill": round(fill, 4), "cost_pct": round(cost_pct, 3),
+             "basis": basis if src != "modelled_half_spread" else basis + "|modelled_entry",
+             "n_tradeable": len(trade)})
 
 
 # RETAIN THE FULL TICK HISTORY. The original 30 days was reasoned from SCORING ("an ended shadow can't
@@ -345,15 +484,26 @@ def _resync_shadow_r(con):
     rows = con.execute(
         "SELECT o.signal_id, s.stop_pct, s.t1_pct, s.t2_pct, s.t3_pct FROM outcomes o "
         "JOIN signals s ON s.signal_id=o.signal_id WHERE o.kind='SHADOW' AND ("
-        "  o.return_pct IS NULL OR EXISTS ("
+        "  o.return_pct IS NULL"
+        # A shadow scored on a SUPERSEDED cost basis is re-scored once, then never again — this is what
+        # migrates the whole back-history when SHADOW_BASIS is bumped, without reopening the O(all x ticks)
+        # replay the active-only scoping was added to close. `LIKE basis||'%'` keeps the degraded/modelled
+        # suffixes (which are still the current basis) from re-qualifying every lap.
+        "  OR o.score_basis IS NULL OR o.score_basis NOT LIKE ?"
+        "  OR EXISTS ("
         "    SELECT 1 FROM path p WHERE p.signal_id=o.signal_id AND p.phase='shadow' AND p.ts_utc > ?))",
-        (active_cutoff,)).fetchall()
+        (SHADOW_BASIS + "%", active_cutoff)).fetchall()
     for sid, sp, t1, t2, t3 in rows:
         sp = sp or 30; t1 = t1 or 40; t2 = t2 or (t1 * 2)
-        ret, r = _shadow_r(con, sid, sp, t1, t2, t3)      # t3 None -> runner rides to the last tick, as before
-        if r is not None:
-            con.execute("UPDATE outcomes SET return_pct=?, r_multiple=? WHERE signal_id=? AND kind='SHADOW'",
-                        (ret, r, sid))
+        ret, r, ret_mid, r_mid, meta = _shadow_r(con, sid, sp, t1, t2, t3)  # t3 None -> runner rides to last tick
+        if r is None:
+            continue
+        con.execute(
+            "UPDATE outcomes SET return_pct=?, r_multiple=?, return_pct_mid=?, r_mid=?, "
+            "entry_fill_px=?, cost_pct=?, score_basis=?, n_tick_tradeable=? "
+            "WHERE signal_id=? AND kind='SHADOW'",
+            (ret, r, ret_mid, r_mid, meta.get("fill"), meta.get("cost_pct"),
+             meta.get("basis") or SHADOW_BASIS, meta.get("n_tradeable"), sid))
 
 
 def _shadow_outcome(e):
@@ -365,7 +515,7 @@ def _shadow_outcome(e):
         return None
     return {"signal_id": e.get("id"), "kind": "SHADOW", "result": res,
             "realized_usd": None, "r_multiple": None, "return_pct": _f(sh.get("result_pct")),
-            "entry_px": sh.get("ref"), "exit_px": None,
+            "entry_px": sh.get("ref"), "entry_fill_px": _f(sh.get("fill")), "exit_px": None,
             "peak_pct": _f(sh.get("peak")), "trough_pct": _f(sh.get("trough")),
             "hold_secs": None, "opened_utc": sh.get("start_utc"), "closed_utc": sh.get("ended_utc")}
 
