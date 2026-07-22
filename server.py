@@ -2012,6 +2012,25 @@ def _ingest_core(data):
         entry["llm"] = data["llm"]
         entry["needs_confirm"] = bool(data.get("needs_confirm"))
         entry["canonical"] = text
+    # PHANTOM-STRIKE GUARD (deterministic, no model). A strike the provider never wrote is a fabrication:
+    # "In $AAPL calls at 1.03 stop loss 0.80" carded an AAPL 313.02C, a number present nowhere in the text.
+    # The price-mismatch guard cannot catch this class when the invented strike happens to be a REAL, liquid
+    # contract -- which is how QQQ 704C (from prince's "Price target $704") reached a live fill and cost the
+    # difference between +$315 and -$129. Legitimate exception: a strike recovered from a PRIOR message
+    # (LLM context resolution) is correctly absent from THIS message, so it is exempt.
+    try:
+        _st = str((entry.get("sig") or {}).get("strike") or "")
+        _rawtxt = (entry.get("raw") or "") + " " + (text or "")
+        _from_ctx = bool((entry.get("sig") or {}).get("via_llm")
+                         or (entry.get("llm") or {}).get("resolved_from_context"))
+        if _st and not _from_ctx:
+            _bare = _st.rstrip("0").rstrip(".") if "." in _st else _st
+            if _st not in _rawtxt and _bare not in _rawtxt:
+                entry["phantom_strike"] = {"strike": _st, "why": "strike does not appear in the message text"}
+                entry["verified"] = False
+    except Exception:
+        pass
+
     # Price-plausibility flag: if the live contract price is an order of magnitude off the provider's
     # stated premium, the signal is a misparse (wrong strike/expiry, or a number that isn't a premium —
     # e.g. "META 375C @ 2.9" when META is $674 and that call is worth $298). Warn; don't trust the ticket.
