@@ -85,18 +85,17 @@ def _veto(q, *, spot, mech, ticker, hold_min, equity, max_risk_pct):
             return "fuse unknown"                      # FAIL CLOSED: it is a safety filter
         if hold_min and fuse < FUSE_HOLD_MULT * hold_min:
             return f"theta fuse {int(fuse)}m<{int(FUSE_HOLD_MULT*hold_min)}m"
-    # NB: the 1% risk cap is deliberately NOT a veto here. It vetoes ITM-first (highest premium first), so
-    # it inverted this module's whole objective: at $9.5k it eliminated 706/707/708/709 and left 710 -- the
-    # HIGHEST-leverage rung -- as the "lowest-leverage survivor". Risk belongs to SIZE, not to strike.
-    # See size_for() below; the caller refuses the trade when even one contract breaches the cap.
+    # NB: the 1% risk cap is deliberately NOT one of these vetoes. A veto is a statement about the
+    # CONTRACT ("this rung is a bad instrument"); affordability is a statement about the ACCOUNT. Keeping
+    # them apart is what lets select() report "every rung is fine, you just can't afford the ITM ones"
+    # instead of "no rung qualified". The cap is applied in select(), as a FEASIBILITY filter.
     return None
 
 
 def size_for(px, stop_pct, equity, max_risk_pct=1.0):
     """Contracts affordable under the risk cap, and the $ risk of one. Returns (qty, risk_per_contract).
-    qty == 0 means NOT TRADEABLE at this equity — the caller must refuse, never walk OTM to make it fit.
-    (QQQ 1DTE ATM at a 28% stop is ~$125/contract, which breaches a $95 cap on ~95% of entries: that is a
-    real 'this instrument is too big for this account' signal and must not be silently routed around.)"""
+    qty == 0 means this RUNG is not tradeable at this equity. It is NOT by itself a reason to refuse the
+    trade — see select(), which now treats affordability as part of the survivor set."""
     if not px or not stop_pct:
         return 0, None
     risk = stop_pct / 100.0 * px * 100.0
@@ -110,7 +109,7 @@ def select(*, quotes, spot, mech, ticker=None, hold_min=60, equity=None, max_ris
     Returns {chosen, atm, rungs[], degraded, note}. NEVER raises and never blocks an emit: if fewer than
     two rungs survive it reports degraded and leaves the caller on its existing ATM behaviour."""
     out = {"chosen": None, "atm": None, "rungs": [], "degraded": True, "note": None,
-           "objective": "lowest-leverage survivor (sigma-free)"}
+           "objective": "lowest-leverage AFFORDABLE survivor (sigma-free)"}
     if not quotes or not spot:
         out["note"] = "no quotes"
         return out
@@ -127,22 +126,48 @@ def select(*, quotes, spot, mech, ticker=None, hold_min=60, equity=None, max_ris
         lam = (abs(delta) * spot / px) if (delta is not None and px) else None
         veto = _veto(q, spot=spot, mech=mech, ticker=ticker, hold_min=hold_min,
                      equity=equity, max_risk_pct=max_risk_pct)
+        qty, risk1 = size_for(px, mech.get("stop_pct"), equity, max_risk_pct)
         rungs.append({"strike": k, "delta": delta, "premium": px,
                       "spread_pct": _fin(q.get("spread_pct")), "lam": round(lam, 1) if lam else None,
                       "fuse_min": q.get("fuse_min"), "fuse_state": q.get("fuse_state"),
-                      "veto": veto, "chosen": False})
+                      "veto": veto, "qty": qty, "risk_per_contract": risk1, "chosen": False})
     rungs.sort(key=lambda r: r["strike"])
     out["rungs"] = rungs
     ok = [r for r in rungs if not r["veto"] and r["lam"] is not None]
+    # ── FEASIBILITY. The objective (lowest leverage = deepest ITM) and the 1% risk cap point in exactly
+    # OPPOSITE directions: the lowest-leverage rung is always the most expensive one, so it is always the
+    # first to breach the cap. Ranking first and sizing afterwards therefore refused the trade whenever
+    # the WINNER was unaffordable, even when four cheaper rungs sat inside the cap. MEASURED 2026-07-22
+    # 13:55 at $9,561 equity: QQQ 1DTE priced 706C..710C at $5.20..$2.98 -> risk $146..$83 against a $96
+    # cap. select() picked 706C, size_for said 0, pick_strike failed closed, and chip refused 100% of QQQ
+    # on SIZING while the card blamed the tape. Zero QQQ emits were possible on ANY tape, any session,
+    # from the moment 1DTE became the default.
+    # The fix is to optimise INSIDE the feasible set: lowest leverage among rungs that clear every veto
+    # AND fit one contract under the cap. This can never exceed the cap (that is the filter), never walks
+    # into a lotto (DELTA_MIN 0.25 and the premium floor are vetoes, applied first), and costs almost
+    # nothing in expectancy — this module's own finding is that E[%] across a 4x premium range spans
+    # ~1.1pp against a 0.2pp standard error. Refusing costs 100% of the sample; that is not a trade-off.
+    afford = [r for r in ok if (r.get("qty") or 0) >= 1]
+    if ok and not afford:
+        cheapest = min(ok, key=lambda r: r["risk_per_contract"] or 9e9)
+        out["chosen"] = None
+        out["note"] = (f"1% cap ${(equity or 0) * (max_risk_pct / 100.0):.0f} < ${cheapest['risk_per_contract']:.0f} "
+                       f"on the cheapest surviving rung ({cheapest['strike']:g}) — instrument too big for "
+                       f"this account, not a tape call")
+        out["infeasible"] = True
+        return out
+    ok = afford or ok                            # no equity known -> afford == ok (size_for returns 1)
     if len(ok) < 2:
-        out["note"] = "ladder unavailable — ATM fallback" if not ok else "only one rung survived"
+        out["note"] = "ladder unavailable — ATM fallback" if not ok else "only one rung affordable/surviving"
         if ok:
             ok[0]["chosen"] = True
             out["chosen"] = ok[0]
+            out["qty"], out["risk_per_contract"] = ok[0].get("qty"), ok[0].get("risk_per_contract")
         return out
-    best = min(ok, key=lambda r: r["lam"])       # lowest leverage that clears every veto
+    best = min(ok, key=lambda r: r["lam"])       # lowest leverage that clears every veto AND the cap
     best["chosen"] = True
     out.update(chosen=best, degraded=False)
+    out["qty"], out["risk_per_contract"] = best.get("qty"), best.get("risk_per_contract")
     atm_r = min(rungs, key=lambda r: abs(r["strike"] - (out["atm"] or spot)))
     if best is not atm_r:
         out["note"] = (f"{best['strike']:g} over ATM {atm_r['strike']:g}: leverage "

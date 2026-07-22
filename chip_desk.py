@@ -59,7 +59,18 @@ GEOM = "g2"                 # stamped on every emit so g1 (0DTE) and g2 (1DTE) s
 
 MIN_TAPE_MODERATE = 62      # chip's own conviction bar (matches the desk's moderate grade)
 COOLDOWN_S = 900            # 15 min between chip entries on the same ticker (anti-churn)
-MAX_HOLD_S = 3600           # force-release a book slot after 1h even if the shadow hasn't formally ended
+# MAX_HOLD_S is now a REAL TIME STOP, not just a book-slot release. It was 3600, and it only freed chip's
+# in-memory slot: the SHADOW kept ticking until the contract EXPIRED, so a 1DTE scalp was scored over ~1.5
+# sessions of theta. provider_edge was therefore measuring a strategy nobody would trade.
+# MEASURED on 1,458 replayed chip TAKE minutes (20 sessions, SPY+QQQ 1-min, ask-in/bid-out/commission,
+# the desk's own _shadow_scaleout, 1DTE):
+#     hold  5m -0.050R   15m -0.115R   20m -0.140R   30m -0.159R   60m -0.219R   to-EOD -0.278R
+# Monotone, well-powered (se ~0.017), and it is pure theta: the NULL (every minute an entry) moves the
+# same way, -0.065R at 15m vs -0.142R at 60m. Win rate is flat across the curve (45-47%), so cutting the
+# hold does not cut winners, it cuts bleed. 20m is the knee: +0.138R against the shipped to-expiry
+# behaviour while still leaving a 22%-of-premium target real room. Emitted as chip_plan.max_hold_min so
+# the server's shadow tracker actually closes the position (chip-only: no other provider sets it).
+MAX_HOLD_S = 1200           # 20 min — time stop AND book-slot release
 LOOP_SLEEP = 5              # scan cadence — 5s is plenty for scalp entries; keeps the lap cheap
 
 _MECH_CACHE = {"ts": 0.0, "data": None}
@@ -233,6 +244,35 @@ def _news(tkr):
 
 
 # ─────────────────────────── entry decision (PURE, unit-testable) ───────────────────────────
+def _score_ex_vwap(st):
+    """market.tape_strength's score with the VWAP-DISTANCE term removed and the surviving weights
+    renormalised. Returns 0-100, or None if the components aren't readable.
+
+    Why this exists. tape_strength gives price-vs-VWAP a 0.35 weight (the largest of the four) scaled so
+    that full strength is 0.6% beyond VWAP. At a VWAP CROSS price is AT VWAP by construction, so that
+    term is ~0 — the score is mechanically suppressed at exactly the instant chip's cross trigger wants
+    to fire. MEASURED over 20 sessions / 30,608 ticker-side-minutes of SPY+QQQ 1-min tape:
+
+        inside a fresh cross window   |price-VWAP| 0.069%  ->  VWAP term 0.12 of 1.00   score>=62: 14.3%
+        outside one                   |price-VWAP| 0.297%  ->  VWAP term 0.46 of 1.00   score>=62: 29.7%
+
+    So the cross trigger and the 62 bar are anti-correlated BY CONSTRUCTION, and requiring both is close
+    to requiring a contradiction. That is why all six of chip's real emits fired on 'strong momentum' and
+    not one on a cross: the cross detector was never broken, it was unreachable.
+
+    This is a DE-BIAS, not a loosening. The surviving evidence (EMA separation, RSI, Bollinger room) is
+    held to the SAME 62 bar; only the term the cross itself zeroes is dropped. It is used solely when a
+    fresh favourable cross is live, and only when it RAISES the reading, so it can never block a setup
+    that already qualified."""
+    comps = (st or {}).get("components") or []
+    w = {"EMA": 0.25, "RSI": 0.25, "room": 0.15}
+    tot = sum(w[c["k"]] for c in comps if c["k"] in w)
+    if tot <= 0:
+        return None
+    raw = sum(w[c["k"]] * c["s"] for c in comps if c["k"] in w) / tot
+    return round((raw + 1) / 2 * 100)
+
+
 def assess(tkr, ind, mech, session_min, side, crossed_up=False, crossed_down=False):
     """Assess ONE direction (`side` = 'C' or 'P') for an ATM scalp — ALWAYS returns a verdict dict so the
     observer can show WHY chip acts or waits. The two directions are anti-correlated (a strong call ⇒ an
@@ -249,9 +289,18 @@ def assess(tkr, ind, mech, session_min, side, crossed_up=False, crossed_down=Fal
     base = {"cp": side, "regime": regime, "score": st["score"], "grade": st["grade"]}
     if st["score"] is None:
         return {**base, "verdict": "WAIT", "reason": "no tape read"}
-    if st["grade"] == "against":
+    # A fresh favourable cross is judged on the tape MINUS the term the cross itself zeroes (see
+    # _score_ex_vwap). Same 62 bar, applied to the evidence that is still readable at a cross.
+    cross_fav = bool((side == "C" and crossed_up) or (side == "P" and crossed_down))
+    bar_score, bar_basis = st["score"], "tape"
+    if cross_fav:
+        sx = _score_ex_vwap(st)
+        if sx is not None and sx > st["score"]:
+            bar_score, bar_basis = sx, "tape ex-VWAP (at a cross, price IS VWAP)"
+            base = {**base, "bar_score": sx, "bar_basis": bar_basis}
+    if st["grade"] == "against" and bar_score < MIN_TAPE_MODERATE:
         return {**base, "verdict": "WAIT", "reason": f"tape against ({st['score']}) — stand down"}
-    if st["grade"] == "weak" or st["score"] < MIN_TAPE_MODERATE:
+    if bar_score < MIN_TAPE_MODERATE:
         return {**base, "verdict": "WAIT", "reason": f"tape {st['score']} ({st['grade']}) — below the {MIN_TAPE_MODERATE} bar"}
     # LONG-LOOKBACK TREND GATE. Binary, sign-only, sigma-FREE — it reads an EMA ordering, not a magnitude,
     # so no volatility input can flip it. Measured over 220 triggers / 60 sessions: trades agreeing with
@@ -267,9 +316,9 @@ def assess(tkr, ind, mech, session_min, side, crossed_up=False, crossed_down=Fal
         base = {**base, "htf": {"ema135": e135, "ema315": e315, "agrees": True}}
     trig = None
     if side == "C" and crossed_up:
-        trig = "VWAP reclaim"
+        trig = "VWAP reclaim" + (" (ex-VWAP tape " + str(bar_score) + ")" if bar_basis != "tape" else "")
     elif side == "P" and crossed_down:
-        trig = "VWAP breakdown"
+        trig = "VWAP breakdown" + (" (ex-VWAP tape " + str(bar_score) + ")" if bar_basis != "tape" else "")
     if not trig and st["grade"] == "strong":
         trig = "strong momentum"
     if not trig:
@@ -330,15 +379,14 @@ def pick_strike(conn, tkr, side, spot, mech, dte_tuple, now, score, crossed):
                     hold_min=MAX_HOLD_S // 60, equity=_equity(), max_risk_pct=1.0)
     res["spot_ref"] = round(spot, 2)
     chosen = res.get("chosen")
-    # SIZE the chosen rung against the 1% cap. If one contract already breaches it, the instrument is too
-    # big for this account -- refuse. Previously the cap lived inside the strike VETOES, which both
-    # inverted the objective (it eliminated ITM first) and FAILED OPEN: below ~$7k every rung was vetoed,
-    # select() returned chosen=None, and this function then handed back a bare ATM quote with no risk,
-    # delta or fuse check at all. Harmless while shadow-only; a live-money hole at go-live.
+    # The 1% cap is now applied INSIDE select(), as a feasibility filter over the ladder rather than as a
+    # post-hoc test on the single winner (see chip_strike.select: ranking first and sizing second refused
+    # 100% of QQQ 1DTE, because the lowest-leverage rung is by construction the most expensive one).
+    # This stays as a belt-and-braces assertion: nothing chosen may ever breach the cap.
     if chosen:
         qty, risk1 = SK.size_for(chosen.get("premium"), mech.get("stop_pct"), _equity(), 1.0)
         res["qty"], res["risk_per_contract"] = qty, risk1
-        if qty < 1:
+        if qty < 1:                         # unreachable via select(); kept so a future edit cannot leak
             res["degraded"] = True
             res["note"] = f"${risk1:.0f} risk/contract over the 1% cap — not tradeable at this equity"
             res["_q"] = None
@@ -689,7 +737,8 @@ def _emit(conn, tkr, dec, mech, book, now, chip_read=None, bookkey=None, role="p
         "provider": "chip",
         "msg_id": f"chip-{tkr}-{int(now.timestamp())}",
         "force": True,                                  # deliberate re-entry -> bypass the 4h/48h dedup sweep
-        "chip_plan": {k: mech[k] for k in ("stop_pct", "t1_pct", "t2_pct", "t3_pct")},
+        "chip_plan": {**{k: mech[k] for k in ("stop_pct", "t1_pct", "t2_pct", "t3_pct")},
+                      "max_hold_min": MAX_HOLD_S // 60},   # real time stop — see MAX_HOLD_S
         "chip_meta": {"regime": dec["regime"], "reason": dec["reason"], "score": dec.get("score"),
                       "live_grade": dec.get("live_grade"), "strict_take": dec.get("strict_take"),
                       "direction_role": role,          # 'primary' (stronger side) vs 'counter' (data only)

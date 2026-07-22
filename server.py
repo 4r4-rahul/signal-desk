@@ -579,6 +579,9 @@ def _init_shadow(entry):
                        "stop_pct": (entry.get("plan") or {}).get("stop_pct") or tk.get("stop_pct") or 30,
                        "t1_pct": tk.get("t1_pct") or 30,
                        "expiry": _resolve_expiry(sg) or (entry.get("opt") or {}).get("expiry"),
+                       # TIME STOP, in minutes. Only chip sets it (chip_plan.max_hold_min); a human
+                       # provider's shadow is unchanged and still runs its full life to expiry.
+                       "max_hold_min": (entry.get("chip_plan") or {}).get("max_hold_min"),
                        "start_utc": datetime.now(timezone.utc).isoformat(), "state": "live",
                        "result": None, "peak": 0.0, "trough": 0.0, "now": 0.0}
 
@@ -1295,6 +1298,27 @@ def monitor_loop():
                         if not sh.get("result"):
                             sh["result"] = ("LOSS" if sh.get("trough_net", sh.get("trough", 0))
                                             <= -sh["stop_pct"] else "SCRATCH")
+                    # TIME STOP (chip only — max_hold_min comes from chip_plan). A scalper that never
+                    # closes is not a scalper: without this, chip's shadow ticked to contract expiry, so
+                    # a "20-minute" 1DTE scalp was scored across ~1.5 sessions of theta. Replayed on
+                    # 1,458 chip entries the hold curve is monotone (-0.050R at 5m ... -0.278R held to
+                    # EOD) with a flat 45-47% win rate — the extra hours only add bleed.
+                    elif sh.get("max_hold_min") and sh.get("start_utc"):
+                        try:
+                            _held = (datetime.now(timezone.utc)
+                                     - datetime.fromisoformat(sh["start_utc"])).total_seconds() / 60.0
+                        except Exception:
+                            _held = 0
+                        if _held >= float(sh["max_hold_min"]):
+                            sh["state"], sh["ended_utc"] = "ended", now_utc
+                            sh["end_reason"] = f"time stop {int(sh['max_hold_min'])}m"
+                            if not sh.get("result"):
+                                _jp2 = sh.get("now_net") if sh.get("now_net") is not None else pct
+                                sh["result"], sh["result_pct"] = ("WIN" if _jp2 >= sh["t1_pct"] else
+                                                                  "LOSS" if _jp2 <= -sh["stop_pct"] else
+                                                                  "SCRATCH"), round(_jp2, 1)
+                            if s.get("status") in ("NEW", "WATCHING"):
+                                s["status"] = "EXPIRED"       # card leaves the actionable board
                     dirty = True
                 except Exception:
                     continue
