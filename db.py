@@ -715,6 +715,7 @@ def exit_quality():
             "verdict": _exit_verdict(n, avg_loss_r, len(whip), len(loss))}
 
 
+SHRINK_MIN_N = 4        # severe bleeders may shrink on this much evidence (see the gate below)
 SHADOW_WEIGHT = 0.35     # a shadow observation counts ~1/3 of a realized one (lower confidence)
 SHADOW_HAIRCUT = 0.10    # subtract 0.10R from shadow avg — shadow assumes ideal mechanical exits; reality slips
 
@@ -747,10 +748,19 @@ def provider_edge():
         den = w_r + w_s
         blended = (num / den) if den else None
         eff_n = n_r + w_s                                              # effective sample size
-        if blended is None or eff_n < 8:
+        # ASYMMETRIC GATE. The docstring above has always claimed shrinking can trigger on the blend
+        # alone, but a single `eff_n < 8` blocked BOTH directions — so a provider bleeding badly on a
+        # thin-but-real sample sat at FULL size. Measured live: sulker, blended -1.61R (1.31R past the
+        # 0.25x threshold), sized 1.0x purely because eff_n was 6.1. That cost more than the entire
+        # mid-vs-ask measurement bias.
+        # Shrinking is protective and reversible: the cost of acting early on a good provider is a
+        # temporarily smaller position; the cost of NOT acting is full size on a proven bleeder. So a
+        # SEVERE bleeder may shrink on less evidence. Tilting UP is unchanged and still demands the full
+        # gate plus real fills — never size real money up on hypothesis.
+        if blended is not None and blended <= -0.30 and eff_n >= SHRINK_MIN_N:
+            mult = 0.25                                                # severe bleeder — shrink early
+        elif blended is None or eff_n < 8:
             mult = 1.0                                                 # not enough data to move either way
-        elif blended <= -0.30:
-            mult = 0.25                                                # bleeder — shrink (shadow may trigger; safe)
         elif blended <= -0.10:
             mult = 0.50
         elif blended >= 0.30 and eff_n >= 20 and n_r >= 5:

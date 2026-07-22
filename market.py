@@ -138,7 +138,14 @@ def _read_ticker(t, expiry):
     bid, ask = t.bid, t.ask
     last = t.last if (t.last == t.last) else t.close
     mid = (bid + ask) / 2 if (_ok(bid) and _ok(ask)) else (last if (last == last and last) else None)
-    q = {"expiry": expiry, "bid": _fin(bid), "ask": _fin(ask), "last": _fin(last),
+    # bid/ask go through _ok, not just _fin. IBKR signals "no quote" with -1.0 — a NUMBER, so _fin
+    # (which only strips NaN/Inf) passed it straight through into every consumer and into the `path`
+    # table. 51% of stored shadow ticks carry bid = -1.0, and outside RTH it is 81-100% of them, because
+    # the monitor ticks 24/7. Anything that trusted those fields was scoring against a fill nobody could
+    # get; a naive "use the bid" cost model built on them produced -2100% returns. None is the honest
+    # value for "no quote", and every consumer already handles None because _fin has always emitted it.
+    q = {"expiry": expiry, "bid": _fin(bid) if _ok(bid) else None,
+         "ask": _fin(ask) if _ok(ask) else None, "last": _fin(last),
          "mid": _fin(mid, 2) if mid else None,
          "spread_pct": _fin((ask - bid) / mid * 100, 1) if (mid and _ok(ask) and _ok(bid)) else None}
     if t.modelGreeks:
