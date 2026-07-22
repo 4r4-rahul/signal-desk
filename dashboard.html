@@ -404,6 +404,7 @@
     <div class="chip">Risk <b id="risk">—</b></div>
     <div class="chip" id="ttchip" style="display:none">🍒 tastytrade <b id="ttbal">—</b> <span id="ttenv" style="color:var(--amber);font-size:11px"></span></div>
     <div class="chip">Signals <b id="n">0</b> · Taken <b id="nt">0</b> · Skipped <b id="ns">0</b></div>
+    <div class="chip"><button id="sndbtn" onclick="toggleSound()" title="mute/unmute desk alerts" style="background:none;border:none;cursor:pointer;font-size:15px;padding:0 2px">🔔</button></div>
   </div>
 </header>
 
@@ -448,6 +449,45 @@ try{chipOnly=JSON.parse(localStorage.getItem('chipOnly'))||0}catch(e){}
 function toggleChip(){chipOnly=chipOnly?0:1;try{localStorage.setItem('chipOnly',JSON.stringify(chipOnly))}catch(e){}refresh();}
 
 // ---- feed sections + the top sorting/filter bar ----
+// ── AUDIO ALERTS ──────────────────────────────────────────────────────────────
+// Browsers block audio until the page has been interacted with, so the context is created lazily on the
+// first real gesture and every call before that is a silent no-op. Two distinct tones, deliberately:
+// a corrected card is an ALARM (falling minor third, twice) because it may sit under a position you
+// already hold; a new actionable card is a NOTICE (single rising note). Same sound for both would defeat
+// the point -- the whole reason this exists is that a card's contract once changed silently under a live
+// fill and nobody was told.
+let _ac=null, _soundOn=(localStorage.getItem('deskSound')!=='0');
+function _ctx(){ try{ if(!_ac) _ac=new (window.AudioContext||window.webkitAudioContext)(); if(_ac.state==='suspended')_ac.resume(); return _ac; }catch(e){ return null; } }
+['click','keydown','touchstart'].forEach(ev=>window.addEventListener(ev,()=>_ctx(),{once:true}));
+function beep(freq,ms,vol,delay){
+  if(!_soundOn) return;
+  const c=_ctx(); if(!c) return;
+  const t0=c.currentTime+(delay||0);
+  const o=c.createOscillator(), g=c.createGain();
+  o.type='sine'; o.frequency.setValueAtTime(freq,t0);
+  g.gain.setValueAtTime(0.0001,t0);
+  g.gain.exponentialRampToValueAtTime(vol||0.15,t0+0.012);
+  g.gain.exponentialRampToValueAtTime(0.0001,t0+(ms/1000));
+  o.connect(g); g.connect(c.destination); o.start(t0); o.stop(t0+(ms/1000)+0.02);
+}
+function soundAlarm(){ beep(880,160,0.22,0); beep(660,260,0.22,0.18); beep(880,160,0.22,0.52); beep(660,320,0.22,0.70); }
+function soundNotice(){ beep(660,110,0.13,0); beep(880,150,0.13,0.10); }
+function toggleSound(){ _soundOn=!_soundOn; localStorage.setItem('deskSound',_soundOn?'1':'0');
+  const b=document.getElementById('sndbtn'); if(b) b.textContent=_soundOn?'🔔':'🔕';
+  if(_soundOn) soundNotice(); }
+// fire once per card, remembered across reloads so a refresh doesn't re-alarm you
+const _heard=new Set(JSON.parse(localStorage.getItem('deskHeard')||'[]'));
+function _remember(k){ _heard.add(k); try{ localStorage.setItem('deskHeard',JSON.stringify([..._heard].slice(-400))); }catch(e){} }
+function checkSounds(S){
+  let alarm=false, notice=false;
+  for(const s of (S||[])){
+    const bad=s.corrected||s.phantom_strike||s.misparse||s.verified===false;
+    if(bad && !_heard.has('c:'+s.id)){ _remember('c:'+s.id); alarm=true; }
+    const act=(s.live&&s.live.entry&&s.live.entry.action)==='TAKE';
+    if(act && !_heard.has('t:'+s.id)){ _remember('t:'+s.id); notice=true; }
+  }
+  if(alarm) soundAlarm(); else if(notice) soundNotice();
+}
 function secOf(s){
   if(s._chipwatch) return 'watch';                 // chip scan candidate → 👀 Watching
   if(s.provider==='chip'&&s.chip_lifecycle){       // chip scalps bucket by lifecycle phase (not human status)
@@ -2036,6 +2076,7 @@ async function refresh(){
     renderMilestone(d.sleeve);
     renderPending(d.pending);
     renderPositions(d.positions);
+    checkSounds(S);            // audible: alarm on a corrected/phantom card, notice on a new TAKE
     window.KILLED=d.killed||{};
     const T=d.totals||{};   // all-time counts over the full store (feed is windowed to last 60 for speed)
     document.getElementById('n').textContent=T.signals!=null?T.signals:S.length;

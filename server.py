@@ -359,6 +359,39 @@ def _resolve_expiry(sig):
     return None
 
 
+def _alert_corrections():
+    """A card whose contract CHANGED after it was carded must be announced, loudly and once.
+
+    This is the missing half of the QQQ 704C incident. The card was created with a strike taken from
+    prince's price target, the owner traded it, and the strike was quietly corrected to 705 in a later
+    cleanup pass. From the desk's side the card was "fixed"; from the trader's side the contract silently
+    changed underneath a position they were already holding, and nobody was told. The difference was
+    +$315 vs -$129.
+
+    Fires for corrected / phantom_strike / misparse, once per card (_alerted flag), and says what it WAS
+    so a trader holding the old contract can recognise their own position in the message."""
+    for s in SIGNALS:
+        try:
+            c, ph, mp = s.get("corrected"), s.get("phantom_strike"), s.get("misparse")
+            if not (c or ph or mp) or s.get("_correction_alerted"):
+                continue
+            sg = s.get("sig") or {}
+            leg = f'{sg.get("ticker")} {sg.get("strike")}{sg.get("type") or ""}'
+            if c:
+                body = f'⚠️ CARD CORRECTED — {s.get("provider")}: {c.get("from")} → {c.get("to")} ({leg}). {c.get("why") or ""}'
+            elif ph:
+                body = f'⚠️ PHANTOM STRIKE — {s.get("provider")}: {leg} — {ph.get("why")}. Do not trade this card.'
+            else:
+                body = f'⚠️ MISPARSE — {s.get("provider")}: {leg} — {mp.get("reason") or ""}'
+            if s.get("status") in ("TAKEN", "CLOSED"):
+                body += "  ⛔ THIS CARD WAS ALREADY ACTED ON — check your broker position."
+            _alert(body[:400], "Signal Desk — card corrected")
+            s["_correction_alerted"] = True
+            s["_correction_alerted_at"] = datetime.now(timezone.utc).isoformat()
+        except Exception:
+            continue
+
+
 def _archive_signal(prov, entry):
     """PERMANENT structured archive of every signal — the FULL CARD (sig + score + reasons + the whole
     sizing plan + dynamic stop & its terms + behavior + Greeks). Never pruned. The dataset for future
@@ -1172,6 +1205,7 @@ def monitor_loop():
             # its card stayed "NEW" forever. That is how 4 dead 07/21 contracts were still being offered as
             # live trades at the next morning's open. Cheap (bounded by SIGNALS_CAP) and status-only.
             if _heavy:
+                _alert_corrections()          # announce any card whose contract changed under the trader
                 for _s in SIGNALS:
                     if _s.get("status") not in ("NEW", "WATCHING"):
                         continue
