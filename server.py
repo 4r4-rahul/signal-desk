@@ -1023,7 +1023,15 @@ def entry_timing(sig, ind, reco, u_stop=None, spot=None, provider=None):
         return out("WAIT", "⚪", "tape read pending — hold for confirmation", f"take when {tk} {holds}")
     # ---- THE TAKE gate: score clears the provider-tiered bar, in zone, room ----
     if score >= min_tape:
-        return out("TAKE", "🟢", f"tape {grade} ({score}), in buy zone ({chase:+d}%), room to the stop", "take at the limit now")
+        # Say WHY this is a take. The grade label and the TAKE bar are different scales -- "weak" is
+        # anything under 62, but the bar is 52 for a trusted provider -- so a 56 legitimately clears it
+        # while still reading "weak". Printing "tape weak (56) ... TAKE" without the bar looked like a
+        # bug and cost trust in the card. Show the bar and who it belongs to.
+        _bar = (f"clears the {min_tape} bar for {provider}" if provider else f"clears the {min_tape} bar")
+        _cav = " — thin tape, size accordingly" if score < 62 else ""
+        return out("TAKE", "🟢",
+                   f"tape {score} {_bar}{' (trusted)' if trusted else ''}, in buy zone ({chase:+d}%), "
+                   f"room to the stop{_cav}", "take at the limit now")
     return out("WAIT", "⚪", f"tape {grade} ({score}) — below the {min_tape} bar for {provider or 'this provider'}",
                (f"take when {tk} {holds}" if vwap else "take when the tape strengthens"))
 
