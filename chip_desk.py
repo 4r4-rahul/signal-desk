@@ -114,10 +114,14 @@ def _tape(conn, tkr, ttl=45):
     c = _TAPE.get(tkr)
     if not c or _t.time() - c[0] > ttl:
         try:
-            # 3 D (not 2 D) so EMA315 gets 945+ bars of seed: at 780 the truncated-seed residual is 7.1e-3,
-            # at 1170 it is 5.9e-4. Same single historical request — no extra streaming line, no extra
-            # pacing cost against IBKR's 60-per-10-min budget.
-            ind = _chip_indicators(MK.get_bars(conn, tkr, duration="3 D", size="1 min")) or {}
+            # 5 D, MEASURED not assumed. EMA315 needs 945 bars (3x span, so the truncated seed residual is
+            # 5.9e-4 instead of 7.1e-3). IBKR's `duration` counts CALENDAR days and returns only RTH bars,
+            # so "3 D" yields ~788 -- under the threshold -- and ema315 silently stayed None, leaving the
+            # trend gate inert from the moment it shipped. It fails open, so nothing broke loudly; chip
+            # simply never applied the one filter that measured +0.303R. "5 D" yields ~1568. Cost is
+            # unchanged in practice: get_bars is ~380ms of NETWORK once per 45s cache, and indicators over
+            # the whole series run in ~1ms.
+            ind = _chip_indicators(MK.get_bars(conn, tkr, duration="5 D", size="1 min")) or {}
         except Exception:
             ind = {}
         _TAPE[tkr] = (_t.time(), ind)

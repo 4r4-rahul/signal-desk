@@ -331,10 +331,12 @@ def indicators(bars):
     # (variance ratio 0.835 at 60 min, z = -21.9). On 1-min bars these spans are the 15-minute EMA9/EMA21
     # (15x9=135, 15x21=315): measured 95.5% identical selection, so a coarser bar adds nothing but lag.
     # Lookback = 3x span keeps the truncated-seed residual under 1e-3.
+    # float() not just round(): _ema over a numpy slice returns np.float64, which json.dumps only survives
+    # via default=str -- silently emitting "708.63" as a STRING into the payload the dashboard reads.
     if len(c) >= 405:
-        out["ema135"] = round(_ema(c[-405:], 135), 2)
+        out["ema135"] = round(float(_ema(c[-405:], 135)), 2)
     if len(c) >= 945:
-        out["ema315"] = round(_ema(c[-945:], 315), 2)
+        out["ema315"] = round(float(_ema(c[-945:], 315)), 2)
     return out
 
 
