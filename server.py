@@ -2321,7 +2321,7 @@ class H(http.server.BaseHTTPRequestHandler):
             # speed; the header shows the real totals so the count isn't frozen at 60).
             _tot = {"signals": len(SIGNALS),
                     "taken": sum(1 for s in SIGNALS if s.get("status") in ("TAKEN", "CLOSED")),
-                    "skipped": sum(1 for s in SIGNALS if s.get("status") == "SKIPPED")}
+                    "skipped": sum(1 for s in SIGNALS if s.get("status") in ("SKIPPED", "EXPIRED"))}
             try:
                 import chip_desk as _CD
                 _chip = _CD.snapshot()

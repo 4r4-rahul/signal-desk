@@ -461,6 +461,11 @@ function secOf(s){
   if(s.status==='TAKEN')return 'live';
   if(s.status==='WATCHING')return 'watch';
   if(s.status==='SKIPPED')return 'skip';
+  // EXPIRED buckets with skipped: the contract is gone, so it is not actionable — but it keeps its own
+  // status (not rewritten to SKIPPED) because "it expired" and "I chose to pass" are different facts and
+  // the record should not conflate them. Without this case it fell through to 'new' and yesterday's dead
+  // 0DTEs kept showing under 🔔 New signals even after the server had retired them.
+  if(s.status==='EXPIRED')return 'skip';
   return 'new';}
 const SECS=[['live','📈 Live & taken'],['new','🔔 New signals'],['watch','👀 Watching'],
   ['closed','✅ Closed'],['skip','🗑 Dismissed']];
@@ -1566,6 +1571,11 @@ async function logTrade(id){
   refresh();
 }
 function actionsHTML(s){
+  if(s.status==='EXPIRED'){                    // contract gone — no buttons, and say WHY it left the board
+    const e=(s.opt&&s.opt.expiry)||(s.shadow&&s.shadow.expiry)||(s.sig&&s.sig.expiry)||'';
+    return `<div class="actions"><span class="statustag SKIPPED">⏰ EXPIRED${e?' '+e:''}</span>
+      <span class="watchnote">contract expired — auto-retired, never taken</span></div>`;
+  }
   if(s.status==='WATCHING'){
     const lvl=s.sig.premium!=null?`@ $${s.sig.premium}`:'';
     return `<div class="actions"><span class="statustag WATCHING">👀 WATCHING ${lvl}</span>
@@ -2030,7 +2040,7 @@ async function refresh(){
     const T=d.totals||{};   // all-time counts over the full store (feed is windowed to last 60 for speed)
     document.getElementById('n').textContent=T.signals!=null?T.signals:S.length;
     document.getElementById('nt').textContent=T.taken!=null?T.taken:S.filter(x=>x.status==='TAKEN'||x.status==='CLOSED').length;
-    document.getElementById('ns').textContent=T.skipped!=null?T.skipped:S.filter(x=>x.status==='SKIPPED').length;
+    document.getElementById('ns').textContent=T.skipped!=null?T.skipped:S.filter(x=>x.status==='SKIPPED'||x.status==='EXPIRED').length;
     // chip SCAN candidates → 👀 Watching cards (one per ticker chip is watching but NOT currently in a
     // scalp — a holding ticker already shows as a live scalp card in Live & taken, so skip it here).
     const _cw=(((d.chip||{}).tickers)||[]).filter(t=>t.state!=='holding').map(t=>({
