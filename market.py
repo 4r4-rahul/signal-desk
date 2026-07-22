@@ -283,7 +283,13 @@ def spot_quote(ticker, ib=None):
             except Exception: pass
 
 
-def get_bars(ib, ticker, duration="1 D", size="5 mins"):
+def get_bars(ib, ticker, duration="2 D", size="5 mins"):
+    # 2 D, not 1 D. IBKR's "1 D" returns only TODAY's bars, so at 09:48 ET there were FOUR 5-min bars and
+    # indicators() (which needs >=20) returned None -- meaning every provider card read "tape read pending"
+    # for roughly the first 100 minutes of EVERY session, which is exactly when most callouts arrive.
+    # chip already had this fix (_chip_indicators pulls 2 D "so chip can read tape from the OPEN, not
+    # ~20 min in"); the provider path never got it. indicators() now session-anchors VWAP, so the extra
+    # prior-day history cannot contaminate the VWAP read.
     c = _contract(ticker)
     ib.qualifyContracts(c)
     bars = ib.reqHistoricalData(c, endDateTime="", durationStr=duration,
@@ -320,7 +326,21 @@ def indicators(bars):
     l = np.array([b.low for b in bars], float)
     v = np.array([b.volume for b in bars], float)
     tp = (h + l + c) / 3
-    vwap = float((tp * v).sum() / v.sum()) if v.sum() > 0 else float(c[-1])
+    # VWAP must be anchored to TODAY even when the caller hands us multi-day bars. Indicators need prior-day
+    # history to exist at all before ~20 bars have printed, but a VWAP averaged across two sessions is
+    # simply a wrong number -- and every "price vs VWAP" read downstream would inherit it.
+    _m = None
+    try:
+        _today = bars[-1].date.date()
+        _m = np.array([getattr(b, "date", None) is not None and b.date.date() == _today for b in bars], bool)
+        if not _m.any():
+            _m = None
+    except Exception:
+        _m = None
+    if _m is not None and v[_m].sum() > 0:
+        vwap = float((tp[_m] * v[_m]).sum() / v[_m].sum())
+    else:
+        vwap = float((tp * v).sum() / v.sum()) if v.sum() > 0 else float(c[-1])
     sma20, sd20 = float(c[-20:].mean()), float(c[-20:].std())
     out = {"price": round(float(c[-1]), 2), "vwap": round(vwap, 2),
            "rsi": _rsi(c), "ema9": round(_ema(c[-30:], 9), 2), "ema21": round(_ema(c[-40:], 21), 2),
