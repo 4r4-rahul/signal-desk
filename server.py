@@ -846,6 +846,13 @@ def _chip_lifecycle(s):
             "hit": [hit1, hit2, hit3], "stopped": bool(stopped), "result": result,
             "blended_pct": blended_pct, "blended_r": blended_r,
             "opened": sh.get("start_utc"), "closed": sh.get("ended_utc"),
+            # WHY it ended, not just that it did. With a 20-min time stop live, "stopped -28%" and
+            # "timed out flat at 20m" are completely different outcomes and the card could not tell them
+            # apart. Falls back to the phase when no explicit reason was recorded.
+            "end_reason": sh.get("end_reason") or ({"STOPPED": "hit the -1R stop",
+                                                    "TRAILED_OUT": "trailed out at +T1",
+                                                    "RESOLVED": "closed"}.get(phase)
+                                                   if phase in ("STOPPED", "TRAILED_OUT", "RESOLVED") else None),
             "reason": meta.get("reason"), "regime": meta.get("regime"), "news": meta.get("news"),
             "entry_read": _er,                          # frozen WHY (strike/DTE/tape at fill) for the story
             "px": _chip_px(sh.get("ref"), now, t1, t2, t3, cur_stop, stop, sh),
@@ -1248,6 +1255,7 @@ def monitor_loop():
                     exp = sh.get("expiry") or _resolve_expiry(sg) or (s.get("opt") or {}).get("expiry")
                     if exp and exp < today:                       # contract expired -> END its life
                         sh["state"], sh["ended_utc"] = "ended", now_utc
+                        sh.setdefault("end_reason", "contract expired")
                         if not sh.get("result"):
                             _pk = sh.get("peak_net", sh.get("peak", 0))       # net where observed, else mid
                             _tr = sh.get("trough_net", sh.get("trough", 0))

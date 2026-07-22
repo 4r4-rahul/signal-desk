@@ -547,6 +547,12 @@ function checkSounds(S,d){
   else if(fresh) soundNew();
   else if(chip) soundChip();
 }
+function audioDiag(){    // so a SILENT test is diagnosable instead of a mystery
+  const c=_ctx();
+  if(!c)          return 'no AudioContext (browser blocked or unsupported)';
+  if(!_soundOn)   return 'MUTED — click the 🔔 first';
+  return c.state==='running' ? ('ok · '+Math.round(c.sampleRate/1000)+'kHz') : ('ctx '+c.state);
+}
 function testSounds(){   // hear every tier on demand — the only way to confirm audio works on this machine
   const seq=[['RISK',soundRisk],['POSITION',soundPos],['CORRECTED',soundAlarm],
              ['TAKE',soundNotice],['NEW SIGNAL',soundNew],['CHIP',soundChip]];
@@ -554,7 +560,7 @@ function testSounds(){   // hear every tier on demand — the only way to confir
   (function nxt(){ if(i>=seq.length) return;
     const [nm,fn]=seq[i++]; const el=document.getElementById('sndtest');
     if(el) el.textContent='🔊 '+nm; fn(); setTimeout(nxt,1400);
-    if(i>=seq.length) setTimeout(()=>{ if(el) el.textContent='test'; },1600);
+    if(i>=seq.length) setTimeout(()=>{ if(el) el.textContent=audioDiag(); },1600);
   })();
 }
 function secOf(s){
@@ -1871,6 +1877,24 @@ function chipStoryHTML(cl){
   } else { body=`Took ${cl.leg} at $${cl.entry_px}. Now ${now>=0?'+':''}${R(now)}%.`; }
   return `<div class="chip-story ${cls}"><div class="sh">${sh}</div>${body}</div>`;
 }
+// Timestamps + WHY it ended. A chip card previously showed a P&L with no entry time, no exit time and
+// no exit reason — so "stopped -28%" and "timed out flat at 20m" looked identical, which with a live
+// 20-minute time stop is the single most important distinction on the card.
+function _hhmm(iso){ if(!iso) return null;
+  try{ return new Date(iso).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',hour12:false}); }
+  catch(e){ return null; } }
+function chipTimesHTML(cl){
+  const a=_hhmm(cl.opened), b=_hhmm(cl.closed);
+  if(!a && !b) return '';
+  let held='';
+  if(cl.opened){
+    const t1=new Date(cl.closed||Date.now()), t0=new Date(cl.opened);
+    const m=Math.max(0,Math.round((t1-t0)/60000));
+    held = m>=60 ? ` · held ${Math.floor(m/60)}h${String(m%60).padStart(2,'0')}` : ` · held ${m}m`;
+  }
+  const why = cl.end_reason ? ` · <span style="color:var(--fg)">${cl.end_reason}</span>` : '';
+  return `<div class="sub mono" style="font-size:11px;color:var(--dim)">🕐 in ${a||'—'}${b?' → out '+b:' · open'}${held}${why}</div>`;
+}
 function renderChipCard(s){
   const cl=s.chip_lifecycle||{}, g=s.sig||{};
   if(cl.entry_px==null) return `<div class="card status-live" style="--tier:#c4b5fd"><div class="sig">${g.ticker||'?'} <span class="badge prov" style="background:rgba(168,139,250,.16);color:#c4b5fd">🤖 chip</span></div><div class="sub">${(chipPhaseMeta(cl))[0]} ${(chipPhaseMeta(cl))[1]}</div></div>`;
@@ -1900,6 +1924,7 @@ function renderChipCard(s){
       <div class="sub" style="color:var(--muted)">${cl.regime||''}${cl.reason?' · '+cl.reason:''}${cl.news&&cl.news!=='none'?' · 📰 '+cl.news:''}</div>
     </div></div>
     ${['T1_HIT','T2_HIT','RUNNER'].includes(cl.phase)?chipGiveBackHTML(cl):''}
+    ${chipTimesHTML(cl)}
     ${chipThesisHTML(cl)}
     ${chipEntryReadHTML(cl.entry_read)}
     ${chipLadderHTML(cl)}
