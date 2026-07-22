@@ -49,28 +49,81 @@ DEFAULT_MECHANICS = {
     # spread_max 6 -> 3 on the index ETFs: SPY/QQQ ATM actually quote 0.5-0.6%, so a 6% cap never bound and
     # would have waved through a fill costing more than a quarter of T1. Single names left alone — there is
     # no evidence for a tighter number there, and inventing one is exactly what the SMEs warned against.
-    "SPY":  {"stop_pct": 26, "t1_pct": 20, "t2_pct": 42, "t3_pct": 68,  "spread_max": 3,  "strike_inc": 1.0, "regime_bias": "trend",    "dte_pref": 1, "dte_max": 2},
-    "QQQ":  {"stop_pct": 28, "t1_pct": 22, "t2_pct": 46, "t3_pct": 74,  "spread_max": 3,  "strike_inc": 1.0, "regime_bias": "trend",    "dte_pref": 1, "dte_max": 2},
+    # T1 RAISED TO 1.0x THE STOP (SPY 20->26, QQQ 22->32) and the QQQ stop widened 28->32.
+    # The old t1/stop ratio (SPY 0.77, QQQ 0.79) banked half the position at well under 1R, truncating the
+    # right tail that has to pay for the stops while the loss side still ran the full distance. Three
+    # independent measurements agree on the SIGN:
+    #   · SPY synthetic replay, 44 sessions, paired, session-block SE:  t1 -> 1.0x stop  +0.0065R +/- 0.0015
+    #   · QQQ synthetic replay, 37 sessions, paired, day-block SE:      t1 -> 1.0x stop  +0.0034R +/- 0.0012
+    #                                                                   t1 -> 1.4x stop  +0.0061R +/- 0.0024
+    #   · REAL stored quotes (eval_harness, `path` ATM, paired, day-block SE):
+    #         QQQ t1 22->32  +0.0304R +/- 0.0146 (z 2.09)     SPY t1 20->26  -0.0007R +/- 0.0050 (nil)
+    # Monotone and same-signed on QQQ across all three; on SPY the real-quote sample is too thin to
+    # confirm its own synthetic result and is consistent with zero. Shipped because the direction is
+    # replicated and the downside is bounded, NOT because the magnitude is established.
+    # QQQ stop 28->32: sizing arithmetic, not edge — at a $250 risk cap a 32% stop on a ~$4.8 ATM still
+    # buys 1 contract, and it gives the exit somewhere to live. The QQQ review's z=13.7 "stop 35 vs 28"
+    # is NOT evidence for this: that row moved t1 22->28 at the same time and double-counts the t1 effect.
+    "SPY":  {"stop_pct": 26, "t1_pct": 26, "t2_pct": 55, "t3_pct": 88,  "spread_max": 3,  "strike_inc": 1.0, "regime_bias": "trend",    "dte_pref": 1, "dte_max": 2},
+    "QQQ":  {"stop_pct": 32, "t1_pct": 32, "t2_pct": 60, "t3_pct": 95,  "spread_max": 3,  "strike_inc": 1.0, "regime_bias": "trend",    "dte_pref": 1, "dte_max": 2},
     "NVDA": {"stop_pct": 34, "t1_pct": 30, "t2_pct": 62, "t3_pct": 100, "spread_max": 10, "strike_inc": 2.5, "regime_bias": "momentum", "dte_pref": 1, "dte_max": 2},
     "TSLA": {"stop_pct": 38, "t1_pct": 34, "t2_pct": 70, "t3_pct": 115, "spread_max": 12, "strike_inc": 5.0, "regime_bias": "range",    "dte_pref": 1, "dte_max": 3},
     "AAPL": {"stop_pct": 30, "t1_pct": 24, "t2_pct": 50, "t3_pct": 80,  "spread_max": 8,  "strike_inc": 2.5, "regime_bias": "trend",    "dte_pref": 1, "dte_max": 2},
 }
 GEOM = "g2"                 # stamped on every emit so g1 (0DTE) and g2 (1DTE) samples never pool in edge stats
 
-MIN_TAPE_MODERATE = 62      # chip's own conviction bar (matches the desk's moderate grade)
+MIN_TAPE_MODERATE = 62      # chip's conviction bar. STILL COMPUTED AND LOGGED, NO LONGER A GATE — see
+                            # TAPE_GATE_ENABLED. Kept as a constant because the score is still scored,
+                            # displayed, stamped on every emit and available to any future review.
+# ── THE TAPE GATE IS RETIRED (2026-07-22) ───────────────────────────────────────────────────────────
+# It was never shown to select anything, and three independent measurements now agree:
+#   · SPY synthetic replay, 44 sessions: the 62-68 band sits +0.002R +/- 0.028 vs null — literally nothing.
+#   · QQQ synthetic replay, 37 sessions: the bar fires on 64.3% of minutes with 20-min forward drift
+#     -0.07 bp +/- 1.07, and the volatility it fires into is 1.020x unconditional. It selects nothing.
+#   · REAL stored quotes (eval_harness over `path` ATM ticks, day-block SE): the gated arm is WORSE than
+#     the null on both tickers -- SPY -0.058R +/- 0.024, QQQ -0.032R +/- 0.025 at the DTE chip trades.
+# So the gate is somewhere between worthless and mildly harmful, and it costs sample. Sample is the
+# binding constraint on every question the desk actually wants answered (see the power note below), so
+# a gate must EARN its selectivity. This one cannot.
+#
+# NOTE ON THE "30x MORE SAMPLE" CLAIM: retiring the 62 bar ALONE does not 30x anything -- the bar fires on
+# ~64% of minutes. The binding constraint was the TRIGGER requirement below it (a fresh VWAP cross, or
+# grade=='strong'), and _score_ex_vwap already documents that the cross and the 62 bar are anti-correlated
+# by construction. The 30x needs BOTH retired, which is what this does.
+# WHAT IS DELIBERATELY KEPT: the long-lookback EMA135/EMA315 trend gate in assess(). It is the only
+# directional filter on this desk with a day-block bootstrap CI that excludes zero (+0.303R, 95% CI
+# [+0.050, +0.539] over 220 triggers / 60 sessions). Retiring the unproven gates is not a reason to
+# retire the proven one.
+TAPE_GATE_ENABLED = False   # flip to True to restore the 62 bar + trigger requirement as hard gates
 COOLDOWN_S = 900            # 15 min between chip entries on the same ticker (anti-churn)
-# MAX_HOLD_S is now a REAL TIME STOP, not just a book-slot release. It was 3600, and it only freed chip's
+# MAX_HOLD_S is a REAL TIME STOP, not just a book-slot release. It was 3600, and it only freed chip's
 # in-memory slot: the SHADOW kept ticking until the contract EXPIRED, so a 1DTE scalp was scored over ~1.5
-# sessions of theta. provider_edge was therefore measuring a strategy nobody would trade.
-# MEASURED on 1,458 replayed chip TAKE minutes (20 sessions, SPY+QQQ 1-min, ask-in/bid-out/commission,
-# the desk's own _shadow_scaleout, 1DTE):
-#     hold  5m -0.050R   15m -0.115R   20m -0.140R   30m -0.159R   60m -0.219R   to-EOD -0.278R
-# Monotone, well-powered (se ~0.017), and it is pure theta: the NULL (every minute an entry) moves the
-# same way, -0.065R at 15m vs -0.142R at 60m. Win rate is flat across the curve (45-47%), so cutting the
-# hold does not cut winners, it cuts bleed. 20m is the knee: +0.138R against the shipped to-expiry
-# behaviour while still leaving a 22%-of-premium target real room. Emitted as chip_plan.max_hold_min so
-# the server's shadow tracker actually closes the position (chip-only: no other provider sets it).
+# sessions of theta. provider_edge was therefore measuring a strategy nobody would trade. Cutting it to
+# 1200 was correct and STAYS.
+#
+# THE CURVE THAT JUSTIFIED IT WAS PARTLY WRONG, AND THE REASON MATTERS. The original monotone curve
+#     hold 5m -0.050R  15m -0.115R  20m -0.140R  30m -0.159R  60m -0.219R  to-EOD -0.278R
+# was reported as "1DTE" and as "pure theta". Re-measured on REAL stored quotes (eval_harness, `path`
+# ATM ticks, day-block bootstrap SE), the slope is almost entirely a 0DTE effect:
+#     SPY 0DTE     null  -0.090R (5m) -> -0.172R (20m) -> -0.414R (60m)   steeply monotone
+#     SPY non-0DTE null  -0.027R (5m) -> +0.008R (20m) -> +0.082R (60m)   FLAT, if anything rising
+# At the DTE chip actually trades the hold curve is flat, so MAX_HOLD_S is very nearly a free parameter
+# anywhere in 20-60 min and the cost of getting it wrong is small. It is NOT free at 0DTE, which is one
+# more reason dte_pref stays 1. Shortening to 5 min is the one move that is affirmatively bad: it cannot
+# gain much (the curve is flat) and it raises the directional-accuracy hurdle (54.9% -> 56.9% on the SPY
+# replay) because a fixed per-trade cost gets less time to be overcome.
+# 20 min is kept because it is inside the flat region, it is where the accuracy hurdle is minimised, and
+# changing it would cost a re-baseline of chip's sample for no measured gain.
+# Emitted as chip_plan.max_hold_min so the server's shadow tracker actually closes the position
+# (chip-only: no other provider sets it).
 MAX_HOLD_S = 1200           # 20 min — time stop AND book-slot release
+# ── POWER, STATED PLAINLY ────────────────────────────────────────────────────────────────────────────
+# At ~0.55R per-trade dispersion and ~5 signals/day, detecting a +0.03R edge needs ~2,639 trades ~ 2.1
+# YEARS, and that figure is itself an optimistic floor (it assumes iid trades; overlapping holds inside a
+# session are not). +0.05R needs ~950 trades (~0.8y). What IS decidable on a season of data: large
+# mechanical effects (0DTE vs 1DTE is -0.18R, z=-21 — decidable in weeks) and cost/geometry terms that
+# can be measured PAIRED on identical entries. What is NOT decidable: any entry-signal edge smaller than
+# ~+0.10R. Design accordingly — spend the sample on mechanics, not on hunting entry alpha.
 LOOP_SLEEP = 5              # scan cadence — 5s is plenty for scalp entries; keeps the lap cheap
 
 _MECH_CACHE = {"ts": 0.0, "data": None}
@@ -298,10 +351,15 @@ def assess(tkr, ind, mech, session_min, side, crossed_up=False, crossed_down=Fal
         if sx is not None and sx > st["score"]:
             bar_score, bar_basis = sx, "tape ex-VWAP (at a cross, price IS VWAP)"
             base = {**base, "bar_score": sx, "bar_basis": bar_basis}
-    if st["grade"] == "against" and bar_score < MIN_TAPE_MODERATE:
-        return {**base, "verdict": "WAIT", "reason": f"tape against ({st['score']}) — stand down"}
-    if bar_score < MIN_TAPE_MODERATE:
-        return {**base, "verdict": "WAIT", "reason": f"tape {st['score']} ({st['grade']}) — below the {MIN_TAPE_MODERATE} bar"}
+    # The 62 bar is RETIRED as a gate (see TAPE_GATE_ENABLED). The score is still computed above and
+    # still travels on every verdict in `base`, so it is logged, displayed and available to any future
+    # review — it simply no longer decides. Flipping TAPE_GATE_ENABLED back to True restores the old
+    # behaviour exactly.
+    if TAPE_GATE_ENABLED:
+        if st["grade"] == "against" and bar_score < MIN_TAPE_MODERATE:
+            return {**base, "verdict": "WAIT", "reason": f"tape against ({st['score']}) — stand down"}
+        if bar_score < MIN_TAPE_MODERATE:
+            return {**base, "verdict": "WAIT", "reason": f"tape {st['score']} ({st['grade']}) — below the {MIN_TAPE_MODERATE} bar"}
     # LONG-LOOKBACK TREND GATE. Binary, sign-only, sigma-FREE — it reads an EMA ordering, not a magnitude,
     # so no volatility input can flip it. Measured over 220 triggers / 60 sessions: trades agreeing with
     # this trend returned +0.046R, trades fighting it -0.261R, delta +0.303R (day-block bootstrap 95% CI
@@ -321,9 +379,14 @@ def assess(tkr, ind, mech, session_min, side, crossed_up=False, crossed_down=Fal
         trig = "VWAP breakdown" + (" (ex-VWAP tape " + str(bar_score) + ")" if bar_basis != "tape" else "")
     if not trig and st["grade"] == "strong":
         trig = "strong momentum"
-    if not trig:
+    if not trig and TAPE_GATE_ENABLED:
         return {**base, "verdict": "WAIT",
                 "reason": f"tape {st['score']} ({st['grade']}), {'call' if side=='C' else 'put'} side — waiting for a trigger"}
+    if not trig:
+        # Trigger requirement retired with the tape bar. The HTF trend gate above has already agreed with
+        # this side, which is now the whole directional case — stated honestly rather than dressed up as
+        # a momentum trigger that did not fire.
+        trig = "HTF trend (no tape trigger — gate retired)"
     # would this have passed the STRICT bar? (strict only demanded 'strong' DURING midday 45–300 min)
     strict_ok = st["grade"] == "strong" or not (session_min is not None and 45 < session_min < 300)
     return {**base, "verdict": "TAKE", "reason": trig,
@@ -745,8 +808,20 @@ def _emit(conn, tkr, dec, mech, book, now, chip_read=None, bookkey=None, role="p
         "msg_id": f"chip-{tkr}-{int(now.timestamp())}",
         "force": True,                                  # deliberate re-entry -> bypass the 4h/48h dedup sweep
         "chip_plan": {**{k: mech[k] for k in ("stop_pct", "t1_pct", "t2_pct", "t3_pct")},
-                      "max_hold_min": MAX_HOLD_S // 60},   # real time stop — see MAX_HOLD_S
+                      "max_hold_min": MAX_HOLD_S // 60,    # real time stop — see MAX_HOLD_S
+                      # EXIT MODEL, chip-scoped. db._exit_model('chip') is the authority that scores it;
+                      # this is the same value carried on the card so the UI and the score cannot drift.
+                      # The 3-tier ladder capped half the position at t1 and moved the stop to breakeven
+                      # while the loss side still ran the full stop — negative carry on a near-driftless
+                      # process. Measured on real quotes at the DTE chip trades (paired, day-block SE):
+                      # SPY +0.0014R +/- 0.0011, QQQ +0.0022R +/- 0.0097 for the single exit. Direction
+                      # agrees with both synthetic reviews; magnitude is ~10x smaller than the +0.0135R
+                      # the SPY review reported, because THAT arm was coded as t1=stop with t2 unreachable
+                      # (still half out at t1, then a breakeven stop) — it never removed the scale-out.
+                      # Trailing was tested and is NOT shipped: negative on both tickers.
+                      "exit_model": "single"},
         "chip_meta": {"regime": dec["regime"], "reason": dec["reason"], "score": dec.get("score"),
+                      "tape_gate": "retired" if not TAPE_GATE_ENABLED else "enforced",
                       "live_grade": dec.get("live_grade"), "strict_take": dec.get("strict_take"),
                       "direction_role": role,          # 'primary' (stronger side) vs 'counter' (data only)
                       "geom": GEOM,                    # stop-geometry cohort — never pool g1 (0DTE) with g2

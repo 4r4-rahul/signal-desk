@@ -819,12 +819,20 @@ def _chip_lifecycle(s):
     t1, t2, t3, stop = tk.get("t1_pct"), tk.get("t2_pct"), tk.get("t3_pct"), tk.get("stop_pct")
     if None in (t1, t2, t3, stop):                       # a chip card must carry all four targets
         return None
+    # EXIT MODEL — must be the same one db scores this provider on, or the card's narrated R and the
+    # scored R silently disagree. db._exit_model is the single authority; chip_plan.exit_model is only
+    # the copy carried on the card. Under "single" there is no ladder: the position is all-out at t1, so
+    # there is no breakeven step, no trail-to-t1, and no runner phase to narrate.
+    exit_model = DB._exit_model(s.get("provider"))
+    single = (exit_model == "single")
     now, peak, trough = sh.get("now"), sh.get("peak", 0.0), sh.get("trough", 0.0)
     state, result = sh.get("state"), sh.get("result")
-    hit1, hit2, hit3 = peak >= t1, peak >= t2, peak >= t3
+    hit1, hit2, hit3 = peak >= t1, (False if single else peak >= t2), (False if single else peak >= t3)
     cur_stop = -stop if not hit1 else (0.0 if not hit2 else t1)
     stopped = (not hit1) and (result == "LOSS" or (now is not None and now <= -stop))
-    trailed = hit1 and (now is not None and now <= cur_stop)
+    # Under the single exit, hitting t1 CLOSES the position — there is no remainder left to be trailed
+    # out of, so the card must never narrate a trail after t1.
+    trailed = (not single) and hit1 and (now is not None and now <= cur_stop)
     if state == "ended":               phase = "RESOLVED"
     elif stopped:                      phase = "STOPPED"
     elif trailed:                      phase = "TRAILED_OUT"
@@ -837,7 +845,7 @@ def _chip_lifecycle(s):
     _er = meta.get("entry_read") or {}
     _lr = _chip_live_read(s) if sh.get("state") == "live" else None
     ticks = [-stop] if stopped else [peak, now if now is not None else peak]
-    blended_pct = DB._shadow_scaleout(ticks, t1, t2, stop, t3)
+    blended_pct = DB._shadow_scaleout(ticks, t1, t2, stop, t3, exit_model)
     blended_r = round(blended_pct / abs(stop), 2) if (blended_pct is not None and stop) else None
     return {"phase": phase, "phase_label": _CHIP_PHASE_LABELS.get(phase, phase),
             "entry_px": sh.get("ref"), "leg": f'{sg.get("ticker")} {sg.get("strike")}{sg.get("type")}',

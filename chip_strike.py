@@ -32,7 +32,17 @@ collapse) and DTE. Do not let it masquerade as an expectancy fix.
 """
 import math
 
-DELTA_MIN, DELTA_MAX = 0.25, 0.85
+# DELTA_MIN 0.25 -> 0.40. This is a PER-INSTRUMENT COST veto, not an edge claim. MEASURED on real stored
+# quotes (`path`, SPY+QQQ, two-sided ticks only) — round trip = median bid/ask spread + $1.30/ct against
+# the band's median premium:
+#       |delta|      SPY: n / med prem / RT cost        QQQ: n / med prem / RT cost
+#       0.15-0.25    1160 / $0.55 / 4.25%               261 / $0.46 / 5.00%
+#       0.25-0.40    1137 / $1.04 / 2.43%               511 / $1.62 / 1.97%
+#       0.40-0.60     968 / $1.83 / 1.64%               867 / $3.40 / 1.13%
+# The cost is driven by the DENOMINATOR: a $1.30 commission is 2.4-2.8% of a 0.20-delta contract and
+# 0.4-0.7% of an ATM one. Below 0.40 delta chip pays 1.5-2.6x the round trip for the same directional
+# call, which at a 26-32% stop is 0.03-0.10R of pure friction handed over at entry.
+DELTA_MIN, DELTA_MAX = 0.40, 0.85
 MIN_PREMIUM_ETF, MIN_PREMIUM_SINGLE = 0.40, 0.75
 ETFS = {"SPY", "QQQ", "IWM", "DIA"}
 FUSE_HOLD_MULT = 2.0            # a contract whose DECAY alone trips the stop inside 2x the intended hold
@@ -144,7 +154,7 @@ def select(*, quotes, spot, mech, ticker=None, hold_min=60, equity=None, max_ris
     # from the moment 1DTE became the default.
     # The fix is to optimise INSIDE the feasible set: lowest leverage among rungs that clear every veto
     # AND fit one contract under the cap. This can never exceed the cap (that is the filter), never walks
-    # into a lotto (DELTA_MIN 0.25 and the premium floor are vetoes, applied first), and costs almost
+    # into a lotto (DELTA_MIN and the premium floor are vetoes, applied first), and costs almost
     # nothing in expectancy — this module's own finding is that E[%] across a 4x premium range spans
     # ~1.1pp against a 0.2pp standard error. Refusing costs 100% of the sample; that is not a trade-off.
     afford = [r for r in ok if (r.get("qty") or 0) >= 1]

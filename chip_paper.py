@@ -12,10 +12,21 @@ WHY chip needs its own book rather than borrowing the real one:
   3. HONESTY. Keeping the books separate makes it impossible for chip's paper performance to be mistaken
      for, or to influence, real risk state (drawdown halt, day-stop, provider sizing).
 
-WHAT THIS IS NOT: a promotion. At the time of writing chip's entries measure WORSE THAN RANDOM
-(null -0.142R vs chip's TAKE -0.219R, z = -3.58). The account exists so chip can generate an UNBIASED
-SAMPLE across both tickers, not because it has earned capital. size_mult stays pinned at 0.0 and chip
-never reaches broker.py.
+WHAT THIS IS NOT: a promotion. size_mult stays pinned at 0.0 and chip never reaches broker.py. The
+account exists so chip can generate an UNBIASED SAMPLE across both tickers, not because it has earned
+capital.
+
+RETRACTED 2026-07-22 — this docstring used to assert that chip's entries measure WORSE THAN RANDOM
+(null -0.142R vs chip's TAKE -0.219R, z = -3.58). That claim is withdrawn. The z came from treating
+1,458 overlapping, within-session, within-contract minutes as independent draws; on a day-block
+bootstrap the effective sample is ~20, not ~1,458, and the SE inflates ~4x. Re-measured on real stored
+quotes with the entry convention held identical across both arms (eval_harness.compare_arms), the gap
+is -0.058R +/- 0.024 on SPY and -0.032R +/- 0.025 on QQQ at the DTE chip trades: NOT significant, and
+carried almost entirely by 0DTE contracts chip does not trade. chip is not measurably worse than
+random. It is also not measurably better. See eval/adjudication.md.
+
+The reason chip stays shadow-only is therefore NOT "it is worse than random" — it is that ~5 signals/day
+cannot resolve a +0.03R edge inside ~2 years, so there is no evidence either way and no basis to size.
 
 ROLL RULE: chip risks RISK_PCT of its CURRENT paper equity per trade, so the account compounds and
 decays like a real one. Equity is derived — replayed from chip's stored shadow outcomes in trade order,

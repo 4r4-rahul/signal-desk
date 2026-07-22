@@ -260,19 +260,39 @@ def record_tick(row):
         _LOCAL.con = None
 
 
-def _shadow_scaleout(ticks, t1, t2, stop, t3=None):
-    """Replay ordered option-%-move ticks through the desk's SCALE-OUT discipline — the exits the desk
-    actually tells you to take, so the shadow measures YOUR strategy, not a naive all-out:
+def _shadow_scaleout(ticks, t1, t2, stop, t3=None, exit_model="ladder"):
+    """Replay ordered option-%-move ticks through an EXIT DISCIPLINE and return the portion-weighted
+    blended return %.
+
+    exit_model="ladder" (DEFAULT — every human provider, unchanged):
       · sell 1/2 at +t1, move the stop to BREAKEVEN
       · sell 1/4 at +t2, trail the stop up to +t1
       · the runner (1/4) books at +t3 if it gets there, else exits at the last observed tick / EOD
       · a hard stop at -stop before any fill = full -1R
-    Returns the portion-weighted blended return %. Fixes both failure modes of the old binary model
-    (spike-then-die was OVERstated as a full T1 win; a big runner was UNDERstated at just T1).
-    t3 is optional: without it the runner never takes profit, which silently made every provider's t3
-    decorative — chip emits a t3 per ticker and it was being discarded here."""
+    Fixes both failure modes of the old binary model (spike-then-die was OVERstated as a full T1 win;
+    a big runner was UNDERstated at just T1). t3 is optional: without it the runner never takes profit.
+
+    exit_model="single" (CHIP ONLY):
+      · all out at +t1, full -1R at -stop, else marked at the last observed tick.
+    The ladder converts a symmetric bet into one that caps half the upside at t1 and then gets churned
+    out of the remainder at breakeven, while the loss side still runs to the full stop. Against a
+    near-driftless process that is negative carry.
+
+    WHY THIS IS PER-PROVIDER AND NOT A GLOBAL SWITCH. provider_edge() ranks providers by shadow R and
+    that ranking drives size_mult -> real money. Changing the exit model globally would re-score every
+    human provider's whole back-history against a discipline they never called, silently re-baselining
+    the comparison. The exit model is therefore chosen from the PROVIDER (see _exit_model) and stamped
+    into score_basis, so a chip row and a human row are never confused for one another."""
     if not ticks:
         return None
+    if exit_model == "single":
+        slvl = -abs(stop)
+        for pct in ticks:
+            if pct >= t1:
+                return round(float(t1), 2)
+            if pct <= slvl:
+                return round(float(min(pct, slvl)), 2)      # book the OBSERVED tick, never a windfall
+        return round(float(ticks[-1]), 2)
     rem, realized, slvl, hit1, hit2 = 1.0, 0.0, -abs(stop), False, False
     for pct in ticks:
         if rem <= 0:
@@ -321,7 +341,77 @@ CLOSE_COMM_PER_CT = 0.00   # tastytrade: closing an equity option is commission-
 CLOSE_FEES_PER_CT = 0.15   # ORF/OCC still apply on the way out
 RT_COST_PER_CT = OPEN_COMM_PER_CT + OPEN_FEES_PER_CT + CLOSE_COMM_PER_CT + CLOSE_FEES_PER_CT   # $1.30
 
+# ---------------- PER-INSTRUMENT FRICTION (the null a strategy must beat) ----------------
+# The desk spent weeks quoting a friction floor of "4.55% of premium" and a null expectancy of -0.142R.
+# BOTH WERE POPULATION ARTEFACTS. 4.545% is the exact median bid/ask spread over all 41,542 two-sided
+# ticks in `path` — across every provider, ticker and DTE. That population is dominated by names chip
+# and the index strategies never touch: 9 tickers with a median spread above 10% (PENG 50.0%, MU 46.2%,
+# CELH 107.7%, SPCX 28.6%) contribute 9.2% of the ticks and set the median.
+#
+# MEASURED 2026-07-22, same table, ATM only (|delta| 0.40-0.60 — the only options chip buys):
+#     SPY   n=971 ticks   median spread 0.935% of mid   65.8% of ticks quote $0.01 wide
+#     QQQ   n=871 ticks   median spread 0.751% of mid   28.7% of ticks quote $0.01 wide
+# So the real number is 4.9x (SPY) and 6.1x (QQQ) SMALLER than the one that was being reported.
+#
+# Commission is NOT a percentage and must never be folded into one: $1.30/contract is 0.62% of a $2.10
+# contract and 0.26% of a $5.00 one. It is applied against the actual premium, below.
+#
+# A spread is only a lookup when no live quote is available — _shadow_r itself never uses this table,
+# because it charges the REAL observed bid/ask from `path`. This table exists for everything that needs
+# a cost EXPECTATION before the fact: gates, sizing sanity, expectancy display, and any review.
+ATM_SPREAD_PCT = {"SPY": 0.935, "QQQ": 0.751}
+_UNMEASURED_SPREAD_PCT = 4.545      # the old population median. Deliberately kept as the loud default for
+                                    # an instrument nobody has measured — if this shows up in a result,
+                                    # the instrument needs measuring, not this constant.
+
+
+def friction_pct(ticker, premium, observed_spread_pct=None):
+    """Round-trip friction as a % of premium paid, split into its parts. Prefers a live observed spread;
+    falls back to the measured per-instrument ATM median; falls back loudly for unmeasured names."""
+    prem = _f(premium) or 0.0
+    if observed_spread_pct and observed_spread_pct > 0:
+        sp, src = float(observed_spread_pct), "observed_quote"
+    elif (ticker or "").upper() in ATM_SPREAD_PCT:
+        sp, src = ATM_SPREAD_PCT[(ticker or "").upper()], "measured_atm_median"
+    else:
+        sp, src = _UNMEASURED_SPREAD_PCT, "UNMEASURED_population_median"
+    comm = (RT_COST_PER_CT / (prem * 100.0) * 100.0) if prem > 0 else 0.0
+    return {"spread_pct": round(sp, 3), "comm_pct": round(comm, 3),
+            "total_pct": round(sp + comm, 3), "source": src}
+
+
+def friction_floor_r(ticker, premium, stop_pct, observed_spread_pct=None):
+    """The frictional floor in R: what a trade with ZERO edge and zero holding time loses. This is the
+    number any strategy must clear before it is worth anything, and it is PER INSTRUMENT.
+    MEASURED at a $2.10 ATM premium: SPY (26% stop) -0.060R; QQQ (28% stop) -0.049R.
+    The desk had been using -0.142R for both, which overstated the hurdle by ~2.5x."""
+    if not stop_pct:
+        return None, {}
+    c = friction_pct(ticker, premium, observed_spread_pct)
+    return round(-c["total_pct"] / abs(float(stop_pct)), 4), c
+
+
+# ---------------- EXIT MODEL: per provider, never global ----------------
+# chip is a 20-minute ATM scalper; the human providers call swing/position trades and describe a
+# scale-out. Scoring both through one discipline was measuring chip against a plan it does not run.
+# Changing the discipline GLOBALLY would be worse: it would re-score every human's back-history against
+# a plan THEY never ran, and provider_edge -> size_mult -> real money reads those numbers.
+_EXIT_MODEL_BY_PROVIDER = {"chip": "single"}
+_DEFAULT_EXIT_MODEL = "ladder"
+
+
+def _exit_model(provider):
+    return _EXIT_MODEL_BY_PROVIDER.get((provider or "").lower(), _DEFAULT_EXIT_MODEL)
+
+
 SHADOW_BASIS = "askbid_comm_v1"      # bump this to force a one-time re-score of every shadow
+
+
+def _basis_for(provider):
+    """score_basis prefix for a provider. The exit model is part of the basis, so a chip row scored under
+    the ladder is automatically identified as stale and re-scored, while human rows are untouched."""
+    em = _exit_model(provider)
+    return SHADOW_BASIS if em == _DEFAULT_EXIT_MODEL else f"{SHADOW_BASIS}|exit={em}"
 _DEFAULT_HALF_SPREAD = 0.05          # last-resort modelled half-spread when no quote was ever observed
 _REF_BAND = (0.25, 4.0)              # a quote this far from `ref` is a different CONTRACT, not a spread and
                                      # not a chase. Same 4x threshold server.py already uses to raise
@@ -375,19 +465,23 @@ def _shadow_entry_px(ref, card_bid, card_ask, card_mid, first_tick):
     return round(ref * (1 + _DEFAULT_HALF_SPREAD), 4), "modelled_half_spread"
 
 
-def _shadow_r(con, signal_id, stop, t1, t2, t3=None):
+def _shadow_r(con, signal_id, stop, t1, t2, t3=None, provider=None):
     """Would-be blended return% + R for a shadowed signal, on BOTH bases.
 
     Returns (ret_honest, r_honest, ret_mid, r_mid, meta) where the honest pair is ASK-in / BID-out with
     the round-trip commission charged, and the mid pair is the legacy MID-in / MID-out score kept for
-    audit. Both come from the same stored path, so the delta is purely the cost model."""
+    audit. Both come from the same stored path, so the delta is purely the cost model.
+
+    `provider` selects the EXIT MODEL (see _exit_model). It defaults to the ladder, so any caller that
+    does not pass it gets exactly the historical behaviour."""
+    em = _exit_model(provider)
     rows = con.execute("SELECT opt_pct, opt_mid, bid, ask FROM path WHERE signal_id=? AND phase='shadow' "
                        "ORDER BY ts_utc", (signal_id,)).fetchall()
     if not rows or not stop:
         return None, None, None, None, {}
 
     # --- legacy MID basis (unchanged arithmetic, kept for the audit columns) ---
-    ret_mid = _shadow_scaleout([r[0] for r in rows if r[0] is not None], t1, t2, stop, t3)
+    ret_mid = _shadow_scaleout([r[0] for r in rows if r[0] is not None], t1, t2, stop, t3, em)
     r_mid = round(ret_mid / abs(stop), 3) if ret_mid is not None else None
 
     sg = con.execute("SELECT bid, ask, mid, limit_px, premium FROM signals WHERE signal_id=?",
@@ -403,6 +497,9 @@ def _shadow_r(con, signal_id, stop, t1, t2, t3=None):
     # live shadow's entry can't wander as later ticks arrive. Also honours the fill the CARD stamped at
     # ingest (basis still NULL, first score). A basis bump re-derives from scratch.
     prior = str(o[2]) if (o and o[2]) else ""
+    # The stored fill is reusable across an EXIT-MODEL change: the entry price is a property of the quote
+    # at ingest, not of how the position is later unwound. Matching on SHADOW_BASIS (the cost basis) and
+    # not on the full basis string is what keeps a chip row's entry stable when its exit model changes.
     fill = (o[1] if (o and o[1] and (not prior or prior.startswith(SHADOW_BASIS))) else None)
     if fill:
         # Reusing the value must not lose HOW it was obtained — inherit the entry marker the first
@@ -418,15 +515,15 @@ def _shadow_r(con, signal_id, stop, t1, t2, t3=None):
     k = _ref_scale(ref, sg[2] if sg else None)
 
     if trade:
-        ticks, basis = [round((t["bid"] * k / fill - 1) * 100, 1) for t in trade], SHADOW_BASIS
+        ticks, basis = [round((t["bid"] * k / fill - 1) * 100, 1) for t in trade], _basis_for(provider)
     else:
         # DEGRADED: this shadow never once carried a two-sided quote (thin contract, or every tick landed
         # outside RTH). Rather than silently marking to mid, synthesise the bid as mid minus a modelled
         # half-spread and STAMP the outcome so the row is identifiable and discountable.
         ticks = [round((r[1] * (1 - _DEFAULT_HALF_SPREAD) * k / fill - 1) * 100, 1)
                  for r in rows if r[1] is not None]
-        basis = SHADOW_BASIS + "|degraded_no_two_sided_quote"
-    ret = _shadow_scaleout(ticks, t1, t2, stop, t3)
+        basis = _basis_for(provider) + "|degraded_no_two_sided_quote"
+    ret = _shadow_scaleout(ticks, t1, t2, stop, t3, em)
     if ret is None:
         return None, None, ret_mid, r_mid, {}
     cost_pct = RT_COST_PER_CT / (fill * 100.0) * 100.0        # $/contract as a % of premium paid
@@ -482,7 +579,8 @@ def _resync_shadow_r(con):
     from datetime import datetime, timedelta, timezone
     active_cutoff = (datetime.now(timezone.utc) - timedelta(days=_SHADOW_ACTIVE_DAYS)).isoformat()
     rows = con.execute(
-        "SELECT o.signal_id, s.stop_pct, s.t1_pct, s.t2_pct, s.t3_pct FROM outcomes o "
+        "SELECT o.signal_id, s.stop_pct, s.t1_pct, s.t2_pct, s.t3_pct, s.provider, o.score_basis "
+        "FROM outcomes o "
         "JOIN signals s ON s.signal_id=o.signal_id WHERE o.kind='SHADOW' AND ("
         "  o.return_pct IS NULL"
         # A shadow scored on a SUPERSEDED cost basis is re-scored once, then never again — this is what
@@ -491,11 +589,19 @@ def _resync_shadow_r(con):
         # suffixes (which are still the current basis) from re-qualifying every lap.
         "  OR o.score_basis IS NULL OR o.score_basis NOT LIKE ?"
         "  OR EXISTS ("
-        "    SELECT 1 FROM path p WHERE p.signal_id=o.signal_id AND p.phase='shadow' AND p.ts_utc > ?))",
-        (SHADOW_BASIS + "%", active_cutoff)).fetchall()
-    for sid, sp, t1, t2, t3 in rows:
+        "    SELECT 1 FROM path p WHERE p.signal_id=o.signal_id AND p.phase='shadow' AND p.ts_utc > ?)"
+        # A provider whose EXIT MODEL changed is stale even though its COST basis still matches, so the
+        # clause above would never catch it. Scoped to the providers that actually declare a non-default
+        # model, so this can never re-open the O(all x ticks) replay for the human providers.
+        + "".join(f"  OR (LOWER(s.provider)=? AND (o.score_basis IS NULL OR o.score_basis NOT LIKE ?))"
+                  for _ in _EXIT_MODEL_BY_PROVIDER)
+        + ")",
+        (SHADOW_BASIS + "%", active_cutoff,
+         *[x for p in _EXIT_MODEL_BY_PROVIDER for x in (p.lower(), _basis_for(p) + "%")])).fetchall()
+    for sid, sp, t1, t2, t3, provider, _basis in rows:
         sp = sp or 30; t1 = t1 or 40; t2 = t2 or (t1 * 2)
-        ret, r, ret_mid, r_mid, meta = _shadow_r(con, sid, sp, t1, t2, t3)  # t3 None -> runner rides to last tick
+        # t3 None -> runner rides to last tick (ladder only; the single-exit model ignores t2/t3)
+        ret, r, ret_mid, r_mid, meta = _shadow_r(con, sid, sp, t1, t2, t3, provider)
         if r is None:
             continue
         con.execute(
