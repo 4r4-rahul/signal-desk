@@ -1152,6 +1152,19 @@ def monitor_loop():
             today = datetime.now(ET).strftime("%Y%m%d")
             now_utc = datetime.now(timezone.utc).isoformat()
             dirty = False
+            # SWEEP: retire any actionable card whose contract already expired. The per-shadow branch below
+            # only fires for shadows still being ticked; a shadow that ENDED earlier never re-enters it, so
+            # its card stayed "NEW" forever. That is how 4 dead 07/21 contracts were still being offered as
+            # live trades at the next morning's open. Cheap (bounded by SIGNALS_CAP) and status-only.
+            if _heavy:
+                for _s in SIGNALS:
+                    if _s.get("status") not in ("NEW", "WATCHING"):
+                        continue
+                    _e = ((_s.get("shadow") or {}).get("expiry") or (_s.get("opt") or {}).get("expiry")
+                          or _resolve_expiry(_s.get("sig") or {}))
+                    if _e and str(_e) < today:
+                        _s["status"] = "EXPIRED"
+                        dirty = True
             # ROUND-ROBIN, not "newest 20". The old `shadows[-20:]` silently starved every shadow beyond
             # the 20 most recent: on a busy multi-provider day the older ones stopped receiving path ticks
             # entirely, so their story just stopped being recorded mid-trade. Rotating covers ALL live
@@ -1177,6 +1190,12 @@ def monitor_loop():
                         if not sh.get("result"):
                             sh["result"] = ("WIN" if sh.get("peak", 0) >= sh["t1_pct"]
                                             else "LOSS" if sh.get("trough", 0) <= -sh["stop_pct"] else "SCRATCH")
+                        # ...and RETIRE the card. Ending the shadow was not enough: status stayed "NEW", so
+                        # every morning the board offered yesterday's dead 0DTEs as live trades. Found 4 of
+                        # them sitting actionable at today's open, all on 07/21 contracts. Status only, so
+                        # the card and its whole path are preserved -- nothing is deleted.
+                        if s.get("status") in ("NEW", "WATCHING"):
+                            s["status"] = "EXPIRED"
                         dirty = True
                         continue
                     q = MK.option_quote(sg["ticker"], str(sg["strike"]).split(".")[0], sg["type"], expiry=exp, ib=conn)
