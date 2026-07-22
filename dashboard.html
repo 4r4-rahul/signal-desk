@@ -404,7 +404,7 @@
     <div class="chip">Risk <b id="risk">—</b></div>
     <div class="chip" id="ttchip" style="display:none">🍒 tastytrade <b id="ttbal">—</b> <span id="ttenv" style="color:var(--amber);font-size:11px"></span></div>
     <div class="chip">Signals <b id="n">0</b> · Taken <b id="nt">0</b> · Skipped <b id="ns">0</b></div>
-    <div class="chip"><button id="sndbtn" onclick="toggleSound()" title="mute/unmute desk alerts" style="background:none;border:none;cursor:pointer;font-size:15px;padding:0 2px">🔔</button></div>
+    <div class="chip"><button id="sndbtn" onclick="toggleSound()" title="mute/unmute desk alerts" style="background:none;border:none;cursor:pointer;font-size:15px;padding:0 2px">🔔</button><button id="sndtest" onclick="testSounds()" title="play every alert tone" style="background:none;border:none;cursor:pointer;color:var(--dim);font-size:10px;padding:0 4px">test</button></div>
   </div>
 </header>
 
@@ -472,6 +472,13 @@ function beep(freq,ms,vol,delay){
 }
 function soundAlarm(){ beep(880,160,0.22,0); beep(660,260,0.22,0.18); beep(880,160,0.22,0.52); beep(660,320,0.22,0.70); }
 function soundNotice(){ beep(660,110,0.13,0); beep(880,150,0.13,0.10); }        // actionable: TAKE
+// RISK — the most urgent thing the desk can say. Low, slow, three times: it must not be mistakable for
+// a signal arriving. Day-stop, drawdown halt, or a provider auto-disabled.
+function soundRisk(){ beep(320,300,0.26,0); beep(320,300,0.26,0.40); beep(320,420,0.26,0.80); }
+// POSITION — something happened to money you are ALREADY HOLDING (stop hit, target hit, provider exited).
+// Distinct from a new signal, because the action required is opposite: a signal you can ignore, a stop
+// you cannot. Rising urgent triple.
+function soundPos(){ beep(740,120,0.22,0); beep(880,120,0.22,0.13); beep(1046,220,0.22,0.26); }
 function soundNew(){ beep(523,90,0.10,0); }                                       // a new signal landed
 function soundChip(){ beep(784,80,0.08,0); }                                      // chip fired a scalp
 function toggleSound(){ _soundOn=!_soundOn; localStorage.setItem('deskSound',_soundOn?'1':'0');
@@ -480,31 +487,50 @@ function toggleSound(){ _soundOn=!_soundOn; localStorage.setItem('deskSound',_so
 // fire once per card, remembered across reloads so a refresh doesn't re-alarm you
 const _heard=new Set(JSON.parse(localStorage.getItem('deskHeard')||'[]'));
 function _remember(k){ _heard.add(k); try{ localStorage.setItem('deskHeard',JSON.stringify([..._heard].slice(-400))); }catch(e){} }
-function checkSounds(S){
-  // THREE tiers, so the sound alone tells you what happened with your eyes off the screen:
-  //   ALARM  a card was corrected / is phantom — it may sit under a position you hold
-  //   NOTICE a card is actionable right now (live verdict = TAKE)
-  //   NEW    a signal simply arrived (any status, incl. WAIT/WATCHING) — the "don't miss it" tier
-  // Highest tier wins per refresh, and each fires once per card id, so a burst of 12 optionking
-  // messages is one sound, not twelve. Chip gets its own softer blip: it is shadow-only, so it must
-  // never sound as urgent as a real provider signal.
-  let alarm=false, notice=false, fresh=false, chip=false;
+function checkSounds(S,d){
+  // FIVE tiers, strictly ordered — the sound alone must tell you what happened with your eyes elsewhere:
+  //   RISK   day-stop / drawdown halt / provider disabled   (low slow triple — cannot be mistaken)
+  //   POS    an event on money you ALREADY HOLD             (rising urgent triple)
+  //   ALARM  a card was corrected or is phantom             (falling minor third, twice)
+  //   NOTICE a card is actionable right now (TAKE)          (rising pair)
+  //   NEW    a signal simply arrived, any status            (single soft blip)
+  //   CHIP   chip fired — shadow-only, so deliberately quietest
+  // Highest tier wins per refresh and each key fires once, so a burst is one sound, not a machine-gun.
+  let risk=false,pos=false,alarm=false,notice=false,fresh=false,chip=false;
+  const sl=(d&&d.sleeve)||{}, dis=(d&&d.discipline)||{};
+  if(sl.halted && !_heard.has('r:halt')){ _remember('r:halt'); risk=true; }
+  if(!sl.halted) _heard.delete('r:halt');                 // re-arm once the halt clears
+  if(dis.blocked && !_heard.has('r:daystop')){ _remember('r:daystop'); risk=true; }
+  for(const p of ((d&&d.positions)||[])){
+    for(const a of (p.live_alerts||[])){
+      const k='p:'+p.id+':'+(a.kind||a.text||JSON.stringify(a)).slice(0,40);
+      if(!_heard.has(k)){ _remember(k); pos=true; }
+    }
+    if(['CLOSED','CUT'].includes(p.state) && !_heard.has('x:'+p.id)){ _remember('x:'+p.id); pos=true; }
+  }
   for(const s of (S||[])){
     if(!s || !s.id) continue;
     const bad=s.corrected||s.phantom_strike||s.misparse||s.verified===false;
     if(bad && !_heard.has('c:'+s.id)){ _remember('c:'+s.id); alarm=true; }
-    if(!_heard.has('n:'+s.id)){                       // first time we have ever seen this card
-      _remember('n:'+s.id);
-      if(s.provider==='chip') chip=true; else fresh=true;
-    }
-    if((s.live&&s.live.entry&&s.live.entry.action)==='TAKE' && !_heard.has('t:'+s.id)){
-      _remember('t:'+s.id); notice=true;
-    }
+    if(!_heard.has('n:'+s.id)){ _remember('n:'+s.id); if(s.provider==='chip') chip=true; else fresh=true; }
+    if((s.live&&s.live.entry&&s.live.entry.action)==='TAKE' && !_heard.has('t:'+s.id)){ _remember('t:'+s.id); notice=true; }
   }
-  if(alarm) soundAlarm();
+  if(risk) soundRisk();
+  else if(pos) soundPos();
+  else if(alarm) soundAlarm();
   else if(notice) soundNotice();
   else if(fresh) soundNew();
   else if(chip) soundChip();
+}
+function testSounds(){   // hear every tier on demand — the only way to confirm audio works on this machine
+  const seq=[['RISK',soundRisk],['POSITION',soundPos],['CORRECTED',soundAlarm],
+             ['TAKE',soundNotice],['NEW SIGNAL',soundNew],['CHIP',soundChip]];
+  _ctx(); let i=0;
+  (function nxt(){ if(i>=seq.length) return;
+    const [nm,fn]=seq[i++]; const el=document.getElementById('sndtest');
+    if(el) el.textContent='🔊 '+nm; fn(); setTimeout(nxt,1400);
+    if(i>=seq.length) setTimeout(()=>{ if(el) el.textContent='test'; },1600);
+  })();
 }
 function secOf(s){
   if(s._chipwatch) return 'watch';                 // chip scan candidate → 👀 Watching
@@ -2094,7 +2120,7 @@ async function refresh(){
     renderMilestone(d.sleeve);
     renderPending(d.pending);
     renderPositions(d.positions);
-    checkSounds(S);            // audible: alarm on a corrected/phantom card, notice on a new TAKE
+    checkSounds(S,d);            // audible: alarm on a corrected/phantom card, notice on a new TAKE
     window.KILLED=d.killed||{};
     const T=d.totals||{};   // all-time counts over the full store (feed is windowed to last 60 for speed)
     document.getElementById('n').textContent=T.signals!=null?T.signals:S.length;
