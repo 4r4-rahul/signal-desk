@@ -2566,6 +2566,11 @@ class H(http.server.BaseHTTPRequestHandler):
             try:
                 import chip_desk as _CD
                 _chip = _CD.snapshot()
+                try:                              # chip's OWN paper book — never mixed with the real sleeve
+                    import chip_paper
+                    _chip["paper"] = chip_paper.replay()
+                except Exception:
+                    pass
             except Exception:
                 _chip = None
             return self._send(200, {"account": E.ACCOUNT, "risk": E.RISK_PCT, "start": START_ACCOUNT,

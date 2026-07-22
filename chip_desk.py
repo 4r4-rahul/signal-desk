@@ -403,9 +403,16 @@ def pick_strike(conn, tkr, side, spot, mech, dte_tuple, now, score, crossed):
 
 
 def _equity():
-    """Account equity for the 1%-risk veto. Falls back to None (veto skipped) rather than guessing."""
+    """chip sizes against its OWN PAPER ACCOUNT, never the live tastytrade sleeve.
+
+    chip is shadow-only, so borrowing the real balance was wrong in both directions: it let the sleeve's
+    drawdown silently shrink chip's sample (a $96 cap refused 100% of QQQ for two days — a measurement
+    outage caused by an account chip does not trade), and it invited chip's paper results to be read as
+    if they shared a book with real money. chip_paper rolls its own equity from chip's stored shadow
+    outcomes, so the account compounds and decays on its own record."""
     try:
-        return float(_srv().E.ACCOUNT)
+        import chip_paper
+        return float(chip_paper.equity())
     except Exception:
         return None
 
