@@ -471,7 +471,9 @@ function beep(freq,ms,vol,delay){
   o.connect(g); g.connect(c.destination); o.start(t0); o.stop(t0+(ms/1000)+0.02);
 }
 function soundAlarm(){ beep(880,160,0.22,0); beep(660,260,0.22,0.18); beep(880,160,0.22,0.52); beep(660,320,0.22,0.70); }
-function soundNotice(){ beep(660,110,0.13,0); beep(880,150,0.13,0.10); }
+function soundNotice(){ beep(660,110,0.13,0); beep(880,150,0.13,0.10); }        // actionable: TAKE
+function soundNew(){ beep(523,90,0.10,0); }                                       // a new signal landed
+function soundChip(){ beep(784,80,0.08,0); }                                      // chip fired a scalp
 function toggleSound(){ _soundOn=!_soundOn; localStorage.setItem('deskSound',_soundOn?'1':'0');
   const b=document.getElementById('sndbtn'); if(b) b.textContent=_soundOn?'🔔':'🔕';
   if(_soundOn) soundNotice(); }
@@ -479,14 +481,30 @@ function toggleSound(){ _soundOn=!_soundOn; localStorage.setItem('deskSound',_so
 const _heard=new Set(JSON.parse(localStorage.getItem('deskHeard')||'[]'));
 function _remember(k){ _heard.add(k); try{ localStorage.setItem('deskHeard',JSON.stringify([..._heard].slice(-400))); }catch(e){} }
 function checkSounds(S){
-  let alarm=false, notice=false;
+  // THREE tiers, so the sound alone tells you what happened with your eyes off the screen:
+  //   ALARM  a card was corrected / is phantom — it may sit under a position you hold
+  //   NOTICE a card is actionable right now (live verdict = TAKE)
+  //   NEW    a signal simply arrived (any status, incl. WAIT/WATCHING) — the "don't miss it" tier
+  // Highest tier wins per refresh, and each fires once per card id, so a burst of 12 optionking
+  // messages is one sound, not twelve. Chip gets its own softer blip: it is shadow-only, so it must
+  // never sound as urgent as a real provider signal.
+  let alarm=false, notice=false, fresh=false, chip=false;
   for(const s of (S||[])){
+    if(!s || !s.id) continue;
     const bad=s.corrected||s.phantom_strike||s.misparse||s.verified===false;
     if(bad && !_heard.has('c:'+s.id)){ _remember('c:'+s.id); alarm=true; }
-    const act=(s.live&&s.live.entry&&s.live.entry.action)==='TAKE';
-    if(act && !_heard.has('t:'+s.id)){ _remember('t:'+s.id); notice=true; }
+    if(!_heard.has('n:'+s.id)){                       // first time we have ever seen this card
+      _remember('n:'+s.id);
+      if(s.provider==='chip') chip=true; else fresh=true;
+    }
+    if((s.live&&s.live.entry&&s.live.entry.action)==='TAKE' && !_heard.has('t:'+s.id)){
+      _remember('t:'+s.id); notice=true;
+    }
   }
-  if(alarm) soundAlarm(); else if(notice) soundNotice();
+  if(alarm) soundAlarm();
+  else if(notice) soundNotice();
+  else if(fresh) soundNew();
+  else if(chip) soundChip();
 }
 function secOf(s){
   if(s._chipwatch) return 'watch';                 // chip scan candidate → 👀 Watching
