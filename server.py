@@ -29,6 +29,13 @@ try:
     import llm_parse as LLM
 except Exception:
     LLM = None
+# --- MESSAGE ROUTER (integration point R1/R4) --------------------------------------------
+# Classifies EVERY message (not just the ~9% llm_parse triggers on) and may later CORRECT the
+# deterministic route. Same optionality contract: missing module -> desk behaves as before.
+try:
+    import llm_route as ROUTE
+except Exception:
+    ROUTE = None
 try:
     import db as DB                                    # SQLite warehouse — every signal/decision/outcome
 except Exception:
@@ -1547,6 +1554,69 @@ def _apply_llm_result(r):
            "Signal Desk — Chip read this")
 
 
+# ============ MESSAGE ROUTER (integration point R2/R4) ==================================
+# The router is not allowed to touch SIGNALS. It gets exactly four verbs, defined here, and this
+# is the ONLY place router decisions become desk state. Read the asymmetry in llm_route's header:
+# _route_retract makes the board quieter and is allowed on model judgement; _route_promote makes
+# it louder and therefore does NOT write a card — it writes a SENTENCE and hands it to ingest(),
+# which re-parses it deterministically and runs contract verification, the price-mismatch guard,
+# the junk gate, dedup and sizing on it exactly as for a regex parse.
+
+def _route_retract(card_id, reason, cls):
+    """DEMOTE: a card that is really a management update or noise. Cheap by construction."""
+    card = next((s for s in SIGNALS if s.get("id") == card_id), None)
+    if not card or card.get("status") not in ("NEW", "WATCHING"):
+        return False                                   # never rewrite a TAKEN/CLOSED position
+    SIGNALS.remove(card)
+    try:
+        ROUTE.observe({**card, "status": "DELETED"})   # drop it out of the Book too, or a later
+    except Exception:                                  # bare fill would resolve to a dead card
+        pass
+    _archive_signal(card.get("provider"), {**card, "status": "DELETED",
+                                           "retracted_by": "llm_route", "retract_reason": reason,
+                                           "retract_class": cls})
+    save_signals()
+    _alert(f"↩️ {card.get('provider')}: retracted "
+           f"{card['sig']['ticker']} {card['sig']['strike']}{card['sig']['type']} — {reason}",
+           "Signal Desk — card retracted")
+    return True
+
+
+def _route_promote(canonical, provider, meta):
+    """PROMOTE: a REQUEST for a card, not a card. Goes back through ingest() from the top."""
+    payload = {"text": canonical, "provider": provider, "channel": None, "_from_llm": True,
+               "_allow_test_ingest": True if os.environ.get("DESK_ENV") == "test" else None,
+               "raw_override": meta.get("raw"),
+               "llm": {**meta, "via": "llm_route"},
+               "force_watch": True, "needs_confirm": True}
+    try:
+        entry = ingest(payload)
+    except Exception:
+        return None
+    if not isinstance(entry, dict) or not entry.get("id"):
+        return entry                                   # ingest may have upgraded a watch instead
+    # A promotion only becomes a live (non-confirm) card if a source that is NOT the model agrees
+    # the contract trades where the provider said it does.
+    ok, note = (False, "no premium stated")
+    if LLM and meta.get("premium") is not None:
+        ok, note = LLM.corroborated({"premium": meta.get("premium")},
+                                    (entry.get("opt") or {}).get("mid"))
+    entry.setdefault("llm", {})["corroboration"] = note
+    if ok and not (entry.get("junk") or {}).get("block"):
+        entry["status"] = "NEW"
+        entry["needs_confirm"] = False
+    save_signals()
+    _alert(f"{'🔎' if entry.get('needs_confirm') else '✅'} {provider}: router "
+           f"{'CONFIRM' if entry.get('needs_confirm') else 'recovered'} {canonical} — "
+           f"{meta.get('reason')}", "Signal Desk — router promotion")
+    return entry
+
+
+if ROUTE:
+    ROUTE.bind(signals=lambda: SIGNALS, retract=_route_retract, promote=_route_promote,
+               alert=_alert, save=save_signals)
+
+
 _DRAINING = False
 
 
@@ -1570,11 +1640,70 @@ def drain_llm():
                 pass
     except Exception:
         pass
+    try:
+        if ROUTE:                    # ROUTER (R3): finished routes applied on the MAIN thread too
+            ROUTE.drain()
+    except Exception:
+        pass
     finally:
         _DRAINING = False
 
 
 def ingest(data):
+    """INTEGRATION POINT R4 — the deterministic desk decides FIRST and returns exactly what it
+    returns today. The router only observes that decision and enqueues an async second opinion,
+    so nothing on this path touches the network. Measured added cost: see
+    `python3 llm_eval.py route-latency`."""
+    res = _ingest_core(data)
+    # Route only text a PROVIDER actually wrote. The desk feeds ingest() its own machine-built
+    # canonical strings on three paths — an LLM promotion (_from_llm), a strike roll / re-entry
+    # (_synthetic), and chip's self-generated scalps (chip_plan). Classifying those would pay for
+    # a call to be told the desk's own sentence is an ENTRY, and could raise an ASK about a
+    # message no human ever posted.
+    if ROUTE and not (data.get("_from_llm") or data.get("_synthetic") or data.get("chip_plan")):
+        try:
+            _route_observe(data, res)
+        except Exception:
+            pass                                        # routing is best-effort, never load-bearing
+    return res
+
+
+def _route_observe(data, res):
+    """Map what ingest() just did onto a route label, keep the position Book current, and queue
+    the message for review. Prefer the card ingest() already built over re-parsing."""
+    text = (data.get("text") or "").strip()
+    prov = CHMAP.get(data.get("channel")) or E.detect_provider(data.get("author")) or data.get("provider")
+    if not text or not prov:
+        return
+    r = res if isinstance(res, dict) else {}
+    if r.get("duplicate") or r.get("blocked") or r.get("dry_run") or r.get("pending"):
+        return                                          # already routed once, or not a real ingest
+    card_id = status = None
+    sig = None
+    if r.get("id"):                                     # a card was created
+        route = ROUTE.ROUTE_CARD
+        card_id, status, sig = r["id"], r.get("status"), (r.get("sig") or None)
+        ROUTE.observe(r)
+    elif r.get("outcome") == "ENTERED":                  # a watch was upgraded by a real fill
+        route, card_id = ROUTE.ROUTE_FILL, r.get("card")
+        card = next((s for s in SIGNALS if s.get("id") == card_id), None)
+        if card:
+            status = card.get("status")
+            ROUTE.observe(card)
+    elif r.get("management"):
+        route = ROUTE.ROUTE_MGMT
+    else:
+        route = ROUTE.ROUTE_DROP
+    if sig is None:
+        try:
+            sig = E.parse_signal(text, provider=prov)    # regex only, no network — for the prefilter
+        except Exception:
+            sig = None
+    ROUTE.on_message(text, prov, route, card_id=card_id, carded_status=status,
+                     regex_sig=sig, channel=data.get("channel"))
+
+
+def _ingest_core(data):
     text = (data.get("text") or "").strip()
     if os.environ.get("DESK_ENV") == "test" and not data.get("_allow_test_ingest"):
         return {"blocked": "test-env ingest requires _allow_test_ingest — no accidental live mutation from a test"}
@@ -1901,6 +2030,11 @@ def ingest(data):
     if not (entry.get("junk") or {}).get("block") and _sref:
         _init_shadow(entry)
     SIGNALS.append(entry)
+    if ROUTE:                # ROUTER (R6): keep the position Book current on EVERY card-creating
+        try:                 # path, including the _from_llm ones the router's own hook skips.
+            ROUTE.observe(entry)
+        except Exception:
+            pass
     save_signals()
     _inlog(data.get("channel"), prov, text, "CARD")
     _archive_signal(prov, entry)                    # permanent structured archive of every signal
@@ -2037,7 +2171,7 @@ def act(data):
         tkr = re.get("ticker") or (entry.get("sig") or {}).get("ticker")    # MUST include the ticker to resolve
         txt = f"{tkr} {re.get('strike')}{re.get('type') or 'C'} {px} {mmdd}" + (f" SL:{sl}" if sl else "")
         now = datetime.now(ET)
-        new = ingest({"text": txt, "provider": entry.get("provider"),
+        new = ingest({"text": txt, "provider": entry.get("provider"), "_synthetic": True,
                       "msg_id": f"reenter-{entry['id']}-{now.strftime('%H%M%S')}", "force": True})
         nid = (new or {}).get("id")
         if nid:                                                            # success -> tag & close the watch
@@ -2264,6 +2398,9 @@ class H(http.server.BaseHTTPRequestHandler):
     def do_OPTIONS(self): self._send(200, {})
 
     def do_GET(self):
+        if self.path.startswith("/api/route_status"):   # ROUTER (R5): observability, read-only
+            return self._send(200, {"route": ROUTE.status() if ROUTE else {"enabled": False},
+                                    "parse": LLM.status() if LLM else {"enabled": False}})
         if self.path.startswith("/api/signals"):
             drain_llm()      # LLM LAYER: dashboard polls every ~2.5s, so a finished review is
             refresh_account()  # applied within seconds — still entirely on the main thread.

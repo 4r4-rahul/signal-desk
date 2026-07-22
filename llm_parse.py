@@ -402,6 +402,86 @@ def _render(window, text):
     return "\n\n".join(lines)
 
 
+def call_tool(system, tool, prompt, model=None, max_tokens=None):
+    """SHARED PRIMITIVE (used by llm_parse.call and by llm_route). One forced-tool call against the
+    desk's ONE client, ONE circuit breaker and ONE daily budget.
+
+    Why this is a shared function rather than a second client in the router: the breaker, the daily
+    call cap and the token counters are money-and-safety state. Two modules each with their own copy
+    would each be allowed the full budget, and a provider outage would have to trip two breakers
+    before the desk stopped calling. Returns the tool input dict, or None on ANY failure (fail open).
+    Blocking — worker threads only."""
+    c = _get_client()
+    if c is None or not STATE.breaker_ok() or not STATE.budget_ok():
+        return None
+    try:
+        r = c.messages.create(
+            model=model or MODEL, max_tokens=max_tokens or MAX_TOKENS, system=system,
+            tools=[tool], tool_choice={"type": "tool", "name": tool["name"]},
+            messages=[{"role": "user", "content": prompt}],
+        )
+        STATE.ok(getattr(r, "usage", None))
+    except Exception as e:
+        STATE.fail(e)
+        return None
+    try:
+        blk = next(b for b in r.content if b.type == "tool_use")
+    except Exception as e:                                  # malformed / refusal / empty
+        STATE.fail(f"no tool_use: {e}")
+        return None
+    out = dict(blk.input)
+    u = getattr(r, "usage", None)
+    out["_usage"] = {"in": getattr(u, "input_tokens", 0) or 0,
+                     "out": getattr(u, "output_tokens", 0) or 0,
+                     "cache_read": getattr(u, "cache_read_input_tokens", 0) or 0,
+                     "cache_write": getattr(u, "cache_creation_input_tokens", 0) or 0}
+    return out
+
+
+def ground(raw, corpus, fields, quotes=None):
+    """SHARED PRIMITIVE. Null out every field whose claimed source quote is not literally present in
+    the exact bytes we sent. See _ground() for the full rationale — this is the same test, exposed
+    for callers with a different field set. Returns the list of dropped field names.
+
+    `fields` maps output-field-name -> quotes-key. Mutates `raw` in place."""
+    hay = _norm(corpus)
+    q = quotes if quotes is not None else (raw.get("quotes") or {})
+    dropped = []
+    for field, qkey in fields.items():
+        if raw.get(field) is None:
+            continue
+        s = _norm(q.get(qkey))
+        if not s or s not in hay:
+            dropped.append(field)
+            raw[field] = None
+    return dropped
+
+
+def numeric_in_text(value, corpus):
+    """SHARED PRIMITIVE. A value can be quoted correctly and still be a transcription error, so the
+    literal number must also appear. Same check _ground() applies to strike/premium."""
+    if value is None:
+        return True
+    try:
+        s = f"{float(value):g}"
+    except (TypeError, ValueError):
+        return False
+    return s in re.sub(r"[,$]", "", corpus or "")
+
+
+def mark_seen(text):
+    """SHARED PRIMITIVE. Register a text as already paid for, so the OTHER module's submit() skips it.
+    Both layers read the same message stream; without this the desk pays twice for one message."""
+    if text:
+        _seen[_hash(text)] = time.time()
+
+
+def already_seen(text):
+    h = _hash(text or "")
+    v = _seen.get(h)
+    return bool(v and time.time() - v <= _SEEN_TTL)
+
+
 def call(text, provider=None, window=None, why=None):
     """One extraction call. Returns a parse dict, or None on ANY failure (fail open).
     Blocking — only the worker thread should call this."""

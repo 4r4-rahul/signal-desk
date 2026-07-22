@@ -636,11 +636,808 @@ def cost():
     print(f"                          The card the desk shows at ingest time is unchanged.")
 
 
+# =====================================================================================
+# ROUTING EVALUATION
+# =====================================================================================
+# The parser eval above asks "did we read the fields right?". This asks the earlier and more
+# expensive question: "should this message have touched the board AT ALL?" — because the SMCI
+# 32.16C did not come from misreading a strike, it came from routing a P&L update to CARD.
+#
+# TWO GRANULARITIES, ON PURPOSE:
+#   ROUTE level  (CARD / MGMT / REJECT / ASK)  — scoreable against the desk's own logged decision,
+#       so it covers all 706 real messages. Weak where the desk itself was wrong, which is exactly
+#       why the hand corrections below exist.
+#   CLASS level  (ENTRY / WATCH / FILL / ...)  — only scored against HAND labels, because the log
+#       records what the desk did, not what the message meant. Asserting a class from a REJECT
+#       would be manufacturing ground truth.
+#
+# THE TWO ERROR CLASSES, weighted as in the parser eval:
+#   FABRICATION  routed to CARD when the true class opens nothing.        weight 10
+#   MISS         did not route to CARD when the true class opens one.     weight 1
+#   ASK is neither. A system that asks when unsure is behaving correctly and must not be punished
+#   for it — that is the entire design goal, so the scorer has to be able to express it.
+
+ROUTE_CORPUS = ROOT / "eval" / "routing_corpus.jsonl"            # owned by the parallel agent
+ROUTE_INTERIM = ROOT / "eval" / "routing_corpus.interim.jsonl"   # ours, used only until that lands
+
+_MGMT_TO_CLASS = {"TRIM": "TRIM", "SCALE_OUT": "TRIM", "FULL_EXIT": "EXIT", "CUT": "EXIT",
+                  "MOVE_STOP": "STOP_MOVE", "PROFIT_UPDATE": "PNL_UPDATE", "ENTRY_FILL": "FILL"}
+
+# ---- HAND-LABELLED ADVERSARIAL CORE ------------------------------------------------------
+# Every entry is a REAL message from logs/inbound.log (or the desk's own history), labelled by
+# hand. These are the only labels allowed to accuse the router of fabricating.
+ROUTE_HAND = [
+    # --- THE FABRICATION. Carded as an SMCI 32.16C. 32.16 is a price target; that strike does
+    #     not exist. The message reports a position that was already open.
+    {"id": "r-smci-303", "provider": "prince_small", "context": [],
+     "text": "303% on $SMCI calls. Best overnight trade this month  My price target for today "
+             "is $32.16 @everyone",
+     "cls": "PNL_UPDATE", "route": "MGMT",
+     "note": "THE fabrication. Desk outcome was CARD -> SMCI 32.16C, a strike that does not exist."},
+    {"id": "r-pltr-124", "provider": "prince", "context": [],
+     "text": "124% ON $PLTR CALLS @everyone", "cls": "PNL_UPDATE", "route": "MGMT",
+     "note": "Same shape, no price target -> the desk got this one right. Guards the fix."},
+    {"id": "r-pltr-213", "provider": "prince", "context": [],
+     "text": "213% on PLTR calls!!! Insane swing trade @everyone", "cls": "PNL_UPDATE",
+     "route": "MGMT"},
+
+    # --- THE MISS. Watch carded, fill thrown away.
+    {"id": "r-pltr-watch", "provider": "prince", "context": [],
+     "text": "Watching $PLTR $134 calls\nLooking for an entry around 2.05\nJuly 10 @everyone \n"
+             "Price target $134",
+     "cls": "WATCH", "route": "CARD", "contract": {"ticker": "PLTR", "strike": 134.0, "right": "C"}},
+    {"id": "r-pltr-fill", "provider": "prince",
+     "context": ["Watching $PLTR $134 calls\nLooking for an entry around 2.05\nJuly 10 @everyone \n"
+                 "Price target $134"],
+     "text": "Getting in PLTR here @2.03 @everyone", "cls": "FILL", "route": "CARD",
+     "resolves_to": {"ticker": "PLTR", "strike": 134.0, "right": "C"},
+     "book": [{"ticker": "PLTR", "strike": 134.0, "right": "C", "state": "WATCHING"}],
+     "note": "THE miss. Desk outcome REJECT. The strike exists only in the previous message."},
+    {"id": "r-googl-fill", "provider": "prince",
+     "context": ["Watch $GOOGL $385c July 10\n85c per contract @everyone"],
+     "text": "GOOGL pulling back now, 1H, 4H and 1D look way better than AAPL\nIN AT 0.93 "
+             "@everyone \nLooking at my hourly chart the price",
+     "cls": "FILL", "route": "CARD",
+     "resolves_to": {"ticker": "GOOGL", "strike": 385.0, "right": "C"},
+     "book": [{"ticker": "GOOGL", "strike": 385.0, "right": "C", "state": "WATCHING"}],
+     "note": "Second real miss. Desk outcome REJECT."},
+    {"id": "r-googl-bare-fill", "provider": "prince",
+     "context": ["I'm gonna take a shot at these GOOGL $370c here\n3.40 entry\n2.90 stop limit\n"
+                 "$359.59 first price target July 24 expiry"],
+     "text": "in @3.40 july 31 expiry", "cls": "FILL", "route": "CARD",
+     "resolves_to": {"ticker": "GOOGL", "strike": 370.0, "right": "C"},
+     "book": [{"ticker": "GOOGL", "strike": 370.0, "right": "C", "state": "WATCHING"}],
+     "note": "The bare-fill shape from the brief. 31 is a day of the month, not a strike."},
+    {"id": "r-smci-fill", "provider": "prince_small",
+     "context": ["Watching SMCI 25 calls\nJuly 31\nMay even go this week expiry\n"
+                 "First price target would be that 25.66 area off the 1H @everyone"],
+     "text": "In SMCI july 31\n1.67 per contract @everyone", "cls": "FILL", "route": "CARD",
+     "resolves_to": {"ticker": "SMCI", "strike": 25.0, "right": "C"},
+     "book": [{"ticker": "SMCI", "strike": 25.0, "right": "C", "state": "WATCHING"}]},
+
+    # --- THE AMBIGUOUS ONE. Two live positions, the message names neither.
+    {"id": "r-added-105", "provider": "mike",
+     "context": ["NBIS 235C @ 1.8 @Options Day Trade Alerts  starter",
+                 "BABA 110C @ 0.95 @Options Day Trade Alerts"],
+     "text": "added 1.05 @Options Day Trade Alerts", "cls": "MUST_ASK", "route": "ASK",
+     "book": [{"ticker": "NBIS", "strike": 235.0, "right": "C", "state": "OPEN"},
+              {"ticker": "BABA", "strike": 110.0, "right": "C", "state": "OPEN"}],
+     "note": "Two open positions. Picking one attaches a fill to possibly the wrong trade."},
+    {"id": "r-added-105-single", "provider": "mike",
+     "context": ["NBIS 235C @ 1.8 @Options Day Trade Alerts  starter"],
+     "text": "added 1.05 @Options Day Trade Alerts", "cls": "ADD", "route": "MGMT",
+     "resolves_to": {"ticker": "NBIS", "strike": 235.0, "right": "C"},
+     "book": [{"ticker": "NBIS", "strike": 235.0, "right": "C", "state": "OPEN"}],
+     "note": "SAME message, ONE open position -> now resolvable. Tests that the book, not the "
+             "model, is what decides."},
+
+    # --- clean entries the prefilter should own outright (no LLM call, no risk)
+    {"id": "r-clean-qqq", "provider": "optionking", "context": [],
+     "text": "@everyone SPY 750C at 0.80 0DTE SL 30%.", "cls": "ENTRY", "route": "CARD",
+     "contract": {"ticker": "SPY", "strike": 750.0, "right": "C"}},
+    {"id": "r-clean-iwm", "provider": "sulker", "context": [],
+     "text": "IWM 298P 0DTE @0.64", "cls": "ENTRY", "route": "CARD",
+     "contract": {"ticker": "IWM", "strike": 298.0, "right": "P"}},
+    {"id": "r-clean-nbis", "provider": "mike", "context": [],
+     "text": "NBIS 235C @ 1.8 @Options Day Trade Alerts  starter", "cls": "ENTRY", "route": "CARD",
+     "contract": {"ticker": "NBIS", "strike": 235.0, "right": "C"}},
+
+    # --- management
+    {"id": "r-trim-half", "provider": "prince",
+     "context": ["In $AMD $73c July 8 @1.81"],
+     "text": "out half here 2.40, moving stop to break even", "cls": "TRIM", "route": "MGMT",
+     "book": [{"ticker": "AMD", "strike": 73.0, "right": "C", "state": "OPEN"}]},
+    {"id": "r-trim-nbis", "provider": "mike",
+     "context": ["NBIS 235C @ 1.8 @Options Day Trade Alerts  starter"],
+     "text": "NBIS 130% 1/2 out @Options Day Trade Alerts", "cls": "TRIM", "route": "MGMT",
+     "book": [{"ticker": "NBIS", "strike": 235.0, "right": "C", "state": "OPEN"}]},
+    {"id": "r-exit-googl", "provider": "prince_small",
+     "context": ["Watch $GOOGL $385c July 10\n85c per contract @everyone"],
+     "text": "Sold GOOGL calls as .31 @everyone will see how the next hour plays out before "
+             "anything else", "cls": "EXIT", "route": "MGMT",
+     "book": [{"ticker": "GOOGL", "strike": 385.0, "right": "C", "state": "OPEN"}]},
+    {"id": "r-pnl-up40", "provider": "prince", "context": [],
+     "text": "Up 40% on PLTR calls @everyone", "cls": "PNL_UPDATE", "route": "MGMT"},
+    {"id": "r-pnl-down", "provider": "prince", "context": [],
+     "text": "Down 20% on GOOGL. Still holding for now. I was down on PLTR yesterday and it blew, "
+             "continuing into today. So I’ll let t", "cls": "PNL_UPDATE", "route": "MGMT"},
+
+    # --- commentary / noise. Context deliberately contains a contract: chatter must not inherit it.
+    {"id": "r-commentary", "provider": "prince",
+     "context": ["Watching SMCI 25 calls July 31"],
+     "text": "market looks heavy into the close, be careful out there", "cls": "COMMENTARY",
+     "route": "REJECT"},
+    {"id": "r-commentary-pivot", "provider": "prince",
+     "context": ["Watch $GOOGL $385c July 10\n85c per contract @everyone"],
+     "text": "GOOGL already blowing, in that case may need to pivot.", "cls": "COMMENTARY",
+     "route": "REJECT",
+     "note": "The desk CARDED the longer version of this because a strike appeared later in the "
+             "sentence. This truncated form opens nothing."},
+    {"id": "r-noise-url", "provider": "mike", "context": [],
+     "text": "https://discord.com/channels/123/456", "cls": "NOISE", "route": "REJECT"},
+    {"id": "r-recap", "provider": "sulker", "context": [],
+     "text": "Sulker - Recap 9 July 2026\n\n\nIWM 296P @ 0.60 → 1.02  +70%\n,\n"
+             "PLTR 125P (Low Size) @ 1.25 → 0.90  -28%", "cls": "COMMENTARY", "route": "REJECT",
+     "note": "A recap names several contracts at prices. Carding any of them would be a "
+             "fabrication of a trade that already closed."},
+]
+
+# Weak-label corrections for messages whose LOGGED outcome was the desk being wrong.
+ROUTE_CORRECTIONS = [
+    ("303% on $smci calls", "MGMT", "PNL_UPDATE", "carded as SMCI 32.16C — a strike that does not exist"),
+    ("getting in pltr here @2.03", "CARD", "FILL", "real fill of the carded PLTR 134C watch; desk REJECTed it"),
+    ("googl pulling back now", "CARD", "FILL", "real fill (IN AT 0.93) of the GOOGL 385C watch; desk REJECTed it"),
+    ("added 1.05", "ASK", "MUST_ASK", "two open positions; neither is named"),
+]
+
+
+def _route_correction(norm_text):
+    for prefix, route, cls, why in ROUTE_CORRECTIONS:
+        if norm_text.startswith(prefix):
+            return route, cls, why
+    return None, None, None
+
+
+def route_build():
+    """Build the INTERIM routing corpus from real traffic.
+
+    INTERIM, and labelled as such in every row: eval/routing_corpus.jsonl is owned by a parallel
+    agent. When that file exists route_load() prefers it and this one is ignored. We build our own
+    so the router is never blocked on another agent, not because these labels are better."""
+    rows = read_inbound()
+    by_prov = defaultdict(list)
+    for r in rows:
+        by_prov[r["provider"]].append(r)
+    try:
+        import manage as M
+    except Exception:
+        M = None
+
+    out, seen = [], set()
+    for prov, msgs in by_prov.items():
+        if prov in ("SYSTEM", "?", "-"):
+            continue
+        msgs.sort(key=lambda m: m["ts"])
+        recvs = [m for m in msgs if m["outcome"] == "RECV"]
+        outcome_of = defaultdict(list)
+        for m in msgs:
+            if m["outcome"] != "RECV":
+                outcome_of[_norm(m["text"])].append(m["outcome"])
+        for i, m in enumerate(recvs):
+            key = _norm(m["text"])
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            outs = set(outcome_of.get(key) or [])
+            ctx = [x["text"] for x in recvs[max(0, i - 6):i]][-6:]
+
+            fix_route, fix_cls, why = _route_correction(key)
+            if fix_route:
+                out.append({"id": f"{prov}-{i}", "provider": prov, "context": ctx,
+                            "text": m["text"], "route": fix_route, "cls": fix_cls,
+                            "label_source": "corrected", "note": why,
+                            "truncated": len(m["text"]) >= 119, "interim": True})
+                continue
+
+            if outs & HAS_CONTRACT:
+                route, cls = "CARD", None
+                src = "desk_card"
+            elif "MGMT" in outs:
+                route, src = "MGMT", "desk_mgmt"
+                cls = _MGMT_TO_CLASS.get((M.classify(m["text"]) or {}).get("type")) if M else None
+            elif outs & {"REJECT", "DISABLED"}:
+                route, cls, src = "REJECT", None, "desk_reject"
+            else:
+                continue                      # RECV with no outcome (dedup/repost paths) — unlabelable
+            out.append({"id": f"{prov}-{i}", "provider": prov, "context": ctx, "text": m["text"],
+                        "route": route, "cls": cls, "label_source": src,
+                        "truncated": len(m["text"]) >= 119, "interim": True})
+
+    for h in ROUTE_HAND:
+        out.append({**h, "label_source": "hand", "interim": True})
+
+    ROUTE_INTERIM.parent.mkdir(parents=True, exist_ok=True)
+    with ROUTE_INTERIM.open("w") as f:
+        for r in out:
+            f.write(json.dumps(r) + "\n")
+    c = Counter(r["label_source"] for r in out)
+    print(f"wrote {len(out)} routing cases -> {ROUTE_INTERIM}   (INTERIM — see header)")
+    for k, v in c.most_common():
+        print(f"  {k:16s} {v}")
+    print(f"  route distribution: {dict(Counter(r['route'] for r in out))}")
+    return out
+
+
+def _normalise_case(c):
+    """Bring both corpus dialects onto one shape.
+
+    The parallel agent's schema is the authority: {type, should_card, links_to, expect,
+    prior_context:[{text}], hard}. Ours (interim) used {route, cls, context:[str]}. The TARGET
+    ROUTE is DERIVED from `type` + `should_card` rather than stored, because those two together
+    say what the desk must do and a stored route would be a third thing to keep in sync."""
+    import llm_route as R
+    cls = c.get("type") or c.get("cls")
+    ctx = c.get("prior_context")
+    if ctx and isinstance(ctx[0], dict):
+        ctx = [x.get("text") or "" for x in ctx]
+    ctx = ctx if ctx is not None else (c.get("context") or [])
+    if c.get("route"):
+        route = c["route"]
+    elif cls == "MUST_ASK":
+        route = R.ROUTE_ASK
+    elif c.get("should_card"):
+        route = R.ROUTE_CARD
+    elif cls == "FILL":
+        route = R.ROUTE_FILL
+    else:
+        route = R._CLASS_ROUTE.get(cls, R.ROUTE_DROP)
+    return {**c, "cls": cls, "context": ctx, "route": route,
+            "hard": bool(c.get("hard")),
+            "label_source": c.get("label_source") or ("hand" if "type" in c else "?"),
+            "truncated": bool(c.get("text_truncated_in_log") or c.get("truncated"))}
+
+
+def route_load():
+    """Prefer the parallel agent's corpus the moment it lands; fall back to ours, loudly."""
+    for p, tag in ((ROUTE_CORPUS, "corpus"), (ROUTE_INTERIM, "INTERIM corpus")):
+        if p.exists():
+            rows = [_normalise_case(json.loads(l)) for l in p.read_text().splitlines() if l.strip()]
+            hard = sum(1 for r in rows if r["hard"])
+            print(f"[{tag}] {p.name}: {len(rows)} cases ({hard} flagged hard)")
+            if tag != "corpus":
+                print("      ^ eval/routing_corpus.jsonl not present yet; these are our own "
+                      "interim labels.")
+            return rows, tag
+    sys.exit("no routing corpus — run: python3 llm_eval.py route-build")
+
+
+# ---- prediction ---------------------------------------------------------------------------
+
+def _desk_route(case):
+    """What the DETERMINISTIC layer does today, reproduced from server.ingest()'s own order of
+    checks. This is the baseline every LLM number below has to beat.
+
+    Not reproduced: ingest()'s dedup sweep (it needs live SIGNALS state). So REPOST and EDIT cases
+    score as whatever their text parses to, which OVERSTATES this baseline's over-carding. Called
+    out in the report rather than silently excluded."""
+    import signal_engine as E
+    import manage as M
+    text = case["text"]
+    res = E.parse_signal(text, provider=case["provider"])
+    carded = bool(res and res.get("strike") and
+                  (res.get("premium") is not None or E._ENTRY_VERB.search(text)))
+    c = M.classify(text)
+    if carded and c["type"] not in ("TRIM", "SCALE_OUT", "FULL_EXIT", "CUT"):
+        return "CARD", res, c                     # fresh entry wins over the mgmt classifier
+    if c["type"] == "ENTRY_FILL":
+        return "FILL", res, c                     # -> server._apply_entry_fill
+    if c["type"] in ("TRIM", "SCALE_OUT", "FULL_EXIT", "CUT", "MOVE_STOP", "PROFIT_UPDATE"):
+        return "MGMT", res, c
+    return ("CARD", res, c) if carded else ("REJECT", res, c)
+
+
+_BY_ID = {}
+
+
+def _seed_book(case, BOOK, stats=None):
+    """Reconstruct the Book state that would exist when this message arrives.
+
+    Two seeding paths, and the split is reported because they are not equally strong:
+      `parse`    the antecedent parses deterministically -> the live desk really would have
+                 carded it, so the Book really would hold it. This is the honest path.
+      `recovery` the antecedent does NOT parse, but the corpus says it should have carded. In
+                 production the router/llm_parse promote exactly these (that is failure F4 — the
+                 PLTR and SMCI watches), and a promoted card calls ROUTE.observe(), so the Book
+                 gets it. Seeding it here models that, and is counted separately so the anaphora
+                 number cannot quietly lean on it.
+    """
+    import signal_engine as E
+    prov = case["provider"]
+    BOOK._d.pop(prov, None)
+    for b in case.get("book") or []:                      # interim/hand cases carry it explicitly
+        BOOK.put(prov, b["ticker"], b["strike"], b["right"], b.get("state", "WATCHING"),
+                 premium=b.get("premium"), src="test")
+    if case.get("book"):
+        return
+    for entry in (case.get("prior_context") or case.get("context") or []):
+        t = entry.get("text") if isinstance(entry, dict) else entry
+        pid = entry.get("id") if isinstance(entry, dict) else None
+        s = E.parse_signal(t or "", provider=prov)
+        if s and s.get("strike") and s.get("ticker"):
+            BOOK.put(prov, s["ticker"], s["strike"], s.get("type") or "C",
+                     "WATCHING" if E.is_watch(t) else "OPEN",
+                     expiry=s.get("expiry"), premium=s.get("premium"), src="test")
+            if stats is not None:
+                stats["seed_parse"] += 1
+            continue
+        ante = _BY_ID.get(pid)
+        if ante and ante.get("should_card"):
+            ex = ante.get("expect") or {}
+            if ex.get("ticker") and ex.get("strike") is not None and ex.get("right"):
+                BOOK.put(prov, ex["ticker"], ex["strike"], ex["right"],
+                         "WATCHING" if ante.get("cls") == "WATCH" else "OPEN",
+                         expiry=ex.get("expiry"), premium=ex.get("premium"), src="test")
+                if stats is not None:
+                    stats["seed_recovery"] += 1
+
+
+def _needs_llm(case):
+    """Does this case reach L2? Mirrors route_predict's gating so the eval can batch the network
+    calls without changing the decision path."""
+    import llm_route as R
+    desk, res, _ = _desk_route(case)
+    pre = R.prefilter(case["text"], provider=case["provider"], regex_sig=res,
+                      carded=(desk in R.CARD_ROUTES if hasattr(R, "CARD_ROUTES") else desk == "CARD"))
+    if not pre:
+        return True
+    want = R._CLASS_ROUTE.get(pre["cls"], "REJECT")
+    card = {"CARD", "FILL"}
+    return desk in card and want not in card
+
+
+ROUTE_CACHE = ROOT / "eval" / ".route_cache.json"     # gitignored scratch; safe to delete
+
+
+def route_classify_batch(cases, workers=6, use_cache=True):
+    """Fire the L2 calls concurrently. HARNESS ONLY — production never does this: ingest() enqueues
+    and one worker thread drains, because the desk sees ~35 messages a day. Here it turns a 12
+    minute eval into a 2 minute one, which is the difference between a metric you re-run and a
+    metric you quote once. classify() is pure (no desk state), so this is safe to parallelise.
+
+    Results are cached on disk by (model, provider, text, context). Re-scoring after a change to
+    the SCORER — which is most iterations — then costs nothing, so fixing a metric bug never means
+    choosing between paying again and quoting a stale number. Delete eval/.route_cache.json (or
+    pass --no-cache) to force fresh calls after changing the PROMPT or the model."""
+    from concurrent.futures import ThreadPoolExecutor
+    import hashlib
+    import llm_route as R
+    cache = {}
+    if use_cache:
+        try:
+            cache = json.loads(ROUTE_CACHE.read_text())
+        except Exception:
+            cache = {}
+
+    def ckey(c):
+        blob = json.dumps([R.MODEL, c["provider"], c["text"], c.get("context") or []],
+                          sort_keys=True)
+        return hashlib.md5(blob.encode()).hexdigest()
+
+    idxs = [i for i, c in enumerate(cases) if _needs_llm(c)]
+    out, todo = {}, []
+    for i in idxs:
+        k = ckey(cases[i])
+        if k in cache:
+            out[i] = cache[k]
+        else:
+            todo.append(i)
+    if cache:
+        print(f"    cache: {len(out)} hit / {len(todo)} to call", flush=True)
+
+    def one(i):
+        c = cases[i]
+        window = [{"ts": time.time(), "text": t} for t in (c.get("context") or [])]
+        return i, R.classify(c["text"], provider=c["provider"], window=window)
+
+    done = 0
+    if todo:
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            for i, r in ex.map(one, todo):
+                out[i] = r
+                if r is not None:
+                    cache[ckey(cases[i])] = r
+                done += 1
+                if done % 25 == 0:
+                    print(f"    ... {done}/{len(todo)} classified", flush=True)
+        try:
+            ROUTE_CACHE.parent.mkdir(parents=True, exist_ok=True)
+            ROUTE_CACHE.write_text(json.dumps(cache))
+        except Exception:
+            pass
+    return out
+
+
+def route_predict(case, stats, live=False, precomputed=None, have_pre=False):
+    """Full three-layer routing for one case.
+    Returns (route, cls, resolved_contract, asked, how)."""
+    import llm_route as R
+    desk, res, c = _desk_route(case)
+    stats["desk_" + desk] += 1
+
+    pre = R.prefilter(case["text"], provider=case["provider"], regex_sig=res,
+                      carded=(desk in R.CARD_ROUTES))
+    if pre:
+        stats["prefiltered"] += 1
+        stats["pre_" + pre["why"]] += 1
+        want = R._CLASS_ROUTE.get(pre["cls"], "REJECT")
+        if not (desk in R.CARD_ROUTES and want not in R.CARD_ROUTES):
+            return want, pre["cls"], None, False, "prefilter"
+        stats["pre_escalate"] += 1                # disagrees with a card -> still ask the model
+
+    if not live:
+        stats["would_call"] += 1
+        return desk, None, None, False, "desk"
+
+    _seed_book(case, R.BOOK, stats)
+    if have_pre:
+        route = precomputed
+    else:
+        window = [{"ts": time.time(), "text": t} for t in (case.get("context") or [])]
+        route = R.classify(case["text"], provider=case["provider"], window=window)
+    if route is None:
+        stats["llm_failed"] += 1
+        return desk, None, None, False, "failopen"
+    stats["llm_ok"] += 1
+    stats["cls_" + str(route.get("message_class"))] += 1
+    for k in ("in", "out"):
+        stats["tok_" + k] += (route.get("_usage") or {}).get(k, 0)
+    for k in ("cache_read", "cache_write"):
+        stats["tok_" + k] += (route.get("_usage") or {}).get(k, 0)
+
+    bv = None
+    if (route.get("refers_to_earlier_position") or not route.get("names_new_contract")
+            or route.get("ambiguous_referent") or route.get("message_class") == "MUST_ASK"):
+        bv = R.BOOK.resolve(case["provider"], case["text"], route.get("message_class"),
+                            hint_ticker=route.get("ticker"))
+    v = R.adjudicate(route, desk, book_verdict=bv, carded_status=None)
+    stats["act_" + v["action"]] += 1
+
+    # Context resolution is measured INDEPENDENTLY of the action taken. Whether the desk already
+    # routed a fill to CARD (server._apply_entry_fill handles it) or the router had to promote it,
+    # the question "did the referent resolve to the right prior setup?" has the same answer, and
+    # scoring it only on the promote path would flatter the number by only counting the cases
+    # where we acted.
+    resolved = None
+    if bv and bv.get("status") == "resolved":
+        c = bv["contract"]
+        resolved = {"ticker": c["ticker"], "strike": c["strike"], "type": c["right"]}
+        stats["ctx_resolved"] += 1
+    elif bv and bv.get("status") == "ambiguous":
+        stats["ctx_ambiguous"] += 1
+    if v["action"] == "PROMOTE":
+        resolved = v.get("sig") or resolved
+
+    final = desk
+    if v["action"] == "DEMOTE":
+        final = v["want"]
+    elif v["action"] == "PROMOTE":
+        final = "CARD"
+    elif v["action"] == "ASK":
+        final = "ASK"
+    return final, route.get("message_class"), resolved, v["action"] == "ASK", v["action"]
+
+
+# ---- scoring ------------------------------------------------------------------------------
+
+ROUTES = ["CARD", "FILL", "MGMT", "REJECT", "ASK"]
+CARD_ROUTES = {"CARD", "FILL"}          # routes that put or move something on the board
+
+
+def route_score(cases, preds):
+    """preds[i] = (route, cls, resolved_contract, asked, how).
+
+    Error classes follow eval/message_taxonomy.md §8 "Scoring guidance", which weights them very
+    differently — so they are counted separately rather than folded into one accuracy number:
+
+      FABRICATION (critical, w=10)  a card minted from a class that opens nothing
+                                    (PNL_UPDATE / RECAP / COMMENTARY / NON_PROVIDER / NOISE /
+                                    CHAT / QUESTION / WARNING). This is failure F2.
+      FALSE CONFIDENCE (high)       a confident card/fill where the corpus says MUST_ASK.
+      OVER-CARD (medium)            carded a REPOST/EDIT or a management message. Wasteful and
+                                    confusing, but not a contract out of nothing.
+      MISS (w=1)                    should_card was true and we produced nothing (F4), or a FILL
+                                    with a linkable antecedent was dropped (F3).
+      ASK where the corpus is confident — explicitly NOT an error. Taxonomy §8: "costs the
+      operator five seconds". Counted so it cannot hide, never charged.
+    """
+    import llm_route as R
+    conf = defaultdict(int)                       # (true_route, pred_route) -> n
+    cls_conf = defaultdict(int)
+    fab, miss, overcard, false_conf = [], [], [], []
+    asked_ok, asked_extra = 0, []
+    ctx_ok, ctx_n, ctx_wrong = 0, 0, []
+    ask_total = 0
+    hard = {"n": 0, "ok": 0}
+    pre_n = pre_ok = 0
+    pre_bad = []
+
+    for case, (route, cls, resolved, asked, how) in zip(cases, preds):
+        want, tcls = case["route"], case.get("cls")
+        conf[(want, route)] += 1
+        if tcls:
+            cls_conf[(tcls, cls or "-")] += 1
+        if case["hard"]:
+            hard["n"] += 1
+            hard["ok"] += (route == want)
+        if how == "prefilter":
+            # The prefilter answers WITHOUT the model, so its precision is the one number that
+            # decides whether skipping the call is safe. Scored separately and reported in full.
+            pre_n += 1
+            if route == want:
+                pre_ok += 1
+            else:
+                pre_bad.append({"case": case, "want": want, "got": route, "cls": cls})
+
+        want_card, got_card = want in CARD_ROUTES, route in CARD_ROUTES
+        if want == "ASK":
+            ask_total += 1
+        if route == "ASK":
+            if want == "ASK":
+                asked_ok += 1
+            else:
+                asked_extra.append({"case": case, "want": want})    # safe, cheap, not an error
+        elif want == "ASK" and got_card:
+            # MUST be checked BEFORE the generic over-card branch. want=="ASK" makes want_card
+            # False, so an earlier version fell into over-card first and FALSE CONFIDENCE always
+            # printed 0 — silently zeroing a metric the taxonomy calls first-class.
+            false_conf.append({"case": case, "want": want, "got": route, "cls": cls})
+        elif got_card and not want_card:
+            if tcls in R.NEVER_CARD:
+                fab.append({"case": case, "want": want, "got": route, "cls": tcls})
+            else:
+                overcard.append({"case": case, "want": want, "got": route, "cls": tcls})
+        elif want_card and not got_card:
+            miss.append({"case": case, "want": want, "got": route, "cls": tcls})
+
+        # --- context resolution. Only scored where the corpus says the message LINKS to an
+        #     antecedent AND the contract is not recoverable from this message alone — i.e.
+        #     exactly the anaphora the Book exists for.
+        exp = case.get("expect") or {}
+        if case.get("links_to") and exp.get("strike") is not None and \
+                not R._has_fresh_contract_syntax(case["text"]):
+            ctx_n += 1
+            got_ok = (resolved and str(resolved.get("ticker", "")).upper() == str(exp["ticker"]).upper()
+                      and abs(float(resolved.get("strike") or -1) - float(exp["strike"])) < 1e-6
+                      and str(resolved.get("type") or resolved.get("right") or "").upper()
+                      == str(exp["right"]).upper())
+            if got_ok:
+                ctx_ok += 1
+            else:
+                # Split by failure MODE, because they are not equally dangerous: resolving to the
+                # WRONG contract corrupts two positions at once (taxonomy §8: high severity);
+                # resolving to nothing degrades to an ASK, which costs five seconds.
+                ctx_wrong.append({"case": case, "got": resolved, "want": exp,
+                                  "mode": "WRONG_CONTRACT" if resolved else "unresolved->ask"})
+
+    per_class = {}
+    for r in ROUTES:
+        tp = conf[(r, r)]
+        fp = sum(conf[(w, r)] for w in ROUTES if w != r)
+        fn = sum(conf[(r, g)] for g in ROUTES if g != r)
+        per_class[r] = {"tp": tp, "fp": fp, "fn": fn,
+                        "prec": tp / (tp + fp) if tp + fp else 0.0,
+                        "rec": tp / (tp + fn) if tp + fn else 0.0}
+    cls_ok = sum(v for k, v in cls_conf.items() if k[0] == k[1])
+    cls_tot = sum(cls_conf.values())
+    return {"n": len(cases), "conf": conf, "per_class": per_class, "cls_conf": cls_conf,
+            "cls_ok": cls_ok, "cls_tot": cls_tot,
+            "fab": fab, "miss": miss, "overcard": overcard, "false_conf": false_conf,
+            "asked_ok": asked_ok, "ask_total": ask_total, "asked_extra": asked_extra,
+            "ctx_ok": ctx_ok, "ctx_n": ctx_n, "ctx_wrong": ctx_wrong, "hard": hard,
+            "pre_n": pre_n, "pre_ok": pre_ok, "pre_bad": pre_bad,
+            "weighted_cost": W_FAB * len(fab) + W_MISS * len(miss)}
+
+
+def route_report(name, r):
+    print(f"\n{'='*78}\n{name}   (n={r['n']})\n{'='*78}")
+    print(f"  {'route':8s} {'prec':>7s} {'recall':>7s}   {'tp':>4s} {'fp':>4s} {'fn':>4s}")
+    for k in ROUTES:
+        d = r["per_class"][k]
+        print(f"  {k:8s} {d['prec']*100:6.1f}% {d['rec']*100:6.1f}%   "
+              f"{d['tp']:4d} {d['fp']:4d} {d['fn']:4d}")
+    print(f"\n  confusion (rows = truth, cols = predicted):")
+    print("           " + "".join(f"{g:>9s}" for g in ROUTES))
+    for w in ROUTES:
+        print(f"    {w:7s}" + "".join(f"{r['conf'][(w, g)]:9d}" for g in ROUTES))
+
+    n = max(1, r["n"])
+    print(f"\n  --- errors, weighted as in taxonomy §8 ---")
+    print(f"  FABRICATION  card minted from a class that opens nothing  {len(r['fab']):4d}"
+          f"   w={W_FAB}   <- the one that costs money")
+    print(f"  FALSE CONFIDENCE  confident card where truth is MUST_ASK  {len(r['false_conf']):4d}"
+          f"   (high)")
+    print(f"  OVER-CARD    carded a repost/edit/management message      {len(r['overcard']):4d}"
+          f"   (medium)")
+    print(f"  MISS         real entry/watch/fill dropped                {len(r['miss']):4d}"
+          f"   w={W_MISS}")
+    print(f"  WEIGHTED COST (fab*{W_FAB} + miss*{W_MISS})                          "
+          f"{r['weighted_cost']:4d}   (lower is better)")
+    print(f"\n  MUST_ASK recall  {r['asked_ok']}/{r['ask_total']} = "
+          f"{100.0*r['asked_ok']/max(1,r['ask_total']):.1f}%   "
+          f"(taxonomy §8: a first-class metric — an engine that never asks is not doing well)")
+    print(f"  extra asks       {len(r['asked_extra'])} "
+          f"({100.0*len(r['asked_extra'])/n:.1f}% of traffic) — NOT charged; costs the operator "
+          f"five seconds each")
+    if r["hard"]["n"]:
+        print(f"  route accuracy on `hard` cases: {r['hard']['ok']}/{r['hard']['n']} = "
+              f"{100.0*r['hard']['ok']/r['hard']['n']:.1f}%")
+    if r["cls_tot"]:
+        print(f"\n  CLASS accuracy (20-way, all cases): {r['cls_ok']}/{r['cls_tot']} = "
+              f"{100.0*r['cls_ok']/r['cls_tot']:.1f}%")
+        bad = {k: v for k, v in r["cls_conf"].items() if k[0] != k[1]}
+        for (w, g), c in sorted(bad.items(), key=lambda kv: -kv[1])[:12]:
+            print(f"    truth {w:13s} -> predicted {g:13s}  x{c}")
+    if r["pre_n"]:
+        print(f"\n  L0 PREFILTER (answered with NO model call): {r['pre_ok']}/{r['pre_n']} = "
+              f"{100.0*r['pre_ok']/r['pre_n']:.1f}% agree with the corpus")
+        for b in r["pre_bad"][:8]:
+            print(f"    DISAGREE want {b['want']:7s} got {b['got']:7s} ({b['cls']}) "
+                  f"{b['case']['text'][:55]!r}")
+    if r["ctx_n"]:
+        wrong = [w for w in r["ctx_wrong"] if w["mode"] == "WRONG_CONTRACT"]
+        print(f"\n  CONTEXT RESOLUTION (anaphoric message -> right antecedent contract): "
+              f"{r['ctx_ok']}/{r['ctx_n']} = {100.0*r['ctx_ok']/r['ctx_n']:.1f}%")
+        print(f"    resolved to the WRONG contract  {len(wrong):3d}   <- the dangerous failure "
+              f"(corrupts two positions)")
+        print(f"    could not resolve -> asked      {len(r['ctx_wrong'])-len(wrong):3d}   "
+              f"<- degrades to a question, costs five seconds")
+        for w in r["ctx_wrong"][:8]:
+            print(f"    [{w['mode']:16s}] {w['case']['id']:16s} {w['case']['text'][:40]!r}")
+            print(f"       want {w['want'].get('ticker')} {w['want'].get('strike')}"
+                  f"{w['want'].get('right')}   got {w['got']}")
+    for tag, rows in (("FABRICATIONS", r["fab"]), ("FALSE CONFIDENCE", r["false_conf"]),
+                      ("OVER-CARDS", r["overcard"]), ("MISSES", r["miss"])):
+        if rows:
+            print(f"\n  {tag} ({len(rows)}, up to 10):")
+            for f in rows[:10]:
+                c = f["case"]
+                print(f"    [{str(f.get('cls')):12s}] want {f.get('want','ASK'):7s} "
+                      f"got {f['got']:7s} {c['text'][:56]!r}")
+
+
+def route_run(live=False, limit=0, only=""):
+    global _BY_ID
+    cases, tag = route_load()
+    _BY_ID = {c["id"]: c for c in cases}          # antecedent lookup for _seed_book
+    if only:
+        cases = [c for c in cases if only in (c.get("label_source") or "")
+                 or only == c.get("id") or only == c.get("cls")
+                 or (only == "hard" and c.get("hard"))]
+    if limit:
+        cases = cases[:limit]
+    stats = Counter()
+    cache = route_classify_batch(cases) if live else {}
+    preds = [route_predict(c, stats, live=live, precomputed=cache.get(i), have_pre=live)
+             for i, c in enumerate(cases)]
+    route_report(("ROUTER: prefilter + regex + LLM" if live else
+                  "ROUTER: prefilter + regex ONLY (no API calls — this is today's desk + L0)"),
+                 route_score(cases, preds))
+    total = stats["prefiltered"] + stats["would_call"] + stats["llm_ok"] + stats["llm_failed"]
+    if total:
+        print(f"\n  L0 prefilter hit rate: {stats['prefiltered']}/{total} = "
+              f"{100.0*stats['prefiltered']/total:.1f}%  "
+              f"(escalated back to the model: {stats['pre_escalate']})")
+    print(f"  stats: {dict(stats)}")
+    if live and stats["llm_ok"]:
+        n = stats["llm_ok"]
+        ti, to = stats["tok_in"] / n, stats["tok_out"] / n
+        print(f"\n  MEASURED tokens/call: {ti:.0f} in / {to:.0f} out   "
+              f"cache_read={stats['tok_cache_read']} cache_write={stats['tok_cache_write']}")
+        print(f"  -> cache counters are 0 as predicted: the prompt is ~{ti:.0f} tokens, below "
+              f"Haiku 4.5's 4096-token minimum cacheable prefix.")
+        print(f"  MEASURED $/call: ${ti/1e6*1.00 + to/1e6*5.00:.5f}")
+    return stats
+
+
+def route_cost(stats=None):
+    rows = read_inbound()
+    days = max(1, len({time.strftime("%Y-%m-%d", time.gmtime(r["ts"])) for r in rows if r["ts"] > 1e6}))
+    recv = [r for r in rows if r["outcome"] == "RECV"]
+    per_day = len(recv) / days
+    cases, _ = route_load()
+    st = stats or Counter()
+    if not st:
+        for c in cases:
+            route_predict(c, st, live=False)
+    called = st["would_call"] + st["llm_ok"] + st["llm_failed"]     # dry run vs live run
+    total = st["prefiltered"] + called
+    call_rate = called / total if total else 1.0
+    ti = (st["tok_in"] / st["llm_ok"]) if st.get("llm_ok") else 620
+    to = (st["tok_out"] / st["llm_ok"]) if st.get("llm_ok") else 120
+    src = "MEASURED" if st.get("llm_ok") else "estimated (run `route-live` for measured)"
+    calls = per_day * call_rate
+    dollars = calls * (ti / 1e6 * 1.00 + to / 1e6 * 5.00)
+    print(f"\ninbound messages          {len(recv)} over {days} log-days -> {per_day:.1f}/day")
+    print(f"L0 prefilter absorbs      {st['prefiltered']}/{total} = {(1-call_rate)*100:.1f}% "
+          f"of messages (no API call, no model blast radius)")
+    print(f"LLM calls/day             {calls:.1f}")
+    print(f"model                     {'claude-haiku-4-5'}  ($1.00 / $5.00 per MTok)")
+    print(f"tokens/call ({src})  {ti:.0f} in / {to:.0f} out")
+    print(f"COST/DAY                  ${dollars:.4f}      (~${dollars*21:.2f}/month of trading days)")
+    print(f"prompt caching            NOT used — prompt is ~{ti:.0f} tok, Haiku 4.5's minimum "
+          f"cacheable prefix is 4096. A cache_control marker here is silently ignored.")
+
+
+def route_latency(n=400):
+    """The number the whole design exists to protect: how much wall-clock does routing add to
+    ingest()? on_message() must do a regex prefilter, a context-window read and a queue put, and
+    nothing else — the network is on a worker thread.
+
+    THE WORKER IS STUBBED HERE, deliberately. An earlier version of this harness left the real
+    worker running and measured 4.05 ms/message; that number was the harness fighting its own
+    worker for the GIL while it made 65 real API calls in under a second. The desk sees ~35
+    messages a DAY, so that contention does not exist in production and reporting it would
+    overstate the cost by ~50x. What ingest() actually pays is measured below."""
+    import llm_route as R
+    import llm_parse as LP
+    import signal_engine as E
+    cases, _ = route_load()
+    cases = (cases * ((n // max(1, len(cases))) + 1))[:n]
+    sigs = [E.parse_signal(c["text"], provider=c["provider"]) for c in cases]
+
+    real_call_tool = LP.call_tool
+    LP.call_tool = lambda *a, **k: None            # worker drains instantly, never touches network
+    R._SEEN.clear()
+    R.STATS.clear()
+    for c in cases:                                # populate the context ring, as ingest() does
+        R.note(c["provider"], c["text"])
+
+    t0 = time.perf_counter()
+    for c, s in zip(cases, sigs):
+        R.prefilter(c["text"], provider=c["provider"], regex_sig=s)
+    t1 = time.perf_counter()
+    per_pre = (t1 - t0) / len(cases) * 1000
+
+    # Drain _JOBS by hand rather than racing the worker: with the worker stubbed, the main thread
+    # wins the GIL and the queue simply fills, so 264/400 calls would take the cheap queue_full
+    # early-return and flatter the average. Emptying it here makes EVERY message pay the real
+    # enqueue cost.
+    t0 = time.perf_counter()
+    for i, (c, s) in enumerate(zip(cases, sigs)):
+        R.on_message(f"{c['text']} #{i}", c["provider"], "REJECT", regex_sig=s)  # unique -> no dedup
+        R.drain(limit=8, apply=False)              # exactly what ingest() does
+        try:
+            R._JOBS.get_nowait(); R._JOBS.task_done()
+        except Exception:
+            pass
+    t1 = time.perf_counter()
+    per_full = (t1 - t0) / len(cases) * 1000
+
+    t0 = time.perf_counter()
+    for _ in range(n):
+        R.drain(limit=8, apply=False)
+    t1 = time.perf_counter()
+    per_drain = (t1 - t0) / n * 1000
+    LP.call_tool = real_call_tool
+
+    print(f"\nADDED INGEST LATENCY  (n={len(cases)} real messages, worker stubbed — see docstring)")
+    print(f"  L0 prefilter only            {per_pre:8.4f} ms/message")
+    print(f"  on_message() + drain()       {per_full:8.4f} ms/message   <- what ingest() pays")
+    print(f"  drain() alone, queue empty   {per_drain:8.4f} ms/call")
+    print(f"  ingest() baseline today      ~349 ms")
+    print(f"  -> routing adds {per_full/349*100:.3f}% of the existing ingest budget "
+          f"({per_full:.2f} ms of ~349 ms). The API call happens on a worker thread and is never "
+          f"on this path.")
+    print(f"  route stats: {dict(R.STATS)}")
+
+
 # --------------------------------------------------------------------- main
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["build", "run", "cost", "context-stats"])
+    ap.add_argument("cmd", choices=["build", "run", "cost", "context-stats",
+                                    "route-build", "route", "route-live", "route-cost",
+                                    "route-latency"])
     ap.add_argument("--llm", action="store_true", help="actually call the API on triggered cases")
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--only", default="", help="only cases whose source matches")
@@ -652,6 +1449,17 @@ def main():
         return context_stats()
     if a.cmd == "cost":
         return cost()
+    if a.cmd == "route-build":
+        return route_build()
+    if a.cmd == "route":
+        return route_run(live=False, limit=a.limit, only=a.only)
+    if a.cmd == "route-live":
+        st = route_run(live=True, limit=a.limit, only=a.only)
+        return route_cost(st)
+    if a.cmd == "route-cost":
+        return route_cost()
+    if a.cmd == "route-latency":
+        return route_latency()
 
     cases = load()
     if a.only:

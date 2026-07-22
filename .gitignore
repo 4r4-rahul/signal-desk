@@ -27,3 +27,10 @@ ml_dataset.csv
 
 # daily day-stop override (ephemeral, auto-expires)
 channels/_day_override
+
+# routing eval scratch — cached LLM classifications, regenerable by re-running
+# `python3 llm_eval.py route-live`. Delete after changing the prompt or the model.
+eval/.route_cache.json
+# router conversational context — a cache of desk state, rebuilt from SIGNALS on startup
+channels/_route_context.json
+channels/_msg_context.json
