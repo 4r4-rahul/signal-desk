@@ -766,6 +766,24 @@ def build_live_read(ind, spot, side, sid, ts):
             "factors": [{"factor": c["k"], "score": c["s"]} for c in (st.get("components") or [])]}
 
 
+def _rungs_snapshot(chip_read):
+    """The ladder as it stood at the moment of the emit, minus the rung we took. Bounded and flat, so it
+    survives into the archive and the DB row without bloating either. Every field here is already computed
+    — this only stops it being thrown away."""
+    try:
+        lad = (chip_read or {}).get("ladder") or {}
+        out = []
+        for r in (lad.get("rungs") or []):
+            if r.get("chosen"):
+                continue
+            out.append({"strike": r.get("strike"), "delta": r.get("delta"), "premium": r.get("premium"),
+                        "spread_pct": r.get("spread_pct"), "lam": r.get("lam"),
+                        "qty": r.get("qty"), "risk": r.get("risk_per_contract"), "veto": r.get("veto")})
+        return out[:8] or None
+    except Exception:
+        return None
+
+
 def _emit(conn, tkr, dec, mech, book, now, chip_read=None, bookkey=None, role="primary"):
     """Resolve the ATM contract off the live chain, gate on spread, and emit a chip signal via ingest().
     Returns None on success, or a (state, reason) tuple when it declines — so the observer sees WHY."""
@@ -825,7 +843,14 @@ def _emit(conn, tkr, dec, mech, book, now, chip_read=None, bookkey=None, role="p
                       "live_grade": dec.get("live_grade"), "strict_take": dec.get("strict_take"),
                       "direction_role": role,          # 'primary' (stronger side) vs 'counter' (data only)
                       "geom": GEOM,                    # stop-geometry cohort — never pool g1 (0DTE) with g2
-                      "news": news.get("state", "none"), "entry_read": entry_read},
+                      "news": news.get("state", "none"), "entry_read": entry_read,
+                      # THE ROAD NOT TAKEN. The 4 unchosen rungs are ALREADY streaming from IBKR and were
+                      # being discarded. Recording them turns every emit into a PAIRED within-setup
+                      # comparison — same minute, same tape, same direction, only the strike differs —
+                      # which cancels market-regime variance entirely. That is the only design that can
+                      # resolve a small strike effect at ~5 signals/day; the unpaired version needs
+                      # ~29,000 trades. Costs nothing: no extra quote, no extra line, ~200 bytes/emit.
+                      "rungs_not_taken": _rungs_snapshot(cr)},
     }
     if os.environ.get("DESK_ENV") == "test":
         data["_allow_test_ingest"] = True               # sandbox only; prod bypasses the guard
