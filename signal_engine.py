@@ -275,6 +275,17 @@ _DATE_SPAN_RES = [
     re.compile(r'\b\d\s*dte\b', re.I),
 ]
 
+# PRICE TARGETS are not strikes. Prince: "303% on $SMCI calls ... My price target for today is $32.16"
+# carded an SMCI 32.16C -- a strike that does not exist -- because the "$NNN + a call/put word anywhere"
+# fallback has no way to know 32.16 already means something. The existing guard only suppresses that
+# fallback when an ADJACENT "NNN calls" is present, which a pure update message never has. Blanking the
+# number at its source is the same fix as _mask_dates and covers every branch at once.
+_TARGET_SPAN_RES = [
+    re.compile(r'\b(?:price\s+)?targets?\s*(?:for\s+\w+\s*)?(?:is|=|:|at|around|near)?\s*\$?\d{1,5}(?:\.\d{1,2})?', re.I),
+    re.compile(r'\b(?:pt|tgt)\s*[:=]?\s*\$?\d{1,5}(?:\.\d{1,2})?', re.I),
+    re.compile(r'\b(?:break|breaks|above|below|over|under)\s+\$\d{1,5}(?:\.\d{1,2})?', re.I),
+]
+
 
 def _mask_dates(text):
     """Blank out date substrings so their digits can't be picked up as a strike. Length-preserving, so
@@ -282,7 +293,7 @@ def _mask_dates(text):
     if not text:
         return text
     out = list(text)
-    for rx in _DATE_SPAN_RES:
+    for rx in list(_DATE_SPAN_RES) + list(_TARGET_SPAN_RES):
         for mm in rx.finditer(text):
             for i in range(mm.start(), mm.end()):
                 out[i] = " "
