@@ -98,6 +98,14 @@ def sleeve_state(start):
     # reset it — that silently disarms the drawdown throttle and the -20% halt.
     events += [(w["date"] + "T23:59", "w", w["amount"])
                for w in load_withdrawals() if float(w.get("amount") or 0) > 0]
+    # EXPLICIT HWM REBASE. A drawdown measured from a peak the account can no longer reach is a ratchet,
+    # not a risk control: throttle 0.0 means size 0, size 0 means no trades, no trades means the equity can
+    # never climb back to the old HWM, so the halt is permanent. That is what happened here -- hwm 15178.96
+    # from before the -$5,471 day against equity ~9,984, i.e. -34.2% and halted with nothing traded since.
+    # This is deliberately NOT the zero-amount withdrawal hack (still ignored, by design): it is a dated,
+    # reasoned, auditable entry that says "measure drawdown from HERE onward". Owner-authorised only.
+    events += [(w["date"] + "T23:59:59", "r", 0.0)
+               for w in load_withdrawals() if w.get("hwm_reset")]
     events.sort()
 
     eq = hwm = peak = start
@@ -107,6 +115,8 @@ def sleeve_state(start):
             eq += val               # book ACTUAL realized $ (contract count already in it)
             hwm = max(hwm, eq)
             peak = max(peak, eq)
+        elif typ == "r":            # explicit rebase: capital untouched, drawdown re-anchored to here
+            hwm = eq
         else:                       # withdrawal: remove capital, reset HWM to post-sweep
             eq = max(0.0, eq - val)
             hwm = eq
