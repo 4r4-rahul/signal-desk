@@ -459,28 +459,53 @@ function toggleChip(){chipOnly=chipOnly?0:1;try{localStorage.setItem('chipOnly',
 let _ac=null, _soundOn=(localStorage.getItem('deskSound')!=='0');
 function _ctx(){ try{ if(!_ac) _ac=new (window.AudioContext||window.webkitAudioContext)(); if(_ac.state==='suspended')_ac.resume(); return _ac; }catch(e){ return null; } }
 ['click','keydown','touchstart'].forEach(ev=>window.addEventListener(ev,()=>_ctx(),{once:true}));
-function beep(freq,ms,vol,delay){
+function beep(freq,ms,vol,delay,type){
   if(!_soundOn) return;
   const c=_ctx(); if(!c) return;
   const t0=c.currentTime+(delay||0);
   const o=c.createOscillator(), g=c.createGain();
-  o.type='sine'; o.frequency.setValueAtTime(freq,t0);
+  o.type=type||'triangle';                       // triangle everywhere = one consistent timbre
+  o.frequency.setValueAtTime(freq,t0);
   g.gain.setValueAtTime(0.0001,t0);
-  g.gain.exponentialRampToValueAtTime(vol||0.15,t0+0.012);
+  g.gain.exponentialRampToValueAtTime(vol||0.15,t0+0.014);
   g.gain.exponentialRampToValueAtTime(0.0001,t0+(ms/1000));
-  o.connect(g); g.connect(c.destination); o.start(t0); o.stop(t0+(ms/1000)+0.02);
+  o.connect(g); g.connect(c.destination); o.start(t0); o.stop(t0+(ms/1000)+0.03);
 }
-function soundAlarm(){ beep(880,160,0.22,0); beep(660,260,0.22,0.18); beep(880,160,0.22,0.52); beep(660,320,0.22,0.70); }
-function soundNotice(){ beep(660,110,0.13,0); beep(880,150,0.13,0.10); }        // actionable: TAKE
-// RISK — the most urgent thing the desk can say. Low, slow, three times: it must not be mistakable for
-// a signal arriving. Day-stop, drawdown halt, or a provider auto-disabled.
-function soundRisk(){ beep(320,300,0.26,0); beep(320,300,0.26,0.40); beep(320,420,0.26,0.80); }
-// POSITION — something happened to money you are ALREADY HOLDING (stop hit, target hit, provider exited).
-// Distinct from a new signal, because the action required is opposite: a signal you can ignore, a stop
-// you cannot. Rising urgent triple.
-function soundPos(){ beep(740,120,0.22,0); beep(880,120,0.22,0.13); beep(1046,220,0.22,0.26); }
-function soundNew(){ beep(523,90,0.10,0); }                                       // a new signal landed
-function soundChip(){ beep(784,80,0.08,0); }                                      // chip fired a scalp
+
+// ── THE CHIP MARK ─────────────────────────────────────────────────────────────
+// One motif, transposed. Every sound this desk makes is the SAME two-note shape — a rising perfect
+// fifth (3:2), triangle timbre — so anything you hear is instantly "my desk" and not a browser, a
+// phone, or another tab. What changes between alerts is only REGISTER, DIRECTION and REPETITION:
+//     register   how urgent (low = heavier)
+//     direction  rising = something to act on, falling = something is wrong
+//     repeats    how insistent
+// That is why they are easy to learn: there is one thing to recognise, then three modifiers on it.
+const FIFTH = 1.5;                     // the signature interval — do not change, it IS the identity
+const ROOT  = 587.33;                  // D5, the desk's home note
+function chipMark(root, opt){
+  opt = opt || {};
+  const v = opt.gain || 0.16, d = opt.dur || 120, gap = opt.gap || (d*0.85)/1000;
+  const at = opt.at || 0;
+  const lo = root, hi = root*FIFTH;
+  if(opt.invert){ beep(hi,d,v,at); beep(lo,d*1.5,v,at+gap); }   // falling = something is wrong
+  else          { beep(lo,d,v,at); beep(hi,d*1.5,v,at+gap); }   // rising  = something to act on
+  if(opt.third) beep(root*1.26,d*1.4,v*0.5,at+gap*0.5);          // major 3rd = a positive read
+}
+function chipSeq(root, n, spacing, opt){
+  for(let k=0;k<n;k++) chipMark(root, Object.assign({}, opt, {at:(opt&&opt.at||0)+k*spacing}));
+}
+// RISK   — two octaves DOWN, slow, three times, falling. Heaviest thing the desk can say.
+function soundRisk(){   chipSeq(ROOT/4, 3, 0.62, {dur:200, gain:0.26, invert:true}); }
+// POS    — one octave down, twice, rising. Money you already hold just did something.
+function soundPos(){    chipSeq(ROOT/2, 2, 0.34, {dur:130, gain:0.23}); }
+// ALARM  — home register, twice, FALLING. A card changed under you.
+function soundAlarm(){  chipSeq(ROOT,   2, 0.40, {dur:150, gain:0.22, invert:true}); }
+// NOTICE — home register, once, rising + major third. Actionable and positive.
+function soundNotice(){ chipMark(ROOT, {dur:120, gain:0.17, third:true}); }
+// NEW    — one octave up, once, quiet. Something arrived.
+function soundNew(){    chipMark(ROOT*2, {dur:80, gain:0.11}); }
+// CHIP   — two octaves up, softest. Shadow-only, so it must never sound like real money.
+function soundChip(){   chipMark(ROOT*4, {dur:60, gain:0.07}); }
 function toggleSound(){ _soundOn=!_soundOn; localStorage.setItem('deskSound',_soundOn?'1':'0');
   const b=document.getElementById('sndbtn'); if(b) b.textContent=_soundOn?'🔔':'🔕';
   if(_soundOn) soundNotice(); }
