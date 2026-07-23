@@ -140,6 +140,7 @@ def touch_source(key, provider=None, desc=None, display=None, healthy=None, seen
         s["last_signal_iso"] = now.isoformat()
         s["healthy"] = True                        # a message got through -> scraping is provably alive
         s["last_healthy"] = now.isoformat()
+        save_sources()                             # durable: a restart must not erase the feed history
 
 
 def _alert(text, title):
@@ -496,7 +497,31 @@ def _inlog(channel, prov, text, outcome):
 
 
 SIGNALS = load_signals()   # survive restarts — don't wipe the day's cards
-SOURCES = {}            # provider -> last-seen HH:MM:SS (which channels are streaming)
+# THE FEEDS PANEL WAS AMNESIAC. SOURCES lived only in memory, so every restart reset `count` to 0 and
+# lost `last_signal` — the heartbeat re-registered the channel (green dot) while the panel read
+# "0 signals · no signal yet". After three restarts in an hour it claimed no provider had ever spoken,
+# on a day prince sent 26 messages and prince_small 19. A monitoring surface that resets on restart
+# reports the monitor's uptime, not the thing being monitored.
+SOURCES_STORE = _P.CHANNELS / "_sources.json"
+
+
+def _load_sources():
+    try:
+        d = json.loads(SOURCES_STORE.read_text())
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def save_sources():
+    try:
+        from safe_io import safe_write_json
+        safe_write_json(SOURCES_STORE, SOURCES, min_keep_ratio=0.0)
+    except Exception:
+        pass
+
+
+SOURCES = _load_sources()   # channel id -> heartbeat + counts, RELOADED so the panel survives a restart
 PENDING = []            # unlinked management msgs awaiting disambiguation
 
 

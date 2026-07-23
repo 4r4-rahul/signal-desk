@@ -131,13 +131,32 @@ def _from_card(card):
             (card or {}).get("raw"), (card or {}).get("iso"))
 
 
+def _pick(d, *keys):
+    """First key present with a non-None value."""
+    for k in keys:
+        if d.get(k) is not None:
+            return d[k]
+    return None
+
+
 def _shadow_out(card):
-    """The outcome tuple from a live card's shadow block, for trades the DB has not scored yet."""
+    """The outcome tuple from a live card's shadow block, for trades the DB has not scored yet.
+
+    THIS FALLBACK USED TO BE LESS HONEST THAN THE DB PATH IT STANDS IN FOR. It returned `ref` as the
+    entry (the mid REFERENCE, not the ask actually paid), `now` as the return (the MID mark, before the
+    spread and the $1.30), and no exit price at all — under a footer promising "costs are real, ask in,
+    bid out". A QQQ 694P read entry $4.50 / +21.8% / $294.30 when the truth was fill $4.52, exit bid
+    $5.47, +20.7% and $279.45. The net fields were sitting in the same dict the whole time."""
     sh = (card or {}).get("shadow") or {}
     if not sh:
         return None
-    return (sh.get("ref"), None, sh.get("now"), None, sh.get("peak"), sh.get("trough"), None,
-            sh.get("result"), sh.get("start_utc"), sh.get("ended_utc"), None, None, None)
+    return (_pick(sh, "fill", "ref"),                         # entry: the ASK actually paid
+            _pick(sh, "exit_px", "bid", "mark"),              # exit: the BID we would sell into
+            _pick(sh, "result_pct", "now_net", "now"),        # return: NET of spread + commission
+            None,
+            _pick(sh, "peak_net", "peak"), _pick(sh, "trough_net", "trough"), None,
+            sh.get("result"), sh.get("start_utc"), sh.get("ended_utc"),
+            _pick(sh, "fill", "ref"), None, sh.get("fill_src"))
 
 
 def render(sid, db_path, book_row=None, life=None, card=None):
@@ -157,7 +176,7 @@ def render(sid, db_path, book_row=None, life=None, card=None):
     (tk, strike, typ, expiry, dte, premium, stop_pct, t1, t2, t3, limit_px,
      delta, iv, spread, score, provider, raw, ts) = sig
     entry = ret = r = peak = trough = result = None
-    opened = closed = None
+    opened = closed = exit_px = fill_px = cost_pct = None
     if out:
         (entry, exit_px, ret, r, peak, trough, hold, result, opened, closed,
          fill_px, cost_pct, basis) = out
@@ -206,7 +225,8 @@ def render(sid, db_path, book_row=None, life=None, card=None):
     # the money section — what was actually committed, and what came back
     money = "" if banner else f"""<div class=card><div class=h>money</div><div class=kv>
       <div><div class=k>contracts</div><div class=v>{qty if qty else '—'}</div></div>
-      <div><div class=k>entry fill</div><div class="v mono">{_n(entry,'.2f',pre='$')}</div></div>
+      <div><div class=k>entry fill</div><div class="v mono">{_n(fill_px or entry,'.2f',pre='$')}</div></div>
+      <div><div class=k>exit fill</div><div class="v mono">{_n(exit_px,'.2f',pre='$')}{'' if exit_px else ''}</div>{'<div class=k style="font-weight:400;text-transform:none">still open</div>' if exit_px is None and closed is None else ''}</div>
       <div><div class=k>capital deployed</div><div class="v mono">{'$'+format(capital,',.0f') if capital else '—'}</div></div>
       <div><div class=k>at risk (1%)</div><div class="v mono">{'$'+format(risk,',.0f') if risk else '—'}</div></div>
       <div><div class=k>realised</div><div class="v mono {pcls}">{('$'+format(pnl,'+,.2f')) if pnl is not None else '—'}</div></div>
