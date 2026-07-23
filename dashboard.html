@@ -289,11 +289,24 @@
   .main{min-width:0}
   .main>.wallet,.main>.stats,.main>.disc,.main>.positions,.main>.chipstray,.main>.qualitypack,.main>.sortbar,.main>.wrap{max-width:none;margin-left:0;margin-right:0}
   .main>.wrap,.main>.positions,.main>.sortbar,.main>.qualitypack,.main>.chipstray{padding-left:0;padding-right:0}
-  .rail,.rrail{position:sticky;top:64px;display:flex;flex-direction:column;gap:14px;min-width:0}
+  /* Each rail scrolls INDEPENDENTLY of the feed. Previously both were position:sticky, so they pinned
+     but the whole page moved as one body — scrolling the signal feed dragged the rails with it, and a
+     long rail could not be read without scrolling the feed past what you were looking at. Now each rail
+     is its own scroll container, capped to the viewport below the header. */
+  .rail,.rrail{position:sticky;top:64px;display:flex;flex-direction:column;gap:14px;min-width:0;
+    max-height:calc(100vh - 78px);overflow-y:auto;overscroll-behavior:contain;
+    scrollbar-width:thin;scrollbar-color:var(--line) transparent;
+    padding-right:4px}
+  /* a slim, unobtrusive scrollbar — a fat default one inside a 258px rail eats real estate */
+  .rail::-webkit-scrollbar,.rrail::-webkit-scrollbar{width:7px}
+  .rail::-webkit-scrollbar-track,.rrail::-webkit-scrollbar-track{background:transparent}
+  .rail::-webkit-scrollbar-thumb,.rrail::-webkit-scrollbar-thumb{background:var(--line);border-radius:4px}
+  .rail::-webkit-scrollbar-thumb:hover,.rrail::-webkit-scrollbar-thumb:hover{background:var(--muted)}
   .rrail>.stats{margin-top:0}
   @media(max-width:1180px){
     .layout{grid-template-columns:1fr;grid-template-areas:"lrail" "rrail" "main"}
-    .rail,.rrail{position:static}
+    /* stacked on narrow screens: release the height cap, or the rails become scroll traps */
+    .rail,.rrail{position:static;max-height:none;overflow:visible;padding-right:0}
   }
   .rail .sources{max-width:none;margin:0;padding:12px;display:flex;flex-direction:column;gap:5px;align-items:stretch;
     background:linear-gradient(180deg,var(--panel),var(--panel2));border:1px solid var(--line);border-radius:14px}
