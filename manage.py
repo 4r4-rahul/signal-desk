@@ -109,6 +109,22 @@ def classify(text):
     if re.search(r"\bout\s+of\s+(?:the\s+)?(?:\$[a-z]{1,5}\b|[a-z]{2,5}\s+(?:calls?|puts?|c\b|p\b)|"
                  r"(?:calls?|puts?|position|trade|it)\b)", low):
         full = True
+    # "OUT OF AAPL @everyone" — a BARE ticker, no $, no contract word. Gated on a KNOWN ticker rather
+    # than any token, so "out of the money" and "out of time" still cannot fire.
+    if not full:
+        m_ot = re.search(r"\bout\s+of\s+\$?([a-z]{1,5})\b", low)
+        if m_ot:
+            try:
+                import signal_engine as _E
+                if m_ot.group(1).upper() in _E.KNOWN_TK:
+                    full = True
+            except Exception:
+                pass
+    # "Sold all NVDA" / "sold all SPY with 150%" — optionking's full exit. Without this it classified as
+    # TRIM, i.e. a PARTIAL, so the position stayed OPEN on the board. A trim that is really a close is
+    # the same failure as a missed exit, just quieter.
+    if has("sold all", "sold everything", "closed all", "out all"):
+        full = True
     # NOTE: "taking one"/"took one" mean BUYING a starter lot (an ENTRY), not trimming — Mike posts
     # entries like "mu 1000c 2.75 taking one". The real-trim variants ("taking one off", "took some")
     # are still caught by " off" / "taking some" / "took some".
@@ -117,6 +133,7 @@ def classify(text):
             "half out", "most out", "let ") or full
 
     if (has("cutting", "cut this", "i cut", "cut here", "cut rest", "cut half", "already cut", "just cut",
+            "cut out",
             "green to red", "stopped out", "stopped", "rejected", "liquidat") and not conditional):
         typ = "CUT"
     elif re.search(r"\b\d{1,3}\s*%\s*l\b", low) or has("cutting here"):
