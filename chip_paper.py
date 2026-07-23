@@ -37,7 +37,7 @@ from datetime import datetime, timezone
 
 import deskpaths as _P
 
-START_EQUITY = 25_000.0     # chip's opening paper balance
+START_EQUITY = 100_000.0    # chip's opening paper balance (raised 25k->100k for horizon/sizing freedom)
 RISK_PCT = 1.0              # % of CURRENT paper equity risked per trade (1R)
 LEDGER = _P.CHANNELS / "chip" / "paper_ledger.json"
 

@@ -37,6 +37,10 @@ try:
 except Exception:
     ROUTE = None
 try:
+    import playbook as PB                              # immutable, ACID, tamper-evident system of record
+except Exception:
+    PB = None
+try:
     import db as DB                                    # SQLite warehouse — every signal/decision/outcome
 except Exception:
     DB = None
@@ -2150,6 +2154,24 @@ def _ingest_core(data):
     if not (entry.get("junk") or {}).get("block") and _sref:
         _init_shadow(entry)
     SIGNALS.append(entry)
+    # PLAYBOOK: append this signal's THESIS + DECISION to the immutable, hash-chained record. Fail-open —
+    # the ledger is a system of record, never a gate; if it can't write, ingest proceeds unchanged. Phase 1
+    # of the agenda: capture WHY, immutably, before any agentic layer writes decisions here too.
+    if PB is not None:
+        try:
+            _sg = entry.get("sig") or {}
+            PB.append("THESIS", signal_id=entry.get("id"), actor=("llm" if _sg.get("via_llm") else "regex"),
+                      provider=entry.get("provider"), ticker=_sg.get("ticker"),
+                      leg=f"{_sg.get('strike')}{_sg.get('type') or ''}", expiry=_sg.get("expiry"),
+                      premium=_sg.get("premium"), reason=(entry.get("chip") or {}).get("reason") or _sg.get("tape"),
+                      score=(entry.get("chip") or {}).get("score") or entry.get("score"))
+            PB.append("DECISION", signal_id=entry.get("id"),
+                      actor=("chip" if entry.get("provider") == "chip" else "system"),
+                      verdict=entry.get("status"),
+                      watch=bool(entry.get("watch")), junk=bool((entry.get("junk") or {}).get("block")),
+                      size_mult=(entry.get("plan") or {}).get("size_mult"))
+        except Exception:
+            pass
     if ROUTE:                # ROUTER (R6): keep the position Book current on EVERY card-creating
         try:                 # path, including the _from_llm ones the router's own hook skips.
             ROUTE.observe(entry)
