@@ -70,7 +70,7 @@ def replay(con=None):
         con = sqlite3.connect(str(DB.DB_PATH))
     try:
         eq = peak = START_EQUITY
-        rows, refused = [], []
+        rows, refused, plans = [], [], []
         daily = defaultdict(float)
         for (sid, tk, strike, typ, exp, stop_pct, t1_pct, entry, ret, r, result,
              opened, closed, peak_pct, trough_pct, hold) in _trades(con):
@@ -87,7 +87,17 @@ def replay(con=None):
             eq += pnl
             peak = max(peak, eq)
             daily[day] += pnl
+            # THE EXECUTABLE PLAN, not the intended one. 1/2-1/4-1/4 only divides at multiples of 4, and
+            # this book sizes to 3 and 7 — so "half out at T1" meant selling 1.5 and 3.5 contracts, orders
+            # that cannot be placed. Recording the plan we could actually TRADE is what makes the P&L and
+            # the T2/T3 coverage honest; scoring an unexecutable ladder measures a strategy nobody can run.
+            import exec_plan as EP
+            plan = EP.resolve_ladder(qty, t1_pct or 30, (t1_pct or 30) * 2, (t1_pct or 30) * 3, stop_pct)
+            tests = EP.tests_t2_t3(plan)
+            plans.append(plan)
             rows.append({
+                "exec_plan": plan["note"], "exec_shape": plan["shape"],
+                "ladder_degraded": plan["degraded"], "tests": tests,
                 "signal_id": sid, "day": day, "opened": opened, "closed": closed,
                 "leg": f"{tk} {strike:.0f}{typ}", "ticker": tk, "expiry": exp,
                 "qty": qty, "entry": round(entry, 2),
@@ -97,7 +107,7 @@ def replay(con=None):
                 "result": result, "peak_pct": peak_pct, "trough_pct": trough_pct,
                 "hold_min": round((hold or 0) / 60.0, 1),
             })
-        return _summarise(rows, refused, daily, eq, peak)
+        return _summarise(rows, refused, daily, eq, peak, plans)
     finally:
         if own:
             try: con.close()
@@ -118,7 +128,7 @@ def _period(day, kind):
     return day
 
 
-def _summarise(rows, refused, daily, eq, peak):
+def _summarise(rows, refused, daily, eq, peak, plans=None):
     n = len(rows)
     wins = [r for r in rows if r["pnl"] > 0]
     losses = [r for r in rows if r["pnl"] <= 0]
@@ -149,6 +159,9 @@ def _summarise(rows, refused, daily, eq, peak):
         "by_day": by["day"], "by_week": by["week"], "by_month": by["month"],
         "trades": rows[-60:],
         "refused": refused[-20:], "n_refused": len(refused),
+        # DOES THE BOOK ACTUALLY TEST ITS OWN TARGETS? A book of 1-lots can never learn whether its T2/T3
+        # are any good, because the data to answer that is never generated. This is that number.
+        "ladder_coverage": (__import__("exec_plan").coverage(plans) if plans else {"n": 0}),
         "as_of": datetime.now(timezone.utc).isoformat(),
         "note": ("shadow-only paper book. Costs are real: ask-in, bid-out, $1.30/contract. "
                  "chip's measured entry edge is not distinguishable from random, so the honest "
