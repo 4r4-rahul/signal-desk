@@ -142,8 +142,16 @@ def _shadow_out(card):
 
 def render(sid, db_path, book_row=None, life=None, card=None):
     sig, out, path = _load(sid, db_path)
-    if not sig and card:                       # not in the DB yet -> read the live card instead
-        sig, out = _from_card(card), (_shadow_out(card) or out)
+    # Fall back INDEPENDENTLY. A trade is commonly half-synced: the signal row has landed but the
+    # outcome has not been scored (it only scores on a heavy lap, and never while the position is open).
+    # Falling back all-or-nothing meant that as soon as the signal reached the DB, the page stopped
+    # reading the card and rendered every money/ladder/timeline field as a dash — the data was sitting
+    # right there in shadow{} the whole time.
+    if card:
+        if not sig:
+            sig = _from_card(card)
+        if not out or out[2] is None:          # out[2] is return_pct — unscored means fall back
+            out = _shadow_out(card) or out
     if not sig:
         return f"<!doctype html><meta charset=utf-8><style>{CSS}</style><div class=wrap><h1>Trade not found</h1><p class=sub>{sid}</p></div>"
     (tk, strike, typ, expiry, dte, premium, stop_pct, t1, t2, t3, limit_px,
@@ -156,14 +164,47 @@ def render(sid, db_path, book_row=None, life=None, card=None):
     b = book_row or {}
     qty = b.get("qty")
     pnl = b.get("pnl")
+    if qty is None and entry and stop_pct:
+        # The book only carries RESOLVED trades. For one still open (or just closed and not yet scored),
+        # show the sizing that WAS applied, so "how much did it use" is answerable now rather than after
+        # the next heavy lap. Marked derived so it is never mistaken for a booked fill.
+        try:
+            import chip_book as _CB
+            _q, _rc, _note = _CB.size_position(_CB.equity(), entry, stop_pct)
+            if _q >= 1:
+                qty, b = _q, {**b, "qty": _q, "risk_usd": round(_q * _rc, 2),
+                              "sizing": _note + "  (derived — not yet booked)"}
+                if ret is not None:
+                    pnl = round((ret / 100.0) * entry * 100.0 * _q, 2)
+        except Exception:
+            pass
     capital = round((entry or 0) * 100 * (qty or 0), 2) if entry and qty else None
     risk = b.get("risk_usd")
 
+    if not b.get("exec_plan") and qty:
+        try:
+            import exec_plan as _EP
+            _lp = _EP.resolve_ladder(qty, t1, t2, t3, stop_pct)
+            b = {**b, "exec_plan": _lp["note"], "exec_shape": _lp["shape"],
+                 "ladder_degraded": _lp["degraded"]}
+        except Exception:
+            pass
     pcls = "g" if (pnl or 0) > 0 else "r"
     legs = _ladder_story(t1, t2, t3, stop_pct, peak, trough, b.get("exec_plan"))
 
+    # A wall of dashes is not an answer. If the signal was never shadow-tracked there is no trade to
+    # show, and the page should SAY that rather than render eight empty fields and leave you wondering
+    # whether it is a bug. 73 of 185 cards are in this state — mostly provider signals that predate
+    # auto-shadowing or were carded without a usable reference price.
+    banner = ""
+    if entry is None and ret is None:
+        banner = ("""<div class=card style="border-color:var(--a)"><div class=h>no trade to show</div>"""
+                  """<div class=sub>This signal was carded but never shadow-tracked, so there is no """
+                  """entry, no path and no outcome — nothing was ever simulated for it. The contract """
+                  """details below are what the desk parsed at the time.</div></div>""")
+
     # the money section — what was actually committed, and what came back
-    money = f"""<div class=card><div class=h>money</div><div class=kv>
+    money = "" if banner else f"""<div class=card><div class=h>money</div><div class=kv>
       <div><div class=k>contracts</div><div class=v>{qty if qty else '—'}</div></div>
       <div><div class=k>entry fill</div><div class="v mono">{_n(entry,'.2f',pre='$')}</div></div>
       <div><div class=k>capital deployed</div><div class="v mono">{'$'+format(capital,',.0f') if capital else '—'}</div></div>
@@ -183,7 +224,7 @@ def render(sid, db_path, book_row=None, life=None, card=None):
         f"<td class='d mono'>{l['detail']}</td></tr>" for l in legs)
     span = (peak or 0) - (trough or 0)
     ppos = (((peak or 0) - (trough or 0)) / span * 100) if span else 0
-    ladder = f"""<div class=card><div class=h>the ladder — what was planned vs what happened</div>
+    ladder = "" if banner else f"""<div class=card><div class=h>the ladder — what was planned vs what happened</div>
       <div class=sub style="margin-bottom:8px">plan: <b>{b.get('exec_plan','—')}</b>
         &nbsp;·&nbsp; shape <b>{b.get('exec_shape','—')}</b>
         {' <span class=a>· degraded</span>' if b.get('ladder_degraded') else ''}</div>
@@ -197,7 +238,7 @@ def render(sid, db_path, book_row=None, life=None, card=None):
       </div></div>"""
 
     # timeline
-    tl = f"""<div class=card><div class=h>timeline</div><div class=kv>
+    tl = "" if banner else f"""<div class=card><div class=h>timeline</div><div class=kv>
       <div><div class=k>opened</div><div class="v mono" style="font-size:13px">{_fmt_t(opened)}</div></div>
       <div><div class=k>closed</div><div class="v mono" style="font-size:13px">{_fmt_t(closed)}</div></div>
       <div><div class=k>exit reason</div><div class=v style="font-size:13px">{(life or {}).get('end_reason') or result or '—'}</div></div>
@@ -230,6 +271,6 @@ def render(sid, db_path, book_row=None, life=None, card=None):
 <h1>{tk} {_n(strike,'.0f')}{typ or ''} <span class="pill" style="background:{'rgba(34,197,94,.16)' if (pnl or 0)>0 else 'rgba(239,68,68,.16)'};color:var(--{'g' if (pnl or 0)>0 else 'r'})">{result or '—'}</span></h1>
 <div class=sub>{provider} · {sid} · <span class=mono>{_fmt_t(ts)}</span></div>
 <div class=sub style="margin-top:6px;font-style:italic;color:var(--dim)">{(raw or '')[:180]}</div>
-{money}{ladder}{tl}{contract}{checks}
+{banner}{money}{ladder}{tl}{contract}{checks}
 <div class=sub style="margin-top:18px;color:var(--dim)">shadow-only paper trade · costs are real (ask in, bid out, $1.30/contract) · <a href="/">back to the desk</a></div>
 </div></body></html>"""
