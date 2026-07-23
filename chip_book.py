@@ -107,6 +107,15 @@ def replay(con=None):
                 "result": result, "peak_pct": peak_pct, "trough_pct": trough_pct,
                 "hold_min": round((hold or 0) / 60.0, 1),
             })
+            # POST-CLOSE checklist: what we learn once it is done — realised dollars on the contract
+            # count actually held, exit vs peak, whether the plan that RAN was the plan intended, and
+            # what the round trip cost against how much the trade actually moved.
+            try:
+                import trade_checks as TC
+                _pc = TC.post_trade(row=rows[-1], life={"end_reason": result})
+                rows[-1]["checks"] = {"stage": "post", "items": _pc, "summary": TC.summarise(_pc)}
+            except Exception:
+                pass
         return _summarise(rows, refused, daily, eq, peak, plans)
     finally:
         if own:

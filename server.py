@@ -813,6 +813,18 @@ def _chip_live_read(s):
     return {**lr, "age_s": round(age), "stale": age > 90}
 
 
+def _live_checks(now, peak, trough, h1, h2, h3, clk, th, gb):
+    """The in-trade checklist. Pure assembly of values the lifecycle already produced."""
+    try:
+        import trade_checks as TC
+        items = TC.in_trade(life={"now_pct": now, "peak_pct": peak, "trough_pct": trough,
+                                  "hit": [h1, h2, h3], "clock": clk or {},
+                                  "thesis": th or {}, "give_back": gb or {}})
+        return {"stage": "live", "items": items, "summary": TC.summarise(items)}
+    except Exception:
+        return None
+
+
 def _chip_lifecycle(s):
     """Derive the live scalp lifecycle for a chip card from its shadow + ticket (pure, O(1), no I/O).
     Phase progression is peak-based — exactly how db._shadow_scaleout books ½@t1 / ¼@t2 — so the card's
@@ -851,6 +863,9 @@ def _chip_lifecycle(s):
     ticks = [-stop] if stopped else [peak, now if now is not None else peak]
     blended_pct = DB._shadow_scaleout(ticks, t1, t2, stop, t3, exit_model)
     blended_r = round(blended_pct / abs(stop), 2) if (blended_pct is not None and stop) else None
+    _clk = _chip_clock(sh.get("start_utc"), sh.get("ended_utc"), _er, sh, phase)
+    _gb = _chip_giveback(peak, now, sh.get("ref"), result, t1)
+    _th = _chip_thesis(_er, _lr, meta.get("reason"), sg.get("type"), phase, t1, cur_stop, stop)
     return {"phase": phase, "phase_label": _CHIP_PHASE_LABELS.get(phase, phase),
             "entry_px": sh.get("ref"), "leg": f'{sg.get("ticker")} {sg.get("strike")}{sg.get("type")}',
             "cp": sg.get("type"), "now_pct": now, "peak_pct": peak, "trough_pct": trough,
@@ -865,12 +880,13 @@ def _chip_lifecycle(s):
                                                     "TRAILED_OUT": "trailed out at +T1",
                                                     "RESOLVED": "closed"}.get(phase)
                                                    if phase in ("STOPPED", "TRAILED_OUT", "RESOLVED") else None),
+            # IN-TRADE checklist: discipline while the position is on, not selection. Built from the
+            # blocks THIS function already computed, so it cannot disagree with the card beside it.
+            "checks": _live_checks(now, peak, trough, hit1, hit2, hit3, _clk, _th, _gb),
             "reason": meta.get("reason"), "regime": meta.get("regime"), "news": meta.get("news"),
             "entry_read": _er,                          # frozen WHY (strike/DTE/tape at fill) for the story
             "px": _chip_px(sh.get("ref"), now, t1, t2, t3, cur_stop, stop, sh),
-            "clock": _chip_clock(sh.get("start_utc"), sh.get("ended_utc"), _er, sh, phase),
-            "give_back": _chip_giveback(peak, now, sh.get("ref"), result, t1),
-            "thesis": _chip_thesis(_er, _lr, meta.get("reason"), sg.get("type"), phase, t1, cur_stop, stop),
+            "clock": _clk, "give_back": _gb, "thesis": _th,
             "drift": _chip_drift(_er, _lr),
             "narration": _chip_narration(phase, sh, t1, t2, t3, stop, blended_pct, blended_r)}
 

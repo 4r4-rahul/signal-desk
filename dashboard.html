@@ -946,22 +946,28 @@ function chkRow(c){
     <span style="flex:none;min-width:118px;font-size:11px">${c.label}</span>
     <span class="mono" style="color:var(--dim);font-size:10.5px;flex:1">${c.detail||''}</span></div>`;
 }
-function chkStage(title, block){
+function chkStage(title, block, opts){
   if(!block||!block.items||!block.items.length) return '';
-  const s=block.summary||{};
-  const pill=(n,col,lbl)=>n?`<span style="color:${col};font-weight:700">${n}</span><span style="color:var(--dim)"> ${lbl}</span>`:'';
-  const head=[pill(s.ok,'#22c55e','ok'),pill(s.warn,'#f59e0b','warn'),pill(s.fail,'#ef4444','fail')].filter(Boolean).join(' · ');
-  const blocked=s.fail?`<div class="sub" style="color:#ef4444;font-size:10.5px">⛔ blocking: ${(s.blocking||[]).join(', ')}</div>`:'';
-  return `<div style="margin-top:7px">
-    <div style="display:flex;gap:8px;align-items:baseline;border-bottom:1px solid var(--bg2);padding-bottom:3px;margin-bottom:3px">
-      <span style="font-size:10px;text-transform:uppercase;letter-spacing:.7px;color:var(--muted);font-weight:700">${title}</span>
-      <span style="margin-left:auto;font-size:10.5px">${head}</span></div>
-    ${block.items.map(chkRow).join('')}${blocked}</div>`;
+  const o=opts||{}, s=block.summary||{};
+  const id='chk-'+Math.random().toString(36).slice(2,8);
+  // collapsed by default when everything passes — a clean trade should not cost you screen space,
+  // but a blocked or warned one opens itself, because that is the case you need to read.
+  const open = o.forceOpen || s.fail>0 || (o.openOnWarn && s.warn>0);
+  const dot=(n,col)=>n?`<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:${col};margin-left:3px"></span>`:'';
+  const counts=`<span class="mono" style="font-size:10px;color:var(--dim)">${s.ok||0}/${block.items.length}</span>`
+    + dot(s.warn,'#f59e0b') + dot(s.fail,'#ef4444');
+  const blocked=s.fail?`<div style="color:#ef4444;font-size:10.5px;padding:3px 0 0 18px">⛔ ${(s.blocking||[]).join(' · ')}</div>`:'';
+  return `<div style="margin-top:6px">
+    <div onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'"
+         style="display:flex;gap:8px;align-items:center;cursor:pointer;user-select:none;
+                border-bottom:1px solid var(--bg2);padding-bottom:3px">
+      <span style="font-size:9.5px;text-transform:uppercase;letter-spacing:.8px;color:var(--muted);font-weight:700">${title}</span>
+      <span style="margin-left:auto">${counts}</span>
+      <span style="color:var(--dim);font-size:9px">▾</span></div>
+    <div style="display:${open?'block':'none'};padding-top:3px">${block.items.map(chkRow).join('')}${blocked}</div>
+  </div>`;
 }
-function chipChecksHTML(cr){
-  if(!cr) return '';
-  return chkStage('before entry', cr.checks);
-}
+function chipChecksHTML(cr){ return cr?chkStage('before entry', cr.checks, {openOnWarn:false}):''; }
 function chipBookHTML(b){
   // The REAL paper book: contracts, dollars, and P&L by day/week/month. R-multiples are abstract —
   // "+0.34R" does not say whether that was $40 or $400, or how many contracts were on.
@@ -1971,6 +1977,7 @@ function renderChipCard(s){
     </div></div>
     ${['T1_HIT','T2_HIT','RUNNER'].includes(cl.phase)?chipGiveBackHTML(cl):''}
     ${chipTimesHTML(cl)}
+    ${chkStage('managing', cl.checks, {openOnWarn:true})}
     ${chipThesisHTML(cl)}
     ${chipEntryReadHTML(cl.entry_read)}
     ${chipLadderHTML(cl)}
