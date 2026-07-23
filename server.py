@@ -2567,7 +2567,8 @@ class H(http.server.BaseHTTPRequestHandler):
                 import trade_page as TP, chip_book as CB, db as _DB
                 row = next((t for t in (CB.replay().get("trades") or []) if t.get("signal_id") == sid), None)
                 life = next((( s2.get("chip_lifecycle") or {}) for s2 in SIGNALS if s2.get("id") == sid), {})
-                html = TP.render(sid, _DB.DB_PATH, book_row=row, life=life)
+                _card = next((s2 for s2 in SIGNALS if s2.get("id") == sid), None)
+                html = TP.render(sid, _DB.DB_PATH, book_row=row, life=life, card=_card)
             except Exception as e:
                 html = f"<pre>trade detail unavailable: {e}</pre>"
             return self._send(200, html.encode(), "text/html; charset=utf-8")

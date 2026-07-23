@@ -111,8 +111,39 @@ a{color:#7aa2f7}
 """
 
 
-def render(sid, db_path, book_row=None, life=None):
+def _from_card(card):
+    """Build the same tuple _load returns, but from a LIVE CARD. The DB is synced on a heavy lap, so a
+    card created minutes ago exists in the card store and not yet in `signals` — 10 of chip's 19 cards
+    were in exactly that state. Reading only the DB made those trades unopenable and showed "Trade not
+    found" for a trade that plainly exists on screen. The card is the same data, earlier."""
+    sg = (card or {}).get("sig") or {}
+    o = (card or {}).get("opt") or {}
+    tk = (card or {}).get("ticket") or {}
+    pl = (card or {}).get("plan") or {}
+    try:
+        strike = float(sg.get("strike")) if sg.get("strike") is not None else None
+    except (TypeError, ValueError):
+        strike = None
+    return (sg.get("ticker"), strike, sg.get("type"), sg.get("expiry"), sg.get("dte"),
+            sg.get("premium"), tk.get("stop_pct") or pl.get("stop_pct"), tk.get("t1_pct"),
+            tk.get("t2_pct"), tk.get("t3_pct"), tk.get("limit"), o.get("delta"), o.get("iv"),
+            o.get("spread_pct"), (card or {}).get("score"), (card or {}).get("provider"),
+            (card or {}).get("raw"), (card or {}).get("iso"))
+
+
+def _shadow_out(card):
+    """The outcome tuple from a live card's shadow block, for trades the DB has not scored yet."""
+    sh = (card or {}).get("shadow") or {}
+    if not sh:
+        return None
+    return (sh.get("ref"), None, sh.get("now"), None, sh.get("peak"), sh.get("trough"), None,
+            sh.get("result"), sh.get("start_utc"), sh.get("ended_utc"), None, None, None)
+
+
+def render(sid, db_path, book_row=None, life=None, card=None):
     sig, out, path = _load(sid, db_path)
+    if not sig and card:                       # not in the DB yet -> read the live card instead
+        sig, out = _from_card(card), (_shadow_out(card) or out)
     if not sig:
         return f"<!doctype html><meta charset=utf-8><style>{CSS}</style><div class=wrap><h1>Trade not found</h1><p class=sub>{sid}</p></div>"
     (tk, strike, typ, expiry, dte, premium, stop_pct, t1, t2, t3, limit_px,
