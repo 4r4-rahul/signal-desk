@@ -432,6 +432,56 @@ def _log_paper_entry(prov, sid, entry):
         pass
 
 
+INBOX_DIR = _P.DATA_DIR / "inbox"          # durable queue: full raw message, written before processing
+
+
+def _journal_in(data):
+    """Persist the FULL inbound message before touching it. Cheap (one small write) and it is the only
+    thing standing between a restart and a lost signal."""
+    try:
+        INBOX_DIR.mkdir(parents=True, exist_ok=True)
+        jid = f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%f')}-{abs(hash(str(data.get('text'))))%10**8}"
+        (INBOX_DIR / f"{jid}.json").write_text(json.dumps(data, default=str))
+        return jid
+    except Exception:
+        return None
+
+
+def _journal_done(jid):
+    try:
+        if jid:
+            (INBOX_DIR / f"{jid}.json").unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+def replay_inbox():
+    """On startup, re-ingest anything journaled but never completed. Ordered oldest-first so a watch is
+    replayed before the fill that upgrades it. Bounded, and each entry is removed whether it succeeds or
+    not so a poison message cannot wedge the desk in a replay loop."""
+    try:
+        if not INBOX_DIR.exists():
+            return 0
+        files = sorted(INBOX_DIR.glob("*.json"))[:200]
+        n = 0
+        for f in files:
+            try:
+                data = json.loads(f.read_text())
+                data["_replayed"] = True
+                ingest(data)
+                n += 1
+            except Exception:
+                pass
+            finally:
+                try: f.unlink(missing_ok=True)
+                except Exception: pass
+        if n:
+            print(f"↻ replayed {n} inbound message(s) that a restart interrupted", flush=True)
+        return n
+    except Exception:
+        return 0
+
+
 def _inlog(channel, prov, text, outcome):
     """Log EVERY inbound message + what happened to it — so we can see per-channel capture."""
     try:
@@ -1998,6 +2048,17 @@ def _ingest_core(data):
         stgt = _target(s.get("raw"))
         same_target = ctgt is not None and stgt is not None and abs(ctgt - stgt) < 0.01
         echo_fill = same_fill and (same_target or is_reply or is_recap)
+        # A FILL OF A WATCH IS NOT A REPOST. The 4-hour same-contract rule treated any repeat of a
+        # contract as a duplicate regardless of the card's STATUS or the price — so when prince_small
+        # posted "Watching $AAPL 325 call ... 1.18 limit" and then "In $AAPL calls at 0.82", the second
+        # message (correctly recovered by the LLM as AAPL 325C @0.82) was swallowed as a repost of the
+        # watch. The watch card sat stale while the trade ran +22% -> +44% -> +55%.
+        # A WATCHING card at a DIFFERENT price is exactly the case _apply_entry_fill exists to upgrade,
+        # so it must be allowed through to it.
+        _is_fill_of_watch = (sk == key and s.get("status") == "WATCHING"
+                             and _cp is not None and (_sp is None or abs((_sp or 0) - _cp) > 1e-9))
+        if _is_fill_of_watch:
+            continue
         if same_msg or (sk == key and age < 14400) or (same_raw and age < 172800) \
                 or (echo_fill and age < 172800):
             s.setdefault("reposts", 0)
@@ -2677,7 +2738,17 @@ class H(http.server.BaseHTTPRequestHandler):
             touch_source(data.get("channel") or "?", CHMAP.get(data.get("channel")), display=data.get("name"),
                          healthy=data.get("healthy"), seen=data.get("seen"))
             return self._send(200, {"ok": True, "listening": data.get("channel")})
-        return self._send(200, ingest(data) or {"ignored": True})
+        # DURABLE INGEST. A message is journaled to disk BEFORE it is processed and marked done only
+        # after ingest returns. If the process dies in between — which is exactly what happened to
+        # prince's GOOGL 370C @3.40 at 09:31 ET, killed by one of ~25 deploys during market hours — the
+        # entry is replayed on the next startup instead of being lost silently. The inbound log showed
+        # RECV and then nothing: no CARD, no REJECT, no error. A live signal simply evaporated.
+        _jid = _journal_in(data)
+        try:
+            _res = ingest(data) or {"ignored": True}
+        finally:
+            _journal_done(_jid)
+        return self._send(200, _res)
 
     def log_message(self, *a): pass
 
@@ -2704,6 +2775,7 @@ if __name__ == "__main__":
     print(f"🟢 Signal Desk → http://localhost:{PORT}   (account ${E.ACCOUNT:,.0f}, {E.RISK_PCT}% risk, "
           f"{len(SEG)} tickers loaded)")
     print("   Open that URL, then turn on 'Watch' in the extension. Ctrl+C to stop.")
+    replay_inbox()          # anything a restart interrupted mid-ingest gets a second chance, in order
     if ENRICH:
         import threading
         threading.Thread(target=monitor_loop, daemon=True).start()

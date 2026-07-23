@@ -34,3 +34,4 @@ eval/.route_cache.json
 # router conversational context — a cache of desk state, rebuilt from SIGNALS on startup
 channels/_route_context.json
 channels/_msg_context.json
+inbox
