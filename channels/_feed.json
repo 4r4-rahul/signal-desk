@@ -6,11 +6,8 @@
   "outcome": "carded",
   "rank": 5,
   "id": "f1",
-  "_key": [
-   "prince_small",
-   "Watching $AAPL 325 call July 25\\n1.18 limit entry\\n0.95 stop\\nWaiting for entry\\"
-  ],
-  "channel": null
+  "_sig": "prince_small|watching aapl 325 call july 25 118 limit",
+  "channel": "discord"
  },
  {
   "provider": "prince_small",
@@ -19,37 +16,8 @@
   "outcome": "noise",
   "rank": 1,
   "id": "f2",
-  "_key": [
-   "prince_small",
-   "In $AAPL calls at 0.82 and will add a stop limit for 0.60 @everyone \\nThey expir"
-  ],
-  "channel": null
- },
- {
-  "provider": "prince_small",
-  "text": "AAPL 325C Jul 25 @0.82",
-  "ts": "2026-07-23T14:12:17+00:00",
-  "outcome": "new",
-  "rank": 0,
-  "id": "f3",
-  "_key": [
-   "prince_small",
-   "AAPL 325C Jul 25 @0.82"
-  ],
-  "channel": null
- },
- {
-  "provider": "prince_small",
-  "text": "AAPL 325C 07/25 @0.82",
-  "ts": "2026-07-23T14:12:19+00:00",
-  "outcome": "new",
-  "rank": 0,
-  "id": "f4",
-  "_key": [
-   "prince_small",
-   "AAPL 325C 07/25 @0.82"
-  ],
-  "channel": null
+  "_sig": "prince_small|in aapl calls at 082 and will add a stop",
+  "channel": "discord"
  },
  {
   "provider": "prince_small",
@@ -57,12 +25,9 @@
   "ts": "2026-07-23T14:22:11+00:00",
   "outcome": "managed",
   "rank": 3,
-  "id": "f5",
-  "_key": [
-   "prince_small",
-   "Up 22% on $AAPL calls @everyone"
-  ],
-  "channel": null
+  "id": "f3",
+  "_sig": "prince_small|up 22 on aapl calls everyone",
+  "channel": "discord"
  },
  {
   "provider": "prince_small",
@@ -70,12 +35,9 @@
   "ts": "2026-07-23T14:33:10+00:00",
   "outcome": "managed",
   "rank": 3,
-  "id": "f6",
-  "_key": [
-   "prince_small",
-   "We are up 44% on our $AAPL calls @everyone EXCELLENT entry!! So far so good!"
-  ],
-  "channel": null
+  "id": "f4",
+  "_sig": "prince_small|we are up 44 on our aapl calls everyone ",
+  "channel": "discord"
  },
  {
   "provider": "prince_small",
@@ -83,12 +45,9 @@
   "ts": "2026-07-23T14:40:54+00:00",
   "outcome": "managed",
   "rank": 3,
-  "id": "f7",
-  "_key": [
-   "prince_small",
-   "UP 55% ON $AAPL CALLSThese expire tomorrow, so please remember it carries an ele"
-  ],
-  "channel": null
+  "id": "f5",
+  "_sig": "prince_small|up 55 on aapl callsthese expire tomorrow",
+  "channel": "discord"
  },
  {
   "provider": "prince",
@@ -96,12 +55,9 @@
   "ts": "2026-07-23T15:08:00+00:00",
   "outcome": "noise",
   "rank": 1,
-  "id": "f8",
-  "_key": [
-   "prince",
-   "From the LIVE: IM IN IWM PUTS THAT EXPIRE TOMORROW\\n1.03 limit\\nno stop yet LETS"
-  ],
-  "channel": null
+  "id": "f6",
+  "_sig": "prince|from the live im in iwm puts that expire",
+  "channel": "discord"
  },
  {
   "provider": "prince",
@@ -109,12 +65,9 @@
   "ts": "2026-07-23T15:14:42+00:00",
   "outcome": "managed",
   "rank": 3,
-  "id": "f9",
-  "_key": [
-   "prince",
-   "20% ON $IWM $290 Puts @everyone Be ready for the flush!!"
-  ],
-  "channel": null
+  "id": "f7",
+  "_sig": "prince|20 on iwm 290 puts everyone be ready for",
+  "channel": "discord"
  },
  {
   "provider": "prince",
@@ -122,63 +75,8 @@
   "ts": "2026-07-23T15:23:32+00:00",
   "outcome": "managed",
   "rank": 3,
-  "id": "f10",
-  "_key": [
-   "prince",
-   "Up 48% on $IWM Puts  @everyone"
-  ],
-  "channel": null
- },
- {
-  "provider": "prince",
-  "text": "IWM 290P 1.03 limit expires tomorrow",
-  "ts": "2026-07-23T16:13:15+00:00",
-  "outcome": "carded",
-  "rank": 5,
-  "id": "f11",
-  "_key": [
-   "prince",
-   "IWM 290P 1.03 limit expires tomorrow"
-  ],
-  "channel": null
- },
- {
-  "provider": "prince",
-  "text": "OUT of $GOOGL calls @everyone absolute horrible drop",
-  "ts": "2026-07-23T16:16:19+00:00",
-  "outcome": "managed",
-  "rank": 3,
-  "id": "f12",
-  "_key": [
-   "prince",
-   "OUT of $GOOGL calls @everyone absolute horrible drop"
-  ],
-  "channel": null
- },
- {
-  "provider": "prince",
-  "text": "Cut Out at 0.80 per contract @everyone",
-  "ts": "2026-07-23T16:50:47+00:00",
-  "outcome": "managed",
-  "rank": 3,
-  "id": "f13",
-  "_key": [
-   "prince",
-   "Cut Out at 0.80 per contract @everyone"
-  ],
-  "channel": null
- },
- {
-  "provider": "prince",
-  "text": "Sold all NVDA",
-  "ts": "2026-07-23T16:50:47+00:00",
-  "outcome": "managed",
-  "rank": 3,
-  "id": "f14",
-  "_key": [
-   "prince",
-   "Sold all NVDA"
-  ],
-  "channel": null
+  "id": "f8",
+  "_sig": "prince|up 48 on iwm puts everyone",
+  "channel": "discord"
  }
 ]

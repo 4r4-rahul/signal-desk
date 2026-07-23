@@ -561,6 +561,14 @@ def _feed_note(channel, prov, text, outcome):
     # the provider feed would bury the handful of human messages this panel exists to surface.
     if not prov or prov in ("?", "-", "SYSTEM", "chip") or not text:
         return
+    # LIVE means LIVE. Only genuine extension captures — messages carrying a real Discord channel id —
+    # are "from providers". Desk-side injections (recovery reconstructions, and worst of all my own
+    # parser-test phrases) arrive with channel None/"?"; they are the desk talking to itself, NOT the
+    # provider, and the operator caught three of them ("Sold all NVDA", "Cut Out at 0.80", "OUT OF
+    # AAPL") sitting in the feed as if prince had posted them today when they were old test cases. A
+    # message with no real channel never enters the feed. (Outcome upgrades below still find the row by
+    # signature, so a later CARD/HELD on a genuine capture still lands.)
+    _real_channel = isinstance(channel, str) and channel.startswith("discord_")
     sig = _feed_sig(prov, text)
     badge, rank = _FEED_OUTCOME.get(outcome, (outcome.lower()[:8], 2))
     now = datetime.now(ET).isoformat()
@@ -570,6 +578,8 @@ def _feed_note(channel, prov, text, outcome):
             row["outcome"], row["rank"], row["ts"] = badge, rank, now
             save_feed()
         return
+    if not _real_channel:                                 # a NEW row must be a genuine provider capture,
+        return                                            # not a desk injection (recovery/test)
     if sig in FEED_SEEN:                                  # seen before, not on today's feed -> RE-CAPTURE
         return                                            # do not resurrect old history as "new"
     FEED_SEEN.add(sig); _save_feed_seen()
