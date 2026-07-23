@@ -1166,6 +1166,22 @@ function renderChipLedger(sigs, book){
     · T2 ${reach('t2_pct')}% · T3 ${reach('t3_pct')}%
     · median peak <b>${medPeak==null?'—':(medPeak>=0?'+':'')+medPeak+'%'}</b> vs T1 +${medT1==null?'—':medT1}%
     ${pastT1!=null?`· <span title="hindsight peak past T1 on the ${tag.length} that reached it — a real runner captures less">+${pastT1}pp past T1 (n${tag.length})</span>`:''}</div>`;
+  // FLAT vs TREND split — the regime question, answered by the ENTRY EMA135/315 separation (the flat
+  // detector the sign-only gate is blind to). Only scalps captured after entry-features shipped carry
+  // it, so this reads "capturing" until the sample builds. |sep| < FLAT_SEP% = a flat/chop entry.
+  const FLAT_SEP=0.05;
+  const feat=done.map(s=>(s.chip_lifecycle||{}).entry_features).filter(f=>f&&f.ema_trend_sep_pct!=null);
+  const avgR=xs=>{const rs=xs.map(s=>s.chip_lifecycle.blended_r).filter(r=>r!=null);
+    return rs.length?Math.round(rs.reduce((a,b)=>a+b,0)/rs.length*100)/100:null;};
+  const withF=done.filter(s=>{const f=(s.chip_lifecycle||{}).entry_features;return f&&f.ema_trend_sep_pct!=null;});
+  const flat=withF.filter(s=>Math.abs(s.chip_lifecycle.entry_features.ema_trend_sep_pct)<FLAT_SEP);
+  const trend=withF.filter(s=>Math.abs(s.chip_lifecycle.entry_features.ema_trend_sep_pct)>=FLAT_SEP);
+  const regHTML = withF.length<5
+    ? `<div style="font-size:9.5px;color:var(--dim);margin-bottom:4px">⏳ flat-vs-trend: capturing entry features — ${withF.length} scalp${withF.length===1?'':'s'} so far (split after 5+)</div>`
+    : `<div style="font-size:10px;color:var(--muted);margin:1px 0 4px;letter-spacing:.2px">
+        by regime · <b>flat</b> ${fmtR(avgR(flat))} <span style="color:var(--dim)">n${flat.length}</span>
+        · <b>trend</b> ${fmtR(avgR(trend))} <span style="color:var(--dim)">n${trend.length}</span>
+        <span style="color:var(--dim)" title="flat = |EMA135−EMA315| < ${FLAT_SEP}% of price at entry">(|EMA sep|<${FLAT_SEP}%)</span></div>`;
   const rows=done.slice(0,24).map(s=>{
     const cl=s.chip_lifecycle,m=s.chip||{},g=s.sig||{}, isC=(cl.cp||g.type)==='C';
     const dcol=isC?'#22c55e':'#ef4444', res=cl.result==='WIN'?'✅':cl.result==='LOSS'?'🔴':'●';
@@ -1194,6 +1210,7 @@ function renderChipLedger(sigs, book){
       <span>live <b style="color:${rc(L.avg)}">${fmtR(L.avg)}</b> <span style="color:var(--dim)">n${L.n}</span></span>
       <span>explore <b style="color:${rc(E.avg)}">${fmtR(E.avg)}</b> <span style="color:var(--dim)">n${E.n}</span></span></div>
     ${reachHTML}
+    ${regHTML}
     <div style="font-size:9px;color:var(--dim);margin-bottom:4px">shadow-only · separate from tastytrade until go-live</div>
     ${chipBookHTML(book)}
     <div style="height:6px"></div>${rows}`;

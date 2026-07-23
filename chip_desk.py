@@ -247,6 +247,45 @@ def _session_min(now):
     return mins if 0 <= mins <= 390 else None
 
 
+def _entry_features(ind, a, spot, session_min, side, news_state):
+    """The FULL entry-context feature vector, snapshotted at the moment chip fires. This is the one
+    thing that is otherwise unrecoverable: the option path, the spot path, the greeks and the outcome
+    are all persisted elsewhere, but the underlying's INDICATOR STATE at entry is computed at the
+    decision and then thrown away. Capturing it turns every scalp into a labelled training row —
+    regime, trend separation, band position, momentum, time-of-day — to later mine against the result.
+
+    Derived, not just raw: `ema_trend_sep_pct` is the FLAT DETECTOR the sign-only gate is blind to;
+    `bb_width_pct` is a volatility/regime proxy; `bb_pos` (0=lower band, 1=upper) is mean-reversion
+    context; `vwap_dist_pct` is extension. All fail-soft to None so a thin-tape entry never throws."""
+    ind = ind or {}
+    def _pct(a_, b_, base):
+        try:
+            if a_ is None or b_ is None or not base:
+                return None
+            return round((a_ - b_) / base * 100.0, 3)
+        except (TypeError, ZeroDivisionError):
+            return None
+    px = ind.get("price") or spot
+    bb_up, bb_low, bb_mid = ind.get("bb_up"), ind.get("bb_low"), ind.get("bb_mid")
+    try:
+        bb_pos = round((px - bb_low) / (bb_up - bb_low), 3) if (px and bb_up and bb_low and bb_up > bb_low) else None
+    except (TypeError, ZeroDivisionError):
+        bb_pos = None
+    return {
+        "session_min": session_min, "side": side, "spot": spot,
+        "rsi": ind.get("rsi"),
+        "vwap": ind.get("vwap"), "vwap_dist_pct": _pct(px, ind.get("vwap"), px),
+        "ema9": ind.get("ema9"), "ema21": ind.get("ema21"),
+        "ema135": ind.get("ema135"), "ema315": ind.get("ema315"),
+        "ema_fast_sep_pct": _pct(ind.get("ema9"), ind.get("ema21"), px),
+        "ema_trend_sep_pct": _pct(ind.get("ema135"), ind.get("ema315"), px),   # <-- flat detector
+        "bb_up": bb_up, "bb_mid": bb_mid, "bb_low": bb_low,
+        "bb_width_pct": _pct(bb_up, bb_low, bb_mid), "bb_pos": bb_pos,
+        "tape_score": a.get("score"), "tape_grade": a.get("grade"),
+        "regime": a.get("regime"), "news": news_state,
+    }
+
+
 def _mins_to_close(now, dte):
     """TRADING minutes of decay left until the contract expires. The `+ 390*dte` term is the whole point:
     without it a 1DTE was told it had a few hours to live when it has that plus a full 390-min session,
@@ -876,7 +915,11 @@ def _emit(conn, tkr, dec, mech, book, now, chip_read=None, bookkey=None, role="p
                       # which cancels market-regime variance entirely. That is the only design that can
                       # resolve a small strike effect at ~5 signals/day; the unpaired version needs
                       # ~29,000 trades. Costs nothing: no extra quote, no extra line, ~200 bytes/emit.
-                      "rungs_not_taken": _rungs_snapshot(cr)},
+                      "rungs_not_taken": _rungs_snapshot(cr),
+                      # FULL ENTRY-CONTEXT FEATURE VECTOR — the otherwise-unrecoverable indicator state
+                      # at the moment of the fire. Persisted onto the shadow by server.ingest so every
+                      # closed scalp carries what the tape looked like when chip pulled the trigger.
+                      "entry_features": dec.get("entry_features")},
     }
     if os.environ.get("DESK_ENV") == "test":
         data["_allow_test_ingest"] = True               # sandbox only; prod bypasses the guard
@@ -1067,6 +1110,11 @@ def scan_loop():
                                        "chip_read": chip_read, "live_read": live_read}
                         if state == "scan":
                             role = "primary" if side == strong_side else "counter"
+                            # Snapshot the full entry context onto the assessment so _emit persists it —
+                            # every scalp becomes a labelled row for later pattern-mining (regime split,
+                            # flat-detector, mean-reversion, time-of-day) against its own result.
+                            a = {**a, "entry_features": _entry_features(ind, a, spot, smin, side,
+                                                                        news.get("state", "none"))}
                             r = _emit(conn, tkr, a, mech, book, now, chip_read, key, role)
                             if r:
                                 STATUS[key]["state"], STATUS[key]["reason"] = r

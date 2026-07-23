@@ -817,7 +817,13 @@ def _init_shadow(entry):
                        # provider's shadow is unchanged and still runs its full life to expiry.
                        "max_hold_min": (entry.get("chip_plan") or {}).get("max_hold_min"),
                        "start_utc": datetime.now(timezone.utc).isoformat(), "state": "live",
-                       "result": None, "peak": 0.0, "trough": 0.0, "now": 0.0}
+                       "result": None, "peak": 0.0, "trough": 0.0, "now": 0.0,
+                       # ENTRY-CONTEXT FEATURE VECTOR (chip only) — the indicator state at the fire,
+                       # snapshotted so every closed scalp is a labelled row for pattern-mining. Lives
+                       # on the shadow, so it persists in _signals.json (retained) with the trade.
+                       # chip_meta rides on entry["chip"] (server.ingest sets res["chip"]=chip_meta,
+                       # and entry spreads **res), NOT entry["chip_meta"].
+                       "entry_features": (entry.get("chip") or {}).get("entry_features")}
 
 
 _CHIP_PHASE_LABELS = {"ENTERED": "taking", "MANAGING": "managing", "T1_HIT": "½ booked",
@@ -1114,6 +1120,7 @@ def _chip_lifecycle(s):
             # blocks THIS function already computed, so it cannot disagree with the card beside it.
             "checks": _live_checks(now, peak, trough, hit1, hit2, hit3, _clk, _th, _gb),
             "reason": meta.get("reason"), "regime": meta.get("regime"), "news": meta.get("news"),
+            "entry_features": sh.get("entry_features"),  # entry-context snapshot for pattern-mining
             "entry_read": _er,                          # frozen WHY (strike/DTE/tape at fill) for the story
             "px": _chip_px(sh.get("ref"), now, t1, t2, t3, cur_stop, stop, sh),
             "clock": _clk, "give_back": _gb, "thesis": _th,
