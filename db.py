@@ -465,6 +465,22 @@ def _shadow_entry_px(ref, card_bid, card_ask, card_mid, first_tick):
     return round(ref * (1 + _DEFAULT_HALF_SPREAD), 4), "modelled_half_spread"
 
 
+SINGLE_HOLD_SEC = 1200      # chip's 20-minute time stop, mirrored from chip_desk.MAX_HOLD_S. The
+                            # single-exit model is scored only over this window — a scalp is scored as
+                            # the scalp its own rules would have held, never the overnight tail.
+
+
+def _parse_iso(s):
+    """ISO timestamp -> aware datetime, or None. Tolerant of the 'Z' suffix and of junk."""
+    if not s:
+        return None
+    try:
+        from datetime import datetime
+        return datetime.fromisoformat(str(s).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+
+
 def _shadow_r(con, signal_id, stop, t1, t2, t3=None, provider=None):
     """Would-be blended return% + R for a shadowed signal, on BOTH bases.
 
@@ -475,13 +491,24 @@ def _shadow_r(con, signal_id, stop, t1, t2, t3=None, provider=None):
     `provider` selects the EXIT MODEL (see _exit_model). It defaults to the ladder, so any caller that
     does not pass it gets exactly the historical behaviour."""
     em = _exit_model(provider)
-    rows = con.execute("SELECT opt_pct, opt_mid, bid, ask FROM path WHERE signal_id=? AND phase='shadow' "
+    rows = con.execute("SELECT ts_utc, opt_pct, opt_mid, bid, ask FROM path WHERE signal_id=? AND phase='shadow' "
                        "ORDER BY ts_utc", (signal_id,)).fetchall()
     if not rows or not stop:
         return None, None, None, None, {}
 
+    # TIME STOP, ENFORCED AT SCORING. chip is a SINGLE-exit scalper with a hard 20-minute hold (see
+    # chip_desk.MAX_HOLD_S). The live loop now ends its shadows at 20m, but any path recorded BEFORE that
+    # fix — or any that outran it — still carries hours of ticks, and the scale-out then scores the
+    # overnight collapse. That is how one QQQ 708C, held 12.6h, booked -1.13R: a loss LARGER than its own
+    # stop, which a disciplined scalp can never take. Truncating the path to the hold window makes the
+    # scored trade the trade chip's rules would actually have held — never worse than the stop.
+    if em == "single" and len(rows) > 1:
+        t0 = _parse_iso(rows[0][0])
+        if t0 is not None:
+            rows = [r for r in rows if (lambda t: t is None or (t - t0).total_seconds() <= SINGLE_HOLD_SEC)(_parse_iso(r[0]))]
+
     # --- legacy MID basis (unchanged arithmetic, kept for the audit columns) ---
-    ret_mid = _shadow_scaleout([r[0] for r in rows if r[0] is not None], t1, t2, stop, t3, em)
+    ret_mid = _shadow_scaleout([r[1] for r in rows if r[1] is not None], t1, t2, stop, t3, em)
     r_mid = round(ret_mid / abs(stop), 3) if ret_mid is not None else None
 
     sg = con.execute("SELECT bid, ask, mid, limit_px, premium FROM signals WHERE signal_id=?",
@@ -492,7 +519,7 @@ def _shadow_r(con, signal_id, stop, t1, t2, t3=None, provider=None):
     if not ref:
         return None, None, ret_mid, r_mid, {}
 
-    trade = [{"mid": r[1], "bid": r[2], "ask": r[3]} for r in rows if _tradeable(r[2], r[3])]
+    trade = [{"mid": r[2], "bid": r[3], "ask": r[4]} for r in rows if _tradeable(r[3], r[4])]
     # A fill already charged on the CURRENT basis is reused verbatim -> re-running cannot drift, and a
     # live shadow's entry can't wander as later ticks arrive. Also honours the fill the CARD stamped at
     # ingest (basis still NULL, first score). A basis bump re-derives from scratch.
@@ -520,8 +547,8 @@ def _shadow_r(con, signal_id, stop, t1, t2, t3=None, provider=None):
         # DEGRADED: this shadow never once carried a two-sided quote (thin contract, or every tick landed
         # outside RTH). Rather than silently marking to mid, synthesise the bid as mid minus a modelled
         # half-spread and STAMP the outcome so the row is identifiable and discountable.
-        ticks = [round((r[1] * (1 - _DEFAULT_HALF_SPREAD) * k / fill - 1) * 100, 1)
-                 for r in rows if r[1] is not None]
+        ticks = [round((r[2] * (1 - _DEFAULT_HALF_SPREAD) * k / fill - 1) * 100, 1)
+                 for r in rows if r[2] is not None]
         basis = _basis_for(provider) + "|degraded_no_two_sided_quote"
     ret = _shadow_scaleout(ticks, t1, t2, stop, t3, em)
     if ret is None:
@@ -667,6 +694,13 @@ def sync_outcomes(signals=None):
         for e in (signals or []):
             row = _shadow_outcome(e)
             if row:
+                # STUB THE PARENT SIGNAL if missing — exactly what the closed-trades loop above does.
+                # Without it a shadow outcome is ORPHANED: it lands in `outcomes` but every query that
+                # JOINs `signals` (the book, the R scorer, provider_edge) drops it. That is why 42 of
+                # chip's 43 scalps today were invisible to the $50k book while the scalp log saw them all
+                # — the scalp log reads _signals.json directly, the book reads the joined DB.
+                if not con.execute("SELECT 1 FROM signals WHERE signal_id=?", (row["signal_id"],)).fetchone():
+                    _upsert(con, "signals", _signal_row(e))
                 # don't overwrite a REALIZED outcome with a shadow (taken beats shadow)
                 cur = con.execute("SELECT kind FROM outcomes WHERE signal_id=?", (row["signal_id"],)).fetchone()
                 if not cur or cur[0] == "SHADOW":
