@@ -2606,8 +2606,8 @@ class H(http.server.BaseHTTPRequestHandler):
                 import chip_desk as _CD
                 _chip = _CD.snapshot()
                 try:                              # chip's OWN paper book — never mixed with the real sleeve
-                    import chip_paper
-                    _chip["paper"] = chip_paper.replay()
+                    import chip_book
+                    _chip["book"] = chip_book.replay()      # contracts + dollars + day/week/month P&L
                 except Exception:
                     pass
             except Exception:

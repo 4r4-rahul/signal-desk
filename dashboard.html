@@ -934,6 +934,22 @@ function renderChipLive(chip,edge){
     a.slice(-4).reverse().map(e=>`<div style="margin-top:2px"><span style="color:var(--dim)">${e.t}</span> ${e.msg}</div>`).join('')+`</div>`;
   el.innerHTML=`<div class="stats-h">🤖 Chip — Live <span style="margin-left:auto;font-weight:500">${sess}</span></div>${score}${rows}${act}`;
 }
+function chipBookHTML(b){
+  // The REAL paper book: contracts, dollars, and P&L by day/week/month. R-multiples are abstract —
+  // "+0.34R" does not say whether that was $40 or $400, or how many contracts were on.
+  if(!b||!b.n) return `<div class="sub" style="color:var(--dim)">paper book $${(b&&b.equity||50000).toLocaleString()} · no resolved trades yet</div>`;
+  const pc=b.pnl>=0?'#22c55e':'#ef4444';
+  const row=(p)=>`<tr><td class="mono">${p.period}</td><td class="mono" style="text-align:right;color:${p.pnl>=0?'#22c55e':'#ef4444'}">${p.pnl>=0?'+':''}$${Math.round(p.pnl).toLocaleString()}</td><td class="mono" style="text-align:right;color:var(--dim)">${p.n}</td><td class="mono" style="text-align:right;color:var(--dim)">${p.win_rate==null?'—':p.win_rate+'%'}</td></tr>`;
+  const tbl=(title,arr)=>!arr||!arr.length?'':`<div style="flex:1;min-width:150px"><div class="sub" style="color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:.5px">${title}</div>
+     <table style="width:100%;font-size:11px;border-collapse:collapse">${arr.slice(-6).map(row).join('')}</table></div>`;
+  return `<div class="sub" style="display:flex;gap:14px;flex-wrap:wrap;align-items:baseline">
+      <b style="font-size:17px">$${b.equity.toLocaleString(undefined,{minimumFractionDigits:2})}</b>
+      <b style="color:${pc}">${b.pnl>=0?'+':''}$${Math.round(b.pnl).toLocaleString()} (${b.return_pct>=0?'+':''}${b.return_pct}%)</b>
+      <span class="mono" style="color:var(--dim)">start $${b.start.toLocaleString()} · risk/trade $${Math.round(b.risk_per_trade).toLocaleString()} · dd ${b.drawdown_pct}%</span>
+    </div>
+    <div class="sub mono" style="color:var(--dim)">${b.n} trades · ${b.wins}W/${b.losses}L · win ${b.win_rate}% · avg win ${b.avg_win==null?'—':'$'+b.avg_win} · avg loss ${b.avg_loss==null?'—':'$'+b.avg_loss} · PF ${b.profit_factor==null?'—':b.profit_factor} · exp ${b.expectancy_usd==null?'—':'$'+b.expectancy_usd}/trade${b.n_refused?' · '+b.n_refused+' refused on size':''}</div>
+    <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:6px">${tbl('by day',b.by_day)}${tbl('by week',b.by_week)}${tbl('by month',b.by_month)}</div>`;
+}
 function renderChipLedger(sigs){
   // Standalone CHIP-ONLY scalp results log (kept separate from real tastytrade trades until go-live).
   const el=document.getElementById('chipledger'); if(!el) return;
@@ -963,7 +979,9 @@ function renderChipLedger(sigs){
     <div style="display:flex;gap:14px;font-size:11px;margin:5px 0 2px">
       <span>live <b style="color:${rc(L.avg)}">${fmtR(L.avg)}</b> <span style="color:var(--dim)">n${L.n}</span></span>
       <span>explore <b style="color:${rc(E.avg)}">${fmtR(E.avg)}</b> <span style="color:var(--dim)">n${E.n}</span></span></div>
-    <div style="font-size:9px;color:var(--dim);margin-bottom:4px">shadow-only · separate from tastytrade until go-live</div>${rows}`;
+    <div style="font-size:9px;color:var(--dim);margin-bottom:4px">shadow-only · separate from tastytrade until go-live</div>
+    ${chipBookHTML((window.__CHIP__||{}).book)}
+    <div style="height:6px"></div>${rows}`;
 }
 function renderProviderEdge(edge){
   const el=document.getElementById('provideredge'); if(!el) return;
@@ -2169,6 +2187,7 @@ async function refresh(){
     renderDiscipline(d.discipline,d.sleeve);
     renderMilestone(d.sleeve);
     renderPending(d.pending);
+    window.__CHIP__=d.chip||{};
     renderPositions(d.positions);
     checkSounds(S,d);            // audible: alarm on a corrected/phantom card, notice on a new TAKE
     window.KILLED=d.killed||{};
