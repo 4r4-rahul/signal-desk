@@ -265,6 +265,40 @@ def tail(n=50, kind=None):
     return out
 
 
+def events_of_kind(kind, actor=None, limit=None):
+    """All events of one kind, OLDEST first, via the kind index — not a tail window.
+
+    tail() is a display helper; using it for correctness let unrelated rows push real ones out of view.
+    Two bugs came from that: a thesis could be resolved TWICE once the window overflowed, and chip's
+    theses were crowded out of the THESIS namespace by ordinary ingest. Correctness reads the index."""
+    _ensure()
+    con = _con()
+    sql = "SELECT seq, ts_utc, signal_id, kind, actor, horizon, payload FROM events WHERE kind=?"
+    args = [kind]
+    if actor:
+        sql += " AND actor=?"; args.append(actor)
+    sql += " ORDER BY seq ASC"
+    if limit:
+        sql += " LIMIT ?"; args.append(int(limit))
+    out = []
+    for seq, ts, sid, k, act, horizon, payload in con.execute(sql, args):
+        try: body = json.loads(payload)
+        except Exception: body = {"_unparsed": payload}
+        out.append({"seq": seq, "ts": ts, "signal_id": sid, "kind": k, "actor": act,
+                    "horizon": horizon, "payload": body})
+    return out
+
+
+def resolved_pairs(kind="OUTCOME"):
+    """The set of (signal_id, horizon) already settled. Idempotence keys on the PAIR, not the signal —
+    keying on signal_id alone meant the first horizon to resolve permanently blocked all the others,
+    so the long horizons could never populate at all."""
+    _ensure()
+    con = _con()
+    return {(r[0], r[1]) for r in
+            con.execute("SELECT signal_id, horizon FROM events WHERE kind=?", (kind,))}
+
+
 def stats():
     _ensure()
     con = _con()

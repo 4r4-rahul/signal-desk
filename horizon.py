@@ -18,54 +18,90 @@ believe it. At ~5 theses/day a +0.03R effect needs ~2 years; that fact is printe
 
 RESOLUTION IS DETERMINISTIC. No model output is consulted here. The thesis made a claim; bars settle it.
 """
-import json
+import json, math
 from datetime import datetime, timezone, timedelta
 
 HORIZONS_MIN = (20, 60, 240, 1950)
 _BARCACHE = {}
 
 
+_BAR_TTL_S = 300
+
+
 def _bars(ib, ticker, duration="10 D", size="1 min"):
+    """Cached bars with a TTL, and NEVER caching a failure. The first version stored [] on a transient
+    IBKR error and pinned it for the process lifetime, so every later thesis silently failed to resolve;
+    it also never refreshed, so newly-proposed theses could not resolve in a long-lived process."""
+    import time as _t
     key = (ticker, duration, size)
-    if key not in _BARCACHE:
-        import market as MK
-        try:
-            _BARCACHE[key] = MK.get_bars(ib, ticker, duration=duration, size=size) or []
-        except Exception:
-            _BARCACHE[key] = []
-    return _BARCACHE[key]
+    hit = _BARCACHE.get(key)
+    if hit and (_t.time() - hit[0]) < _BAR_TTL_S and hit[1]:
+        return hit[1]
+    import market as MK
+    try:
+        got = MK.get_bars(ib, ticker, duration=duration, size=size) or []
+    except Exception:
+        got = []
+    if got:
+        _BARCACHE[key] = (_t.time(), got)
+    return got or (hit[1] if hit else [])
+
+
+def _utc(bt):
+    if bt is None:
+        return None
+    if not hasattr(bt, "tzinfo"):                     # a date (daily bars), not a datetime -> unusable here
+        return None
+    return bt.replace(tzinfo=timezone.utc) if bt.tzinfo is None else bt.astimezone(timezone.utc)
 
 
 def _fwd_return(bars, t0_utc, horizon_min):
-    """Underlying % move from the first bar at/after t0 to the first bar at/after t0+horizon.
-    Returns None when the window isn't fully covered — an unresolved thesis must stay unresolved rather
-    than be settled against a truncated series (which would silently bias toward short horizons)."""
-    if not bars:
+    """Underlying % move over `horizon_min` TRADING minutes, counted by BAR INDEX in the RTH series.
+
+    Wall-clock arithmetic was wrong here and dangerously so. get_bars uses useRTH=True, so a real 2-day
+    SPY pull has a 1051-minute hole between 15:59 and the next 09:30. Adding timedelta(minutes=20) and
+    taking "the first bar at/after" meant:
+      · >50% of '20-minute' returns actually spanned the overnight gap;
+      · a proposal after the close resolved px0 and px1 to the SAME bar and returned a FABRICATED exact
+        0.0, which then scored as a real observation (hit=False) and dragged the mean toward zero;
+      · a thesis older than the bar window resolved to bars[0] for both legs — also a fake 0.0;
+      · the '1950m ~ 5 sessions' horizon was really ~2 sessions (32.5 wall-clock hours).
+    Indexing forward N bars makes horizon_min mean exactly what it says, and makes 'not enough data' an
+    honest None instead of a zero. An unresolved thesis MUST stay unresolved."""
+    if not bars or not horizon_min:
         return None
     try:
-        t0 = datetime.fromisoformat(t0_utc)
+        t0 = _utc(datetime.fromisoformat(t0_utc))
     except Exception:
         return None
-    if t0.tzinfo is None:
-        t0 = t0.replace(tzinfo=timezone.utc)
-    t1 = t0 + timedelta(minutes=horizon_min)
-    px0 = px1 = None
-    for b in bars:
-        bt = getattr(b, "date", None)
-        if bt is None:
-            continue
-        if bt.tzinfo is None:
-            bt = bt.replace(tzinfo=timezone.utc)
-        else:
-            bt = bt.astimezone(timezone.utc)
-        if px0 is None and bt >= t0:
-            px0 = float(b.close)
-        if bt >= t1:
-            px1 = float(b.close)
-            break
-    if px0 is None or px1 is None or px0 <= 0:
+    if t0 is None:
         return None
-    return (px1 / px0 - 1.0) * 100.0
+    first = _utc(getattr(bars[0], "date", None))
+    if first is None or first > t0:
+        return None                                    # thesis predates our bar window -> cannot resolve
+    i0 = None
+    for i, b in enumerate(bars):
+        bt = _utc(getattr(b, "date", None))
+        if bt is not None and bt >= t0:
+            i0 = i
+            break
+    if i0 is None:
+        return None                                    # no bar at/after the proposal
+    i1 = i0 + int(horizon_min)                         # 1-min RTH bars: index delta == trading minutes
+    if i1 >= len(bars) or i1 == i0:
+        return None                                    # window not fully covered -> honest None
+    try:
+        px0, px1 = float(bars[i0].close), float(bars[i1].close)
+    except (TypeError, ValueError):
+        return None
+    if not px0 or px0 <= 0:
+        return None
+    # N trading minutes forward is the right COUNT, but a window that crosses a session boundary carries
+    # overnight gap risk and has a materially different distribution from an intraday one. Flag it rather
+    # than drop it: dropping would bias the sample toward mid-session proposals.
+    d0, d1 = _utc(bars[i0].date), _utc(bars[i1].date)
+    crossed = bool(d0 and d1 and d0.date() != d1.date())
+    return {"pct": (px1 / px0 - 1.0) * 100.0, "crossed_session": crossed}
 
 
 def resolve(ib=None, limit=500, write=True):
@@ -81,45 +117,62 @@ def resolve(ib=None, limit=500, write=True):
             ib = None
     settled = []
     try:
-        for ev in CT.pending(limit):
-            p = ev.get("payload") or {}
-            tk, t0 = p.get("ticker"), p.get("proposed_utc")
-            direction = p.get("direction")
-            if not tk or not t0:
-                continue
-            bars = _bars(ib, tk) if ib else []
-            rows = {}
-            for h in HORIZONS_MIN:
-                fwd = _fwd_return(bars, t0, h)
-                if fwd is None:
+        for ev, todo in CT.pending(limit):
+            try:
+                p = ev.get("payload") or {}
+                tk, t0 = p.get("ticker"), p.get("proposed_utc")
+                direction = p.get("direction")
+                if not tk or not t0:
                     continue
-                # signed in the THESIS's favour: a SHORT that falls is a win. NONE is scored as flat, which
-                # is what makes "the model correctly declined" a measurable, creditable outcome.
-                signed = fwd if direction == "LONG" else (-fwd if direction == "SHORT" else 0.0)
-                rows[h] = {"fwd_pct": round(fwd, 4), "signed_pct": round(signed, 4),
-                           "hit": bool(signed > 0) if direction in ("LONG", "SHORT") else None}
-            if not rows:
-                continue
-            rec = {"ticker": tk, "direction": direction, "conviction": p.get("conviction"),
-                   "regime": p.get("regime"), "horizon_claimed": p.get("horizon_min"),
-                   # carried forward so report() can day-block on the TRADING day, not the ledger write
-                   # time — without this a multi-day sample collapses into one block and the clustering
-                   # correction silently does nothing.
-                   "proposed_utc": t0,
-                   "by_horizon": rows, "resolved_utc": datetime.now(timezone.utc).isoformat()}
-            if write:
-                try:
-                    import playbook as PB
-                    PB.append("OUTCOME", signal_id=ev.get("signal_id"), actor="system",
-                              horizon="multi", **rec)
-                except Exception:
-                    pass
-            settled.append(rec)
+                bars = _bars(ib, tk) if ib else []
+                for h in todo:                       # ONE OUTCOME PER HORIZON -> long horizons can populate
+                    res = _fwd_return(bars, t0, h)
+                    if res is None:
+                        continue                     # not yet coverable; stays pending, resolves later
+                    fwd = res["pct"]
+                    # signed in the THESIS's favour: a SHORT that falls is a win.
+                    signed = fwd if direction == "LONG" else (-fwd if direction == "SHORT" else 0.0)
+                    rec = {"ticker": tk, "direction": direction, "conviction": p.get("conviction"),
+                           "regime": p.get("regime"), "horizon_claimed": p.get("horizon_min"),
+                           "horizon_min": h,
+                           # carried forward so report() day-blocks on the TRADING day, not the ledger
+                           # write time — without it a multi-day sample collapses into ONE block and the
+                           # clustering correction silently does nothing.
+                           "proposed_utc": t0,
+                           "fwd_pct": round(fwd, 4), "signed_pct": round(signed, 4),
+                           "crossed_session": res["crossed_session"],
+                           "hit": bool(signed > 0) if direction in ("LONG", "SHORT") else None,
+                           "resolved_utc": datetime.now(timezone.utc).isoformat()}
+                    if write:
+                        try:
+                            import playbook as PB
+                            PB.append("OUTCOME", signal_id=ev.get("signal_id"), actor="system",
+                                      horizon=str(h), **rec)
+                        except Exception:
+                            pass
+                    settled.append(rec)
+            except Exception:
+                continue                             # one malformed thesis must not kill the whole run
     finally:
         if own and ib is not None:
             try: ib.disconnect()
             except Exception: pass
     return settled
+
+
+MIN_BLOCKS_FOR_SIG = 15      # below ~15 independent days the block bootstrap's CI is far too narrow:
+MIN_EFF_N_FOR_SIG = 10       # measured false-positive rate on NULL data was 49.8% at 2 days, 27.2% at 3,
+                             # 17.7% at 5, 9.9% at 10 — against a nominal 5%. The flag is what the module
+                             # tells you to trust, so an over-firing flag is worse than no flag at all.
+
+
+def _p_from(mean, se):
+    """Two-sided normal p from the block-bootstrap SE. Approximate, and deliberately so — it exists to
+    RANK horizons for a Holm correction, not to be quoted as an exact p."""
+    if not se or se <= 0 or mean is None:
+        return 1.0
+    z = abs(mean) / se
+    return math.erfc(z / math.sqrt(2.0))
 
 
 def report(limit=2000):
@@ -129,44 +182,68 @@ def report(limit=2000):
         import playbook as PB, eval_harness as EH
     except Exception:
         return None
-    evs = [e for e in PB.tail(limit, kind="OUTCOME") if (e.get("payload") or {}).get("by_horizon")]
+    # _BARCACHE must not cache a FAILURE forever: one transient IBKR error otherwise pins [] for the
+    # process lifetime and no thesis can ever resolve again.
+    # indexed read + DE-DUP by (signal_id, horizon): a duplicate OUTCOME row must never be counted twice.
+    seen, evs = set(), []
+    for e in PB.events_of_kind("OUTCOME", limit=limit):
+        p = e.get("payload") or {}
+        if not isinstance(p, dict) or p.get("signed_pct") is None:
+            continue                              # one malformed row must not kill the whole report
+        key = (e.get("signal_id"), e.get("horizon"))
+        if key in seen:
+            continue
+        seen.add(key)
+        evs.append(e)
     if not evs:
         return {"n": 0, "horizons": {}, "note": "no resolved theses yet"}
     out = {}
     for h in HORIZONS_MIN:
-        vals, blocks, hits = [], [], []
+        vals, blocks, hits, declines = [], [], [], 0
         for e in evs:
             p = e["payload"]
-            row = (p.get("by_horizon") or {}).get(str(h)) or (p.get("by_horizon") or {}).get(h)
-            if not row or row.get("signed_pct") is None:
+            if int(p.get("horizon_min") or -1) != h:
                 continue
             if p.get("direction") == "NONE":
-                continue                     # declines are recorded but don't score a directional hit rate
-            vals.append(row["signed_pct"])
-            # Day-block key must be the TRADING day the thesis was PROPOSED on — not the ledger write
-            # time. Using the write time collapsed a multi-day backfill into a single block, which made
-            # block_bootstrap correctly refuse to produce a CI (it needs >=2 blocks) and silently hid the
-            # clustering correction this whole module exists to apply.
+                declines += 1                     # recorded, and reported — but not a directional hit
+                continue
+            vals.append(p["signed_pct"])
             blocks.append(((p.get("proposed_utc") or e.get("ts") or "")[:10]) or "?")
-            if row.get("hit") is not None:
-                hits.append(1 if row["hit"] else 0)
+            if p.get("hit") is not None:
+                hits.append(1 if p["hit"] else 0)
         if not vals:
-            out[h] = {"n": 0}
+            out[h] = {"n": 0, "declines": declines}
             continue
         mean = sum(vals) / len(vals)
-        bs = {}
         try:
-            bs = EH.block_bootstrap(vals, blocks) or {}     # -> {mean, se, lo, hi, n, n_blocks, eff_n}
+            bs = EH.block_bootstrap(vals, blocks) or {}
         except Exception:
             bs = {}
         lo, hi, se = bs.get("lo"), bs.get("hi"), bs.get("se")
-        out[h] = {"n": len(vals), "mean_signed_pct": round(mean, 4),
-                  "se": round(se, 4) if se is not None else None,
+        nb, eff = bs.get("n_blocks") or 0, bs.get("eff_n")
+        if eff is not None:
+            eff = min(eff, float(len(vals)))   # you cannot have more EFFECTIVE samples than observations;
+                                               # a degenerate near-zero SE otherwise reports millions
+        # UNDERPOWERED unless there are enough INDEPENDENT days. Measured FPR on null data: 49.8% @ 2
+        # blocks, 9.9% @ 10, 6.2% @ 40. Gating here is the difference between a flag that means something
+        # and one that fires on noise one time in five.
+        powered = bool(nb >= MIN_BLOCKS_FOR_SIG and (eff or 0) >= MIN_EFF_N_FOR_SIG and se and se > 0)
+        out[h] = {"n": len(vals), "declines": declines, "mean_signed_pct": round(mean, 4),
+                  "se": round(se, 4) if se else None,
                   "ci": [round(lo, 4), round(hi, 4)] if lo is not None else None,
-                  "eff_n": bs.get("eff_n"),                 # the honest sample size, not the row count
+                  "eff_n": eff, "n_days": len(set(blocks)),
                   "hit_rate": round(100.0 * sum(hits) / len(hits), 1) if hits else None,
-                  "n_days": len(set(blocks)),
-                  "significant": bool(lo is not None and (lo > 0 or hi < 0))}
+                  "powered": powered, "p_raw": round(_p_from(mean, se), 4) if powered else None,
+                  "significant": False}
+    # HOLM across the horizons actually tested — report() runs the flag on 4 correlated windows, so an
+    # uncorrected per-cell test inflates the family-wise error to ~25% at small samples.
+    cand = sorted([(v["p_raw"], k) for k, v in out.items() if v.get("powered") and v.get("p_raw") is not None])
+    m = len(cand)
+    for i, (pv, k) in enumerate(cand):
+        if pv <= 0.05 / (m - i):
+            out[k]["significant"] = True
+        else:
+            break                                  # Holm stops at the first failure
     best = None
     for h, r in out.items():
         if r.get("n") and r.get("mean_signed_pct") is not None:

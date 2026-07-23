@@ -115,6 +115,10 @@ def propose(ticker, ctx, *, actor="llm", signal_id=None):
     Recording happens BEFORE any outcome is known, which is the property that makes the eventual hit-rate
     honest: nothing can be added or removed once the market has moved."""
     try:
+        # check the CHEAP disqualifier before spending a call: propose("SPY", {}) previously burned one
+        # paid request on a guaranteed discard, and budget bounds call COUNT so that is real money.
+        if _num(ctx.get("spot")) is None:
+            return None
         import llm_parse as LP
         if not LP.available() or not _budget_ok():
             return None
@@ -124,43 +128,88 @@ def propose(ticker, ctx, *, actor="llm", signal_id=None):
     except Exception:
         return None
 
-    spot = ctx.get("spot")
-    if not spot:
-        return None
-    th = {
-        "ticker": ticker, "spot_at_proposal": float(spot),
-        "direction": raw.get("direction"), "horizon_min": raw.get("horizon_min"),
-        "target_pct": raw.get("target_pct"), "invalidation_pct": raw.get("invalidation_pct"),
-        "conviction": raw.get("conviction"), "regime": raw.get("regime"),
-        "reasoning": (raw.get("reasoning") or "")[:600],
-        "evidence": (raw.get("evidence") or [])[:6],
-        "low_conviction": (raw.get("conviction") or 0) < MIN_CONVICTION,
-        "proposed_utc": datetime.now(timezone.utc).isoformat(),
-        "model": MODEL, "horizons_to_grade": list(HORIZONS_MIN),
-    }
-    # sanity: a directional call must actually be directional and settleable
-    if th["direction"] not in ("LONG", "SHORT", "NONE"):
-        return None
-    if th["direction"] != "NONE":
-        if not th["horizon_min"] or th["target_pct"] is None or th["invalidation_pct"] is None:
+    # EVERYTHING below is inside one try. The contract is "never raises into the caller"; the first
+    # version only wrapped the API call, so a model returning conviction as a STRING, reasoning as an int,
+    # or evidence as a dict raised TypeError/KeyError straight out. strict:True on a tool schema is not a
+    # guarantee the API enforces every type on every model, and a partial/refusal block is exactly what
+    # defensive parsing exists for. Coerce, never trust.
+    try:
+        spot = _num(ctx.get("spot"))
+        if spot is None or spot <= 0:
             return None
-    try:
-        import playbook as PB
-        seq = PB.append("THESIS", signal_id=signal_id or f"th-{ticker}-{int(time.time())}",
-                        actor=actor, horizon=str(th["horizon_min"]), **th)
-        th["seq"] = seq
+        direction = raw.get("direction")
+        if direction not in ("LONG", "SHORT", "NONE"):
+            return None
+        conv = _num(raw.get("conviction")) or 0.0
+        th = {
+            "ticker": str(ticker), "spot_at_proposal": float(spot),
+            "direction": direction,
+            "horizon_min": _int(raw.get("horizon_min")),
+            "target_pct": _num(raw.get("target_pct")),
+            "invalidation_pct": _num(raw.get("invalidation_pct")),
+            "conviction": conv, "regime": str(raw.get("regime") or "unclear"),
+            "reasoning": _str(raw.get("reasoning"))[:600],
+            "evidence": [_str(x)[:200] for x in (raw.get("evidence") or [])][:6]
+                        if isinstance(raw.get("evidence"), (list, tuple)) else [],
+            "low_conviction": conv < MIN_CONVICTION,
+            "proposed_utc": datetime.now(timezone.utc).isoformat(),
+            "model": MODEL, "horizons_to_grade": list(HORIZONS_MIN),
+        }
+        # a directional call must be settleable, or it is commentary and we discard it
+        if direction != "NONE" and (not th["horizon_min"] or th["target_pct"] is None
+                                    or th["invalidation_pct"] is None):
+            return None
+        try:
+            import playbook as PB
+            th["seq"] = PB.append("THESIS", signal_id=signal_id or f"th-{ticker}-{int(time.time())}",
+                                  actor=actor, horizon=str(th["horizon_min"]), **th)
+        except Exception:
+            pass
+        return th
     except Exception:
-        pass
-    return th
+        return None
 
 
-def pending(limit=500):
-    """THESIS events from the ledger that have no OUTCOME yet — the queue Phase 3 resolves."""
+def _num(v):
+    try:
+        f = float(v)
+        return f if f == f and f not in (float("inf"), float("-inf")) else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _int(v):
+    n = _num(v)
+    return int(n) if n is not None else None
+
+
+def _str(v):
+    return v if isinstance(v, str) else ("" if v is None else str(v))
+
+
+def pending(limit=None, horizons=HORIZONS_MIN):
+    """Theses with at least one UNRESOLVED horizon — the queue Phase 3 works.
+
+    Three corrections over the first version, each of which silently lost data:
+      · indexed query, not tail() — a tail window let unrelated rows crowd out real theses and, once it
+        overflowed, allowed the SAME thesis to be resolved twice into the report;
+      · filtered to actor='llm' — server.py appends a THESIS for every ingested signal into the same
+        kind namespace, so ordinary desk traffic was burying chip's theses;
+      · pending on (signal_id, horizon) — keying on signal_id meant the first horizon to resolve blocked
+        every longer one FOREVER, so 60/240/1950 could never populate. That is not just missing data, it
+        is selection-biased data: a long horizon would only ever land after an outage.
+    Returns [(event, [unresolved horizons])]."""
     try:
         import playbook as PB
-        evs = PB.tail(limit, kind="THESIS")
-        done = {e.get("signal_id") for e in PB.tail(limit * 4, kind="OUTCOME")}
-        return [e for e in evs if e.get("signal_id") not in done
-                and (e.get("payload") or {}).get("spot_at_proposal")]
+        done = PB.resolved_pairs()
+        out = []
+        for e in PB.events_of_kind("THESIS", actor="llm", limit=limit):
+            p = e.get("payload") or {}
+            if not p.get("spot_at_proposal") or not p.get("proposed_utc"):
+                continue
+            todo = [h for h in horizons if (e.get("signal_id"), str(h)) not in done]
+            if todo:
+                out.append((e, todo))
+        return out
     except Exception:
         return []
