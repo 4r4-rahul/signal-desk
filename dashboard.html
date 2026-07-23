@@ -984,7 +984,7 @@ function chipBookHTML(b){
     <div class="sub mono" style="color:var(--dim)">${b.n} trades · ${b.wins}W/${b.losses}L · win ${b.win_rate}% · avg win ${b.avg_win==null?'—':'$'+b.avg_win} · avg loss ${b.avg_loss==null?'—':'$'+b.avg_loss} · PF ${b.profit_factor==null?'—':b.profit_factor} · exp ${b.expectancy_usd==null?'—':'$'+b.expectancy_usd}/trade${b.n_refused?' · '+b.n_refused+' refused on size':''}</div>
     <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:6px">${tbl('by day',b.by_day)}${tbl('by week',b.by_week)}${tbl('by month',b.by_month)}</div>`;
 }
-function renderChipLedger(sigs){
+function renderChipLedger(sigs, book){
   // Standalone CHIP-ONLY scalp results log (kept separate from real tastytrade trades until go-live).
   const el=document.getElementById('chipledger'); if(!el) return;
   const done=(sigs||[]).filter(s=>s.provider==='chip'&&s.chip_lifecycle&&['RESOLVED','STOPPED','TRAILED_OUT'].includes(s.chip_lifecycle.phase));
@@ -1014,7 +1014,7 @@ function renderChipLedger(sigs){
       <span>live <b style="color:${rc(L.avg)}">${fmtR(L.avg)}</b> <span style="color:var(--dim)">n${L.n}</span></span>
       <span>explore <b style="color:${rc(E.avg)}">${fmtR(E.avg)}</b> <span style="color:var(--dim)">n${E.n}</span></span></div>
     <div style="font-size:9px;color:var(--dim);margin-bottom:4px">shadow-only · separate from tastytrade until go-live</div>
-    ${chipBookHTML((window.__CHIP__||{}).book)}
+    ${chipBookHTML(book)}
     <div style="height:6px"></div>${rows}`;
 }
 function renderProviderEdge(edge){
@@ -2212,7 +2212,7 @@ async function refresh(){
     renderDayPnl(d.stats&&d.stats.by_day);
     renderDrawdown(d.stats&&d.stats.drawdown,d.account);
     renderChipLive(d.chip,d.provider_edge);
-    renderChipLedger(d.signals);
+    renderChipLedger(d.signals, (d.chip||{}).book);
     renderCalibration(d.calibration);
     renderExitQuality(d.exit_quality);
     renderProviderEdge(d.provider_edge);
@@ -2223,7 +2223,6 @@ async function refresh(){
     renderDiscipline(d.discipline,d.sleeve);
     renderMilestone(d.sleeve);
     renderPending(d.pending);
-    window.__CHIP__=d.chip||{};
     renderPositions(d.positions);
     checkSounds(S,d);            // audible: alarm on a corrected/phantom card, notice on a new TAKE
     window.KILLED=d.killed||{};
