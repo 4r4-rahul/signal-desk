@@ -2236,7 +2236,8 @@ def broker_order(data):
         day_realized_usd=float(day_real), trades_today=len(todays),
         reentries_today=sum(1 for o in todays if o["ticker"] == sig.get("ticker")),
         junk_block=bool(junk.get("block")), junk_reasons=junk.get("reasons") or [],
-        max_risk_pct=_cap, qty=qty, max_contracts=0)
+        max_risk_pct=_cap, qty=qty, max_contracts=0,
+        provider=entry.get("provider") or "")   # required: the gate hard-refuses SHADOW_PROVIDERS by name
     dry = data.get("dry_run", True)
     res = BROKER.submit_order(ctx, (sig.get("ticker"), exp, sig.get("type"), sig.get("strike")),
                               action, qty, price, dry_run=dry)

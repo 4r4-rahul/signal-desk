@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 
 # ---- Desk Rules (the committed contract; tune here) ----
 MAX_RISK_PCT = 1.0           # DEFAULT per-trade cap; per-provider override via OrderCtx.max_risk_pct (JMT=3%)
+SHADOW_PROVIDERS = {"chip"}   # research providers: paper book only, hard-refused at the gate
 DAILY_LOSS_LIMIT_PCT = 6.0   # lock the desk at -6% realized (= 2 full JMT losses at 3% each)
 MAX_TRADES_PER_DAY = 6        # overtrading breaker (you took ~40 on the blow-up day)
 MAX_REENTRIES_PER_NAME = 2    # revenge-trading breaker (MU 6x today)
@@ -39,12 +40,23 @@ class OrderCtx:
     max_risk_pct: float = MAX_RISK_PCT    # per-provider cap (JMT=3%, others=1%)
     qty: int = 0                          # contracts on this order
     max_contracts: int = 0                # per-provider contract cap (JMT=3); 0 = no cap
+    provider: str = ""                    # WHO generated this. Required for the shadow-provider refusal.
 
 
 def gate_order(ctx: OrderCtx):
     """Return {allow: bool, reasons: [...], warnings: [...]}. allow=False means the desk REFUSES to
     send it. Reasons are hard stops; warnings are shown but don't block."""
     reasons, warnings = [], []
+
+    # 0) SHADOW PROVIDERS CAN NEVER SEND AN ORDER. Structural, not incidental.
+    #    chip is research: it has its own $100k PAPER book (chip_paper.py) and its entries measure no
+    #    better than random on the desk's own harness. Until now nothing in the BROKER refused it — safety
+    #    rested on the fact that no code path happened to route chip here, which is exactly the kind of
+    #    implicit guarantee that fails silently the day someone adds a path. `provider_edge` also reports
+    #    chip at size_mult 1.0 (it sits below the eff_n gate), so the multiplier is no defence either.
+    #    This is the defence: named, hard, first, and it cannot be argued out of by a size or edge number.
+    if (ctx.provider or "").lower() in SHADOW_PROVIDERS:
+        reasons.append(f"🔬 {ctx.provider} is a SHADOW/research provider — paper only, never routed to a broker")
 
     # 1) JUNK — hard-blocked setups never reach the broker
     if ctx.junk_block:
