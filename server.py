@@ -485,8 +485,79 @@ def replay_inbox():
         return 0
 
 
+# THE LIVE PROVIDER FEED. The operator asked to SEE the providers talk — every message as it lands,
+# on the left, with what the desk decided about it and a sound. The desk already funnels every inbound
+# message and every routing outcome through _inlog, so that is the one place the feed can be built
+# without threading a new call through a dozen return paths. One row per message; later outcomes for
+# the same text update that row rather than spawning a second, so "arrived → carded" reads as one line.
+FEED = []                  # newest-last ring of provider messages + the desk's verdict
+FEED_MAX = 80
+FEED_STORE = _P.CHANNELS / "_feed.json"
+_FEED_SEQ = [0]
+# outcome -> (badge, rank). Higher rank is more terminal, so a late REJECT never overwrites a CARD.
+_FEED_OUTCOME = {
+    "RECV": ("new", 0), "LLM?": ("new", 0),
+    "MGMT": ("managed", 3), "REPLY→POS": ("managed", 3), "REPLY→SIG": ("managed", 3),
+    "REPLY→TRACK": ("managed", 3), "EDIT→REPRICE": ("edited", 3),
+    "REJECT": ("noise", 1), "DISABLED": ("dropped", 1), "PRICE-GUARD": ("blocked", 4),
+    "CARD": ("carded", 5), "HELD": ("held", 4),
+}
+
+
+def _load_feed():
+    try:
+        d = json.loads(FEED_STORE.read_text())
+        return d if isinstance(d, list) else []
+    except Exception:
+        return []
+
+
+def save_feed():
+    try:
+        from safe_io import safe_write_json
+        safe_write_json(FEED_STORE, FEED[-FEED_MAX:], min_keep_ratio=0.0)
+    except Exception:
+        pass
+
+
+def _feed_note(channel, prov, text, outcome):
+    """Maintain the live feed ring. RECV opens a row; any later outcome for the same message upgrades
+    it (never downgrades). Chat with no provider mapping is skipped — the feed is provider signal, not
+    system noise."""
+    # chip is the desk's OWN self-generating shadow provider — it does not "post messages", it emits
+    # scalps, and it has a dedicated scalp log on the right rail. Letting its ~30/day auto-scalps into
+    # the provider feed would bury the handful of human messages this panel exists to surface.
+    if not prov or prov in ("?", "-", "SYSTEM", "chip") or not text:
+        return
+    badge, rank = _FEED_OUTCOME.get(outcome, (outcome.lower()[:8], 2))
+    key = (prov, (text or "")[:80])
+    row = next((r for r in reversed(FEED) if r.get("_key") == list(key)), None)
+    now = datetime.now(ET).isoformat()
+    if row is None:
+        _FEED_SEQ[0] += 1
+        FEED.append({"id": f"f{_FEED_SEQ[0]}", "_key": list(key), "provider": prov,
+                     "text": (text or "")[:280], "ts": now, "outcome": badge, "rank": rank,
+                     "channel": channel})
+        del FEED[:-FEED_MAX]
+    elif rank >= row.get("rank", 0):
+        row["outcome"], row["rank"], row["ts"] = badge, rank, now
+    save_feed()
+
+
+FEED = _load_feed()
+try:                       # keep the sequence monotonic across restarts
+    _FEED_SEQ[0] = max((int(str(r.get("id", "f0"))[1:]) for r in FEED if str(r.get("id", "")).startswith("f")),
+                       default=0)
+except Exception:
+    pass
+
+
 def _inlog(channel, prov, text, outcome):
     """Log EVERY inbound message + what happened to it — so we can see per-channel capture."""
+    try:
+        _feed_note(channel, prov, text, outcome)
+    except Exception:
+        pass
     try:
         INBOUND_LOG.parent.mkdir(exist_ok=True)
         with INBOUND_LOG.open("a") as f:
@@ -522,6 +593,36 @@ def save_sources():
 
 
 SOURCES = _load_sources()   # channel id -> heartbeat + counts, RELOADED so the panel survives a restart
+
+# THE HELD TRAY — nothing the router declines to card dies in the air. When a message is clearly
+# actionable but under-specified (an ENTRY whose strike the provider never stated, an ambiguous
+# referent), the desk used to fire one ephemeral alert and forget it. That is how prince's live IWM
+# entry vanished: routed ASK, alerted once, gone. Now every such message lands here — persistent,
+# on the left panel, in the operator's watch — and the desk RESOLVES before it asks: it snaps to the
+# strikes that actually trade (ATM + any stated target) and offers them for a one-tap confirm. The
+# resolution proposes; the human disposes. Nothing here ever mints a card on its own.
+HELD_STORE = _P.CHANNELS / "_held.json"
+HELD_MAX = 40           # keep the tray finite; oldest resolved/dismissed items roll off first
+HELD_RESOLVE_TRIES = 4  # warm-lap attempts to snap strikes before giving up on a cold-connection miss
+
+
+def _load_held():
+    try:
+        d = json.loads(HELD_STORE.read_text())
+        return d if isinstance(d, list) else []
+    except Exception:
+        return []
+
+
+def save_held():
+    try:
+        from safe_io import safe_write_json
+        safe_write_json(HELD_STORE, HELD[-HELD_MAX:], min_keep_ratio=0.0)
+    except Exception:
+        pass
+
+
+HELD = _load_held()     # actionable-but-unresolved messages awaiting a one-tap human decision
 PENDING = []            # unlinked management msgs awaiting disambiguation
 
 
@@ -1502,6 +1603,9 @@ def monitor_loop():
                 save_signals()
             if DB and _heavy:
                 DB.sync_outcomes(SIGNALS)             # capture shadow resolutions + realized closes
+            if _heavy and HELD:                       # resolve held items on the WARM connection — the
+                try: _resolve_held(conn)              # HTTP thread never blocks on IBKR for this
+                except Exception: pass
             try: MK.reap_subs(conn)                   # cancel idle streaming lines (IBKR line budget)
             except Exception: pass
             conn.sleep(4)                             # fast lap: persistent streams refresh in-place
@@ -1843,6 +1947,50 @@ def _route_retract(card_id, reason, cls):
     return True
 
 
+def held_confirm(data):
+    """The operator tapped a resolved candidate (or typed a strike) on a held item. Turn it into a
+    canonical sentence and send it through ingest() from the top — the same path a provider message
+    takes, so contract verification, the price-mismatch guard, the junk gate, dedup and sizing ALL
+    run. Confirming here is the green signal; nothing became a card until this tap."""
+    h = next((x for x in HELD if x.get("id") == data.get("id")), None)
+    if not h:
+        return {"error": "held item not found"}
+    p = h.get("partial") or {}
+    tk = p.get("ticker")
+    right = (p.get("right") or data.get("right") or "C")[0].upper()
+    # strike: an explicit tap wins; else the chosen candidate; else a typed value
+    strike = data.get("strike")
+    if strike is None and data.get("candidate_strike") is not None:
+        strike = data.get("candidate_strike")
+    if strike is None:
+        return {"error": "no strike chosen"}
+    try:
+        st = float(strike)
+        stxt = str(int(st)) if abs(st - int(st)) < 1e-9 else f"{st:g}"
+    except (TypeError, ValueError):
+        return {"error": "bad strike"}
+    exp = p.get("expiry")
+    canonical = f"{tk} {stxt}{right}"
+    if exp:
+        m = re.match(r"^(\d{4})-(\d{1,2})-(\d{1,2})$", str(exp))
+        canonical += " " + (f"{int(m.group(2)):02d}/{int(m.group(3)):02d}" if m else str(exp))
+    if p.get("premium"):
+        canonical += f" @{p['premium']}"
+    payload = {"text": canonical, "provider": h.get("provider"), "channel": None,
+               "_from_llm": True, "raw_override": h.get("text"),
+               "llm": {"via": "held_confirm", "reason": h.get("reason"),
+                       "resolved_via": h.get("resolved_via") or "operator confirm"},
+               "needs_confirm": False}
+    try:
+        entry = ingest(payload)
+    except Exception as e:
+        return {"error": f"ingest failed: {e}"}
+    h["status"] = "confirmed"; h["confirmed_utc"] = datetime.now(ET).isoformat()
+    h["confirmed_card"] = (entry or {}).get("id")
+    save_held()
+    return {"ok": True, "card": (entry or {}).get("id"), "canonical": canonical}
+
+
 def _route_promote(canonical, provider, meta):
     """PROMOTE: a REQUEST for a card, not a card. Goes back through ingest() from the top."""
     payload = {"text": canonical, "provider": provider, "channel": None, "_from_llm": True,
@@ -1873,9 +2021,103 @@ def _route_promote(canonical, provider, meta):
     return entry
 
 
+def _held_id(rec):
+    """Stable id so the same message never opens two tray rows (a re-route on restart is idempotent)."""
+    p = (rec.get("partial") or {})
+    base = f"{rec.get('provider')}|{p.get('ticker')}|{p.get('right')}|{(rec.get('text') or '')[:60]}"
+    import hashlib
+    return "held-" + hashlib.sha1(base.encode()).hexdigest()[:10]
+
+
+def _route_hold(rec):
+    """HOLD: the router says this is actionable but cannot be safely carded (no strike, ambiguous
+    referent). Persist it to the tray so the operator sees it, and record the PARTIAL contract so the
+    monitor loop can resolve real strikes against it. Never quotes IBKR here — the HTTP thread stays
+    fast; resolution happens on the warm loop connection within a lap."""
+    hid = _held_id(rec)
+    existing = next((h for h in HELD if h.get("id") == hid), None)
+    v = rec.get("verdict") or {}
+    row = {
+        "id": hid, "provider": rec.get("provider"), "text": (rec.get("text") or "")[:280],
+        "cls": rec.get("cls"), "reason": rec.get("reason"),
+        "partial": v.get("partial") or {}, "candidates": rec.get("candidates") or [],
+        "sig": rec.get("sig"), "resolved_via": rec.get("resolved_via"),
+        "ts": rec.get("ts") or datetime.now(ET).isoformat(),
+        "status": "held", "resolved": False,
+    }
+    if existing:
+        # Preserve candidates already resolved; but if none were found yet, RE-ARM resolution — a
+        # message re-held after a failed snap (or a restart) must get another chance, or it is stuck
+        # as an unanswerable question forever. This was a real bug, not just test residue.
+        keep_res = bool(existing.get("candidates"))
+        existing.update({k: v2 for k, v2 in row.items() if k not in ("id",)})
+        if not keep_res:
+            existing["resolved"] = False
+            existing["resolve_tries"] = 0
+            existing["candidates"] = []
+    else:
+        HELD.append(row)
+    save_held()
+    try: _feed_note(None, rec.get("provider"), rec.get("text") or "", "HELD")   # badge the feed row
+    except Exception: pass
+    _alert(f"🔎 {rec.get('provider')}: held for you — {rec.get('reason')}\n\"{(rec.get('text') or '')[:140]}\"",
+           "Signal Desk — in your watch")
+    return True
+
+
+def _resolve_held(conn):
+    """Called from the monitor loop (warm connection). For each held item that names a ticker + side
+    but has no candidates yet, snap to the strikes that actually trade and attach them. Bounded and
+    fail-open — an item that cannot be resolved simply stays in the tray as a plain question."""
+    changed = False
+    for h in HELD:
+        if h.get("status") != "held" or h.get("candidates") or h.get("resolved"):
+            continue
+        p = h.get("partial") or {}
+        tk, r = p.get("ticker"), p.get("right")
+        if not tk or not r:
+            h["resolved"] = True                      # nothing to snap to; leave as a bare question
+            changed = True
+            continue
+        try:
+            import market as MK           # module-local, exactly as every other loop fn imports it —
+            target = _target_in_text(h.get("text") or "")   # server.py has no module-level MK
+            cands = MK.resolve_candidates(tk, r, expiry=p.get("expiry"), target=target, ib=conn)
+        except Exception:
+            cands = []
+        if cands:
+            h["candidates"] = cands
+            h["resolved"] = True
+        else:
+            # A cold-connection reqSecDefOptParams can return nothing on the first touch. Do NOT mark
+            # resolved on an empty result — retry on the next warm lap, up to a cap, so a transient
+            # miss is not baked in as "no strike exists". Past the cap it becomes a bare question.
+            h["resolve_tries"] = int(h.get("resolve_tries", 0)) + 1
+            if h["resolve_tries"] >= HELD_RESOLVE_TRIES:
+                h["resolved"] = True
+        changed = True
+    if changed:
+        save_held()
+    return changed
+
+
+def _target_in_text(text):
+    """A stated underlying PRICE TARGET ('290 price target', 'target 290') — used only to offer a
+    second candidate strike near it. Never treated as the strike itself (that is the parse rule)."""
+    import re
+    m = re.search(r"(\d{2,4}(?:\.\d+)?)\s*(?:price\s*)?target|target[:\s]+\$?(\d{2,4}(?:\.\d+)?)",
+                  text.lower())
+    if m:
+        try:
+            return float(m.group(1) or m.group(2))
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
 if ROUTE:
     ROUTE.bind(signals=lambda: SIGNALS, retract=_route_retract, promote=_route_promote,
-               alert=_alert, save=save_signals)
+               alert=_alert, save=save_signals, hold=_route_hold)
 
 
 _DRAINING = False
@@ -2794,6 +3036,9 @@ class H(http.server.BaseHTTPRequestHandler):
             return self._send(200, {"account": E.ACCOUNT, "risk": E.RISK_PCT, "start": START_ACCOUNT,
                                     "now": datetime.now(ET).isoformat(),
                                     "sleeve": SLEEVE, "sources": SOURCES, "discipline": D.state(),
+                                    "held": [h for h in HELD if h.get("status") == "held"],
+                                    "feed": [{k: v for k, v in r.items() if k not in ("_key", "rank")}
+                                             for r in FEED[-45:][::-1]],
                                     "killed": V.killed_providers(), "day_override": _day_override_active(),
                                     "positions": orphans, "totals": _tot, "ibkr": IBKR,
                                     "pending": PENDING, "signals": sigs, "stats": ST.performance(),
@@ -2824,6 +3069,14 @@ class H(http.server.BaseHTTPRequestHandler):
             return self._send(200, broker_order(data))
         if self.path.startswith("/api/action"):
             return self._send(200, act(data))
+        if self.path.startswith("/api/held_confirm"):   # operator picked a strike -> becomes a real card
+            return self._send(200, held_confirm(data))
+        if self.path.startswith("/api/held_dismiss"):   # operator says "not a trade" -> archive it
+            h = next((x for x in HELD if x.get("id") == data.get("id")), None)
+            if h:
+                h["status"] = "dismissed"; h["dismissed_utc"] = datetime.now(ET).isoformat()
+                save_held()
+            return self._send(200, {"ok": bool(h)})
         if data.get("watching"):                    # heartbeat from a watching window
             touch_source(data.get("channel") or "?", CHMAP.get(data.get("channel")), display=data.get("name"),
                          healthy=data.get("healthy"), seen=data.get("seen"))

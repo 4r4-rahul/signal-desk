@@ -776,8 +776,13 @@ def adjudicate(route, desk_route, book_verdict=None, carded_status=None):
         # kept because _CLASS_ROUTE is a table someone will edit.
         if cls in NEVER_CARD:
             return {**base, "action": "KEEP", "reason": f"{cls} may never mint a contract"}
+        # The PARTIAL travels with EVERY ask in this block. Whether we stop for low confidence or for
+        # a missing strike, the desk knows the ticker and side — enough to resolve real strikes and
+        # offer them, so no actionable message is ever discarded as a bare, unanswerable question.
+        partial = {"ticker": route.get("ticker"), "right": route.get("right"),
+                   "expiry": route.get("expiry"), "premium": route.get("premium")}
         if conf < CONF_PROMOTE:
-            return {**base, "action": "ASK",
+            return {**base, "action": "ASK", "partial": partial,
                     "reason": f"looks like {cls} but confidence {conf:.2f} — confirm by hand"}
         # Where does the contract come from?
         #   (a) this message states it -> use the GROUNDED fields;
@@ -803,8 +808,12 @@ def adjudicate(route, desk_route, book_verdict=None, carded_status=None):
         if bv.get("status") == "ambiguous":
             return {**base, "action": "ASK", "candidates": bv.get("candidates"),
                     "reason": f"{cls}, but {len(bv.get('candidates') or [])} open positions could be meant"}
-        return {**base, "action": "ASK",
-                "reason": f"{cls} with no contract stated and nothing in the book to attach it to"}
+        # We know the ticker and the side but not the strike. Do not drop it — hand the server the
+        # partial so it can snap to the strikes that actually trade (ATM + any stated target) and
+        # offer them for a one-tap confirm. Still ASK: resolution proposes, the human disposes.
+        return {**base, "action": "ASK", "partial": partial,
+                "reason": f"{cls} on {route.get('ticker') or '?'} "
+                          f"{(route.get('right') or '')}—strike not stated; resolve to a listed strike"}
 
     # ---- the desk dropped it and the model agrees there is management here. Cheap, informative,
     #      but it does not create a card, so it is applied as an annotation only.
@@ -818,7 +827,7 @@ def adjudicate(route, desk_route, book_verdict=None, carded_status=None):
 # server.py fills this in ONE clearly-marked block. Unbound -> every effect is a no-op, which is
 # what makes this module safe to import from anywhere including the evaluator.
 
-DESK = {"signals": None, "retract": None, "promote": None, "alert": None, "save": None}
+DESK = {"signals": None, "retract": None, "promote": None, "alert": None, "save": None, "hold": None}
 _bound = False
 
 
@@ -1021,14 +1030,30 @@ def _apply(rec):
             "raw": text, "watch": bool(sig.get("watch")), "model": MODEL})
         STATS["applied_PROMOTE"] += 1
         return
-    if act == "ASK" and DESK.get("alert"):
-        cands = v.get("candidates") or []
-        lines = ", ".join(f"{c['ticker']} {c['strike']:g}{c['right']}" for c in cands
-                          if isinstance(c, dict)) if cands else ""
-        DESK["alert"](f"❓ {prov}: Chip can't route this safely — {v.get('reason')}"
-                      + (f"\ncandidates: {lines}" if lines else "")
-                      + f"\n\"{text[:160]}\"", "Signal Desk — needs a human")
-        STATS["applied_ASK"] += 1
+    if act == "ASK":
+        # NOTHING DIES IN THE AIR. An ASK used to fire a single ephemeral alert and vanish — the
+        # operator asked to see everything the desk declines to card, in a persistent tray they can
+        # act on. Hand it to the HELD store (which also attempts live strike resolution so the
+        # question is specific), and fall back to a plain alert only if no store is bound.
+        if DESK.get("hold"):
+            try:
+                DESK["hold"]({"provider": prov, "text": text, "verdict": v,
+                              "cls": v.get("cls"), "reason": v.get("reason"),
+                              "candidates": v.get("candidates"), "sig": v.get("sig"),
+                              "resolved_via": v.get("resolved_via"),
+                              "msg_id": rec.get("msg_id"), "ts": rec.get("ts")})
+                STATS["applied_ASK"] += 1
+                return
+            except Exception:
+                pass
+        if DESK.get("alert"):
+            cands = v.get("candidates") or []
+            lines = ", ".join(f"{c['ticker']} {c['strike']:g}{c['right']}" for c in cands
+                              if isinstance(c, dict)) if cands else ""
+            DESK["alert"](f"❓ {prov}: Chip can't route this safely — {v.get('reason')}"
+                          + (f"\ncandidates: {lines}" if lines else "")
+                          + f"\n\"{text[:160]}\"", "Signal Desk — needs a human")
+            STATS["applied_ASK"] += 1
 
 
 def _canonical(sig):

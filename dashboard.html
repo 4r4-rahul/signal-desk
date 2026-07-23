@@ -316,6 +316,47 @@
   .rail .src{width:100%;box-sizing:border-box;background:transparent;border:none;border-radius:9px;padding:7px 8px;
     align-items:flex-start;transition:background .12s}
   .rail .src:hover{background:rgba(255,255,255,.035)}
+  .held{margin-top:12px;padding:12px;background:linear-gradient(180deg,var(--panel),var(--panel2));
+    border:1px solid var(--line);border-radius:14px}
+  .held.warn{border-color:rgba(245,158,11,.42)}
+  .heldcard{background:rgba(245,158,11,.05);border:1px solid rgba(245,158,11,.22);border-radius:11px;
+    padding:9px 10px;margin-top:8px}
+  .heldcard .top{display:flex;align-items:baseline;gap:7px;flex-wrap:wrap}
+  .heldcard .prov{font-weight:700;color:var(--txt);font-size:12.5px}
+  .heldcard .why{color:var(--amber);font-size:11px;font-weight:600}
+  .heldcard .raw{color:var(--dim);font-size:11px;margin:5px 0 2px;line-height:1.35;
+    white-space:normal;word-break:break-word}
+  .heldcard .cands{display:flex;gap:6px;flex-wrap:wrap;margin-top:7px}
+  .cand{cursor:pointer;background:rgba(34,197,94,.10);border:1px solid rgba(34,197,94,.38);
+    color:#bbf7d0;border-radius:8px;padding:4px 9px;font-size:11.5px;font-weight:600;transition:background .12s}
+  .cand:hover{background:rgba(34,197,94,.22)}
+  .cand .k{font-size:10px;color:var(--muted);font-weight:500;text-transform:uppercase;letter-spacing:.4px}
+  .cand.dismiss{background:transparent;border-color:var(--line);color:var(--muted)}
+  .cand.dismiss:hover{background:rgba(255,255,255,.05)}
+  .heldcard .resolving{color:var(--muted);font-size:11px;margin-top:6px;font-style:italic}
+  .provfeed{margin-top:12px;padding:12px;background:linear-gradient(180deg,var(--panel),var(--panel2));
+    border:1px solid var(--line);border-radius:14px}
+  .feedscroll{max-height:46vh;overflow-y:auto;margin:2px -4px 0;padding:0 4px}
+  .feedrow{display:flex;gap:8px;padding:7px 4px;border-bottom:1px solid rgba(255,255,255,.04)}
+  .feedrow:last-child{border-bottom:none}
+  .feedrow.fresh{animation:feedin .9s ease}
+  @keyframes feedin{from{background:rgba(56,189,248,.14)}to{background:transparent}}
+  .feeddot{width:7px;height:7px;border-radius:50%;margin-top:5px;flex-shrink:0;background:var(--muted)}
+  .fd-carded{background:#22c55e}.fd-held{background:#f59e0b}.fd-managed{background:#38bdf8}
+  .fd-noise{background:#4b5563}.fd-blocked{background:#ef4444}.fd-new{background:#94a3b8}
+  .fd-dropped{background:#4b5563}.fd-edited{background:#a78bfa}
+  .feedmain{min-width:0;flex:1}
+  .feedtop{display:flex;align-items:baseline;gap:6px}
+  .feedtop b{color:var(--txt);font-size:12px;font-weight:700;white-space:nowrap}
+  .feedtop .tm{color:var(--dim);font-size:10.5px;margin-left:auto;white-space:nowrap}
+  .feedbadge{font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;padding:1px 6px;
+    border-radius:6px;background:#1e2636;color:var(--muted)}
+  .feedbadge.carded{background:rgba(34,197,94,.16);color:#86efac}
+  .feedbadge.held{background:rgba(245,158,11,.16);color:#fcd34d}
+  .feedbadge.managed{background:rgba(56,189,248,.16);color:#7dd3fc}
+  .feedbadge.blocked{background:rgba(239,68,68,.16);color:#fca5a5}
+  .feedtext{color:var(--sub);font-size:11.5px;line-height:1.4;margin-top:3px;word-break:break-word;
+    display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
   .daysort{cursor:pointer;font-size:10.5px;font-weight:600;letter-spacing:0;text-transform:none;color:var(--muted);
     padding:2px 8px;border-radius:8px;border:1px solid var(--line)}
   .daysort.on{background:rgba(56,189,248,.14);border-color:rgba(56,189,248,.4);color:#bfe3fb}
@@ -424,6 +465,8 @@
 <div class="layout">
   <aside class="rail">
     <div id="sources" class="sources"></div>
+    <div id="held" class="held"></div>
+    <div id="provfeed" class="provfeed"></div>
   </aside>
   <main class="main">
     <div id="wallet" class="wallet"></div>
@@ -515,6 +558,9 @@ function soundPos(){    chipSeq(ROOT/2, 2, 0.34, {dur:130, gain:0.23}); }
 function soundAlarm(){  chipSeq(ROOT,   2, 0.40, {dur:150, gain:0.22, invert:true}); }
 // NOTICE — home register, once, rising + major third. Actionable and positive.
 function soundNotice(){ chipMark(ROOT, {dur:120, gain:0.17, third:true}); }
+// HELD   — home register, rising, TWICE with the major third. A question waiting in your watch:
+//          actionable and positive (something to add), but asked twice because it needs YOUR answer.
+function soundHeld(){   chipSeq(ROOT, 2, 0.34, {dur:110, gain:0.15, third:true}); }
 // NEW    — one octave up, once, quiet. Something arrived.
 function soundNew(){    chipMark(ROOT*2, {dur:80, gain:0.11}); }
 // CHIP   — two octaves up, softest. Shadow-only, so it must never sound like real money.
@@ -534,8 +580,13 @@ function checkSounds(S,d){
   //   NEW    a signal simply arrived, any status            (single soft blip)
   //   CHIP   chip fired — shadow-only, so deliberately quietest
   // Highest tier wins per refresh and each key fires once, so a burst is one sound, not a machine-gun.
-  let risk=false,pos=false,alarm=false,notice=false,fresh=false,chip=false;
+  let risk=false,pos=false,alarm=false,notice=false,held=false,fresh=false,chip=false;
   const sl=(d&&d.sleeve)||{}, dis=(d&&d.discipline)||{};
+  // HELD — the desk is asking you to resolve a signal it would not card on its own. Fires once per
+  // item, and re-arms when it leaves the tray, so a standing question does not nag every refresh.
+  for(const h of ((d&&d.held)||[])){
+    if(h && h.status==='held' && !_heard.has('h:'+h.id)){ _remember('h:'+h.id); held=true; }
+  }
   if(sl.halted && !_heard.has('r:halt')){ _remember('r:halt'); risk=true; }
   if(!sl.halted) _heard.delete('r:halt');                 // re-arm once the halt clears
   if(dis.blocked && !_heard.has('r:daystop')){ _remember('r:daystop'); risk=true; }
@@ -553,10 +604,22 @@ function checkSounds(S,d){
     if(!_heard.has('n:'+s.id)){ _remember('n:'+s.id); if(s.provider==='chip') chip=true; else fresh=true; }
     if((s.live&&s.live.entry&&s.live.entry.action)==='TAKE' && !_heard.has('t:'+s.id)){ _remember('t:'+s.id); notice=true; }
   }
+  // A PROVIDER SPOKE. Every message in the live feed gets a soft blip the first time we see it — but
+  // only if it actually just arrived (ts within 2 min), so opening the desk does not replay the day.
+  const nowMs=Date.parse((d&&d.now)||'')||Date.now();
+  for(const f of ((d&&d.feed)||[])){
+    if(!f || !f.id) continue;
+    const k='f:'+f.id;
+    if(_heard.has(k)) continue;
+    _remember(k);
+    const recent=(nowMs-(Date.parse(f.ts)||0))<120000;
+    if(recent){ if(f.provider==='chip') chip=true; else fresh=true; }
+  }
   if(risk) soundRisk();
   else if(pos) soundPos();
   else if(alarm) soundAlarm();
   else if(notice) soundNotice();
+  else if(held) soundHeld();
   else if(fresh) soundNew();
   else if(chip) soundChip();
 }
@@ -568,7 +631,7 @@ function audioDiag(){    // so a SILENT test is diagnosable instead of a mystery
 }
 function testSounds(){   // hear every tier on demand — the only way to confirm audio works on this machine
   const seq=[['RISK',soundRisk],['POSITION',soundPos],['CORRECTED',soundAlarm],
-             ['TAKE',soundNotice],['NEW SIGNAL',soundNew],['CHIP',soundChip]];
+             ['TAKE',soundNotice],['HELD — NEEDS YOU',soundHeld],['NEW SIGNAL',soundNew],['CHIP',soundChip]];
   _ctx(); let i=0;
   (function nxt(){ if(i>=seq.length) return;
     const [nm,fn]=seq[i++]; const el=document.getElementById('sndtest');
@@ -671,6 +734,84 @@ function renderSources(src,nowIso,ibkr){
   }).join('');
 }
 function toggleSrc(k){muted.has(k)?muted.delete(k):muted.add(k);refresh();}
+// THE HELD TRAY — everything the desk found actionable but could not safely card. Instead of one
+// alert that scrolls away, each lands here in your watch, already resolved to the strikes that
+// actually trade. Tap a strike to confirm (it becomes a real card through the full ingest path),
+// or dismiss it. Nothing here is a live position; it is the desk asking you before it acts.
+function esc(s){return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+function renderHeld(held){
+  const el=document.getElementById('held'); if(!el) return;
+  const rows=(held||[]).filter(h=>h && h.status==='held');
+  if(!rows.length){el.className='held';el.innerHTML='';el.style.display='none';return;}
+  el.style.display='';el.className='held warn';
+  el.innerHTML=`<div class="rail-h">🔎 Held — needs you <span class="rail-n">${rows.length}</span></div>`
+    + rows.map(h=>{
+      const cands=(h.candidates||[]);
+      const p=h.partial||{};
+      let body;
+      if(cands.length){
+        body=`<div class=cands>`+cands.map(c=>{
+          const lbl=`${c.strike}${(c.right||'').toUpperCase()}`;
+          const px=c.mid!=null?` @${c.mid}`:'';
+          const kind=c.kind?`<span class=k>${c.kind}</span> `:'';
+          return `<div class=cand title="confirm ${lbl}${px} — becomes a real card"
+            onclick="confirmHeld('${h.id}',${c.strike},'${(c.right||'').toUpperCase()}')">${kind}${lbl}${px}</div>`;
+        }).join('')
+        +`<div class="cand dismiss" onclick="dismissHeld('${h.id}')" title="not a trade">dismiss</div></div>`;
+      } else if(h.resolved){
+        body=`<div class=cands><span class=resolving>no listed strike near the market</span>`
+            +`<div class="cand dismiss" onclick="dismissHeld('${h.id}')">dismiss</div></div>`;
+      } else {
+        body=`<div class=resolving>resolving strikes…</div>`;
+      }
+      const side=p.ticker?`${esc(p.ticker)} ${(p.right||'').toUpperCase()==='P'?'puts':(p.right||'').toUpperCase()==='C'?'calls':''}`:'';
+      return `<div class=heldcard>
+        <div class=top><span class=prov>${esc(h.provider||'?')}</span>
+          ${side?`<span style="color:var(--muted);font-size:11.5px">${side}</span>`:''}
+          <span class=why>${esc(h.cls||'')}</span></div>
+        <div class=raw>"${esc((h.text||'').slice(0,160))}"</div>
+        ${body}</div>`;
+    }).join('');
+}
+// LIVE FROM PROVIDERS — the raw stream, newest first, each tagged with what the desk did about it.
+// This is the "everything they post shows up here" surface: a card, a management note, plain chatter,
+// or something held for you — all visible, none lost. A soft sound fires when a new message lands.
+const _feedTimes={carded:'carded',held:'held for you',managed:'managed',noise:'—',blocked:'blocked',
+  'new':'seen',dropped:'dropped',edited:'edited'};
+function feedAgo(iso,now){
+  try{ const s=Math.max(0,(Date.parse(now)-Date.parse(iso))/1000);
+    if(s<60)return Math.round(s)+'s'; if(s<3600)return Math.round(s/60)+'m';
+    if(s<86400)return Math.round(s/3600)+'h'; return Math.round(s/86400)+'d'; }catch(e){return '';}
+}
+const _feedSeen=new Set();
+function renderFeed(feed,nowIso){
+  const el=document.getElementById('provfeed'); if(!el) return;
+  const rows=(feed||[]);
+  if(!rows.length){el.innerHTML='';el.style.display='none';return;}
+  el.style.display='';
+  el.innerHTML=`<div class="rail-h">📨 Live from providers <span class="rail-n">${rows.length}</span></div>`
+    +`<div class=feedscroll>`+rows.map(r=>{
+      const oc=r.outcome||'new';
+      const isNew=!_feedSeen.has(r.id); _feedSeen.add(r.id);
+      const badge=oc!=='new'?`<span class="feedbadge ${oc}">${esc(_feedTimes[oc]||oc)}</span>`:'';
+      return `<div class="feedrow ${isNew?'fresh':''}">
+        <span class="feeddot fd-${oc}"></span>
+        <div class=feedmain>
+          <div class=feedtop><b>${esc(r.provider||'?')}</b>${badge}<span class=tm>${feedAgo(r.ts,nowIso)}</span></div>
+          <div class=feedtext>${esc(r.text||'')}</div>
+        </div></div>`;
+    }).join('')+`</div>`;
+}
+function confirmHeld(id,strike,right){
+  fetch('/api/held_confirm',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({id,candidate_strike:strike,right})})
+    .then(r=>r.json()).then(j=>{ if(j&&j.error){alert('Could not card it: '+j.error);} refresh(); })
+    .catch(()=>refresh());
+}
+function dismissHeld(id){
+  fetch('/api/held_dismiss',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({id})}).then(()=>refresh()).catch(()=>refresh());
+}
 
 const money=n=>'$'+Math.round(n||0).toLocaleString();
 
@@ -2239,6 +2380,8 @@ async function refresh(){
     renderExitQuality(d.exit_quality);
     renderProviderEdge(d.provider_edge);
     renderSources(d.sources,d.now,d.ibkr);
+    renderHeld(d.held);
+    renderFeed(d.feed,d.now);
     window.DAY_OVERRIDE=d.day_override;
     renderChipsTray(d.discipline,d.account);
     renderQualityPack(S.filter(x=>!muted.has(x.provider)));

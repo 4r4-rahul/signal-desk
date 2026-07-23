@@ -298,6 +298,82 @@ def list_expiries(ib, ticker):
     return exps
 
 
+def _chain_strikes(ib, ticker, expiry=None):
+    """LISTED strikes for an option root (union across exchanges), cached with the expiries. Used to
+    resolve a signal that names a ticker + right but no strike — we snap to what actually trades,
+    never to a number we invented."""
+    tk = ticker.upper()
+    try:
+        stk = _STK_CACHE.get(tk)
+        if stk is None:
+            stk = _contract(tk); ib.qualifyContracts(stk); _STK_CACHE[tk] = stk
+        chains = ib.reqSecDefOptParams(stk.symbol, "", stk.secType, stk.conId)
+        s = set()
+        for ch in chains:
+            s |= set(getattr(ch, "strikes", None) or [])
+        return sorted(float(x) for x in s if x and x > 0)
+    except Exception:
+        return []
+
+
+def resolve_candidates(ticker, right, expiry=None, target=None, ib=None, n=1):
+    """RESOLVE BEFORE DISCARDING. A message names a ticker and a side but no strike — the desk used to
+    drop it. Instead, snap to the strikes that actually trade: the one nearest the live underlying
+    (ATM), and, if a price TARGET was stated, the one nearest that. Returns quoted candidates for a
+    one-tap human confirm — this NEVER auto-cards; it only makes the question specific.
+
+    [{strike, right, expiry, mid, bid, ask, delta, kind}]  ·  [] on any failure (fail-open)."""
+    own = ib is None
+    try:
+        if ib is None:
+            ib = connect()
+        tk, r = ticker.upper(), right.upper()[0]
+        exp = _snap_expiry(expiry)
+        if not exp:                                   # need a concrete expiry to quote against
+            exps = list_expiries(ib, tk)
+            exp = exps[0] if exps else None
+        if not exp:
+            return []
+        spot = spot_quote(tk, ib=ib)          # reuse THIS connection; never spawn a nested one
+        strikes = _chain_strikes(ib, tk, exp)
+        if not strikes:                       # reqSecDefOptParams returns nothing on a cold line's first
+            try: ib.sleep(0.8)                # touch — one short re-ask before giving up, so a warm-enough
+            except Exception: pass            # caller is not defeated by a single empty def-request
+            strikes = _chain_strikes(ib, tk, exp)
+        if not strikes:
+            return []
+        wants = []                                    # (level, kind) pairs to snap
+        if spot:
+            wants.append((spot, "ATM"))
+        if target:
+            try:
+                tv = float(target)
+                if not spot or abs(tv - spot) > 1e-9:
+                    wants.append((tv, "target"))
+            except (TypeError, ValueError):
+                pass
+        seen, out = set(), []
+        for level, kind in wants:
+            k = min(strikes, key=lambda x: abs(x - level))
+            if k in seen:
+                continue
+            seen.add(k)
+            q = option_quote(tk, str(int(k)) if abs(k - int(k)) < 1e-9 else f"{k:g}", r,
+                             expiry=exp, ib=ib)
+            if not q or q.get("mid") is None:
+                continue
+            out.append({"strike": k, "right": r, "expiry": exp, "kind": kind,
+                        "mid": q.get("mid"), "bid": q.get("bid"), "ask": q.get("ask"),
+                        "delta": q.get("delta"), "spot": spot})
+        return out[:max(1, n + 1)]
+    except Exception:
+        return []
+    finally:
+        if own and ib is not None:
+            try: ib.disconnect()
+            except Exception: pass
+
+
 def _et_today():
     from datetime import datetime, timezone, timedelta
     return datetime.now(timezone(timedelta(hours=-4))).strftime("%Y%m%d")
