@@ -1149,6 +1149,23 @@ function renderChipLedger(sigs, book){
   const grp=g=>{const xs=done.filter(s=>((s.chip||{}).live_grade)===g),rs=xs.map(s=>s.chip_lifecycle.blended_r).filter(r=>r!=null);
     return {n:xs.length, avg:rs.length?Math.round(rs.reduce((a,b)=>a+b,0)/rs.length*100)/100:null};};
   const L=grp('live'), E=grp('explore');
+  // MFE vs THE LADDER — the metric that says whether chip's targets are even reachable in 20 minutes.
+  // "T1 hit X%" plus "where the median peak actually lands vs T1" is the lever: if peaks cluster far
+  // below T1, the target is too far or the window too short; if they blow past T1, all-out leaves money.
+  // The runner question ("room past T1") is dead until T1-hit-rate is non-trivial, so this comes first.
+  const med=a=>{if(!a.length)return null;const b=[...a].sort((x,y)=>x-y),m=b.length>>1;
+    return Math.round(b.length%2?b[m]:(b[m-1]+b[m])/2);};
+  const reach=k=>{const n=done.filter(s=>{const c=s.chip_lifecycle;return c.peak_pct!=null&&c[k]!=null&&c.peak_pct>=c[k];}).length;
+    return done.length?Math.round(100*n/done.length):0;};
+  const medPeak=med(done.map(s=>s.chip_lifecycle.peak_pct).filter(p=>p!=null));
+  const medT1=med(done.map(s=>s.chip_lifecycle.t1_pct).filter(x=>x!=null));
+  const tag=done.filter(s=>{const c=s.chip_lifecycle;return c.peak_pct!=null&&c.t1_pct!=null&&c.peak_pct>=c.t1_pct;});
+  const pastT1=tag.length?med(tag.map(s=>s.chip_lifecycle.peak_pct-s.chip_lifecycle.t1_pct)):null;
+  const reachHTML=`<div style="font-size:10px;color:var(--muted);margin:1px 0 4px;letter-spacing:.2px">
+    reach <b style="color:${reach('t1_pct')>=25?'#22c55e':'#ef4444'}">T1 ${reach('t1_pct')}%</b>
+    · T2 ${reach('t2_pct')}% · T3 ${reach('t3_pct')}%
+    · median peak <b>${medPeak==null?'—':(medPeak>=0?'+':'')+medPeak+'%'}</b> vs T1 +${medT1==null?'—':medT1}%
+    ${pastT1!=null?`· <span title="hindsight peak past T1 on the ${tag.length} that reached it — a real runner captures less">+${pastT1}pp past T1 (n${tag.length})</span>`:''}</div>`;
   const rows=done.slice(0,24).map(s=>{
     const cl=s.chip_lifecycle,m=s.chip||{},g=s.sig||{}, isC=(cl.cp||g.type)==='C';
     const dcol=isC?'#22c55e':'#ef4444', res=cl.result==='WIN'?'✅':cl.result==='LOSS'?'🔴':'●';
@@ -1176,6 +1193,7 @@ function renderChipLedger(sigs, book){
     <div style="display:flex;gap:14px;font-size:11px;margin:5px 0 2px">
       <span>live <b style="color:${rc(L.avg)}">${fmtR(L.avg)}</b> <span style="color:var(--dim)">n${L.n}</span></span>
       <span>explore <b style="color:${rc(E.avg)}">${fmtR(E.avg)}</b> <span style="color:var(--dim)">n${E.n}</span></span></div>
+    ${reachHTML}
     <div style="font-size:9px;color:var(--dim);margin-bottom:4px">shadow-only · separate from tastytrade until go-live</div>
     ${chipBookHTML(book)}
     <div style="height:6px"></div>${rows}`;
