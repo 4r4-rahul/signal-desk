@@ -2560,6 +2560,17 @@ class H(http.server.BaseHTTPRequestHandler):
         if self.path.startswith("/api/route_status"):   # ROUTER (R5): observability, read-only
             return self._send(200, {"route": ROUTE.status() if ROUTE else {"enabled": False},
                                     "parse": LLM.status() if LLM else {"enabled": False}})
+        if self.path.startswith("/trade"):          # full story of ONE trade, opens in its own window
+            try:
+                from urllib.parse import urlparse, parse_qs
+                sid = (parse_qs(urlparse(self.path).query).get("id") or [""])[0]
+                import trade_page as TP, chip_book as CB, db as _DB
+                row = next((t for t in (CB.replay().get("trades") or []) if t.get("signal_id") == sid), None)
+                life = next((( s2.get("chip_lifecycle") or {}) for s2 in SIGNALS if s2.get("id") == sid), {})
+                html = TP.render(sid, _DB.DB_PATH, book_row=row, life=life)
+            except Exception as e:
+                html = f"<pre>trade detail unavailable: {e}</pre>"
+            return self._send(200, html.encode(), "text/html; charset=utf-8")
         if self.path.startswith("/api/signals"):
             drain_llm()      # LLM LAYER: dashboard polls every ~2.5s, so a finished review is
             refresh_account()  # applied within seconds — still entirely on the main thread.

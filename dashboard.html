@@ -1014,13 +1014,22 @@ function renderChipLedger(sigs, book){
     const t=(cl.closed||cl.opened||'').slice(11,16);
     const role=m.direction_role==='counter'?'<span style="color:var(--dim)">ctr</span>':'<span style="color:#c4b5fd">pri</span>';
     const grade=m.live_grade==='explore'?'<span style="color:var(--amber)">exp</span>':m.live_grade==='live'?'<span style="color:#22c55e">live</span>':'';
-    return `<div style="display:flex;gap:6px;align-items:center;font-size:11px;padding:3px 0;border-top:1px solid var(--line)">
+    // A row is a verdict with no explanation. Clicking opens the full story in its own window: what was
+    // risked, what was bought, which ladder legs filled and which missed and by how much, when and why
+    // it closed. The row stays terse; the detail lives one click away instead of crowding the rail.
+    const pnl=(cl.pnl_usd!=null)?cl.pnl_usd:null;
+    return `<div onclick="window.open('/trade?id=${encodeURIComponent(s.id)}','trade_${s.id}','width=1000,height=900')"
+      title="open the full trade story"
+      style="display:flex;gap:6px;align-items:center;font-size:11px;padding:3px 0;border-top:1px solid var(--line);
+             cursor:pointer;border-radius:4px;transition:background .12s"
+      onmouseover="this.style.background='var(--bg2)'" onmouseout="this.style.background=''">
       <span style="color:var(--dim);width:32px">${t}</span>
       <b style="width:34px">${g.ticker||'?'}</b>
       <span style="color:${dcol};font-weight:700;width:12px">${isC?'▲':'▼'}</span>
       <span style="color:${rc(cl.blended_r)};width:46px;text-align:right;font-family:'JetBrains Mono',ui-monospace,monospace">${fmtR(cl.blended_r)}</span>
       <span style="width:16px;text-align:center">${res}</span>
-      <span style="margin-left:auto;font-size:9px;letter-spacing:.3px">${role}·${grade}</span></div>`;
+      <span style="margin-left:auto;font-size:9px;letter-spacing:.3px">${role}·${grade}</span>
+      <span style="color:var(--dim);font-size:10px">›</span></div>`;
   }).join('');
   el.innerHTML=`<div class="stats-h">🤖 Chip Scalp Log <span style="margin-left:auto;font-weight:500;color:var(--muted)">${done.length} closed</span></div>
     <div style="display:flex;gap:14px;font-size:11px;margin:5px 0 2px">
