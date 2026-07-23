@@ -1,24 +1,11 @@
 [
  {
-  "provider": "prince",
-  "text": "I'm gonna take a shot at these GOOGL $370c here 3.40 entry 2.90 stop limit $359.59 first price target July 24 expiry @ev",
-  "ts": "2026-07-23T13:31:45+00:00",
-  "outcome": "new",
-  "rank": 0,
-  "id": "f1",
-  "_key": [
-   "prince",
-   "I'm gonna take a shot at these GOOGL $370c here 3.40 entry 2.90 stop limit $359."
-  ],
-  "channel": null
- },
- {
   "provider": "prince_small",
   "text": "Watching $AAPL 325 call July 25\\n1.18 limit entry\\n0.95 stop\\nWaiting for entry\\n@everyone",
-  "ts": "2026-07-23T14:04:58+00:00",
+  "ts": "2026-07-23T14:04:57+00:00",
   "outcome": "carded",
   "rank": 5,
-  "id": "f2",
+  "id": "f1",
   "_key": [
    "prince_small",
    "Watching $AAPL 325 call July 25\\n1.18 limit entry\\n0.95 stop\\nWaiting for entry\\"
@@ -31,7 +18,7 @@
   "ts": "2026-07-23T14:12:14+00:00",
   "outcome": "noise",
   "rank": 1,
-  "id": "f3",
+  "id": "f2",
   "_key": [
    "prince_small",
    "In $AAPL calls at 0.82 and will add a stop limit for 0.60 @everyone \\nThey expir"
@@ -44,7 +31,7 @@
   "ts": "2026-07-23T14:12:17+00:00",
   "outcome": "new",
   "rank": 0,
-  "id": "f4",
+  "id": "f3",
   "_key": [
    "prince_small",
    "AAPL 325C Jul 25 @0.82"
@@ -57,7 +44,7 @@
   "ts": "2026-07-23T14:12:19+00:00",
   "outcome": "new",
   "rank": 0,
-  "id": "f5",
+  "id": "f4",
   "_key": [
    "prince_small",
    "AAPL 325C 07/25 @0.82"
@@ -70,7 +57,7 @@
   "ts": "2026-07-23T14:22:11+00:00",
   "outcome": "managed",
   "rank": 3,
-  "id": "f6",
+  "id": "f5",
   "_key": [
    "prince_small",
    "Up 22% on $AAPL calls @everyone"
@@ -83,7 +70,7 @@
   "ts": "2026-07-23T14:33:10+00:00",
   "outcome": "managed",
   "rank": 3,
-  "id": "f7",
+  "id": "f6",
   "_key": [
    "prince_small",
    "We are up 44% on our $AAPL calls @everyone EXCELLENT entry!! So far so good!"
@@ -96,7 +83,7 @@
   "ts": "2026-07-23T14:40:54+00:00",
   "outcome": "managed",
   "rank": 3,
-  "id": "f8",
+  "id": "f7",
   "_key": [
    "prince_small",
    "UP 55% ON $AAPL CALLSThese expire tomorrow, so please remember it carries an ele"
@@ -109,7 +96,7 @@
   "ts": "2026-07-23T15:08:00+00:00",
   "outcome": "noise",
   "rank": 1,
-  "id": "f9",
+  "id": "f8",
   "_key": [
    "prince",
    "From the LIVE: IM IN IWM PUTS THAT EXPIRE TOMORROW\\n1.03 limit\\nno stop yet LETS"
@@ -122,7 +109,7 @@
   "ts": "2026-07-23T15:14:42+00:00",
   "outcome": "managed",
   "rank": 3,
-  "id": "f10",
+  "id": "f9",
   "_key": [
    "prince",
    "20% ON $IWM $290 Puts @everyone Be ready for the flush!!"
@@ -135,7 +122,7 @@
   "ts": "2026-07-23T15:23:32+00:00",
   "outcome": "managed",
   "rank": 3,
-  "id": "f11",
+  "id": "f10",
   "_key": [
    "prince",
    "Up 48% on $IWM Puts  @everyone"
@@ -144,37 +131,11 @@
  },
  {
   "provider": "prince",
-  "text": "I'm gonna take a shot at these GOOGL $370c here 3.40 entry 2.90 stop",
-  "ts": "2026-07-23T16:13:09+00:00",
-  "outcome": "carded",
-  "rank": 5,
-  "id": "f12",
-  "_key": [
-   "prince",
-   "I'm gonna take a shot at these GOOGL $370c here 3.40 entry 2.90 stop"
-  ],
-  "channel": null
- },
- {
-  "provider": "prince_small",
-  "text": "In $AAPL calls at 0.82 and will add a stop limit for 0.60 @everyone",
-  "ts": "2026-07-23T16:13:15+00:00",
-  "outcome": "noise",
-  "rank": 1,
-  "id": "f13",
-  "_key": [
-   "prince_small",
-   "In $AAPL calls at 0.82 and will add a stop limit for 0.60 @everyone"
-  ],
-  "channel": null
- },
- {
-  "provider": "prince",
   "text": "IWM 290P 1.03 limit expires tomorrow",
-  "ts": "2026-07-23T16:13:22+00:00",
+  "ts": "2026-07-23T16:13:15+00:00",
   "outcome": "carded",
   "rank": 5,
-  "id": "f14",
+  "id": "f11",
   "_key": [
    "prince",
    "IWM 290P 1.03 limit expires tomorrow"
@@ -184,26 +145,13 @@
  {
   "provider": "prince",
   "text": "OUT of $GOOGL calls @everyone absolute horrible drop",
-  "ts": "2026-07-23T16:38:07+00:00",
+  "ts": "2026-07-23T16:16:19+00:00",
   "outcome": "managed",
   "rank": 3,
-  "id": "f15",
+  "id": "f12",
   "_key": [
    "prince",
    "OUT of $GOOGL calls @everyone absolute horrible drop"
-  ],
-  "channel": null
- },
- {
-  "provider": "prince",
-  "text": "OUT OF AAPL @everyone",
-  "ts": "2026-07-23T16:50:47+00:00",
-  "outcome": "managed",
-  "rank": 3,
-  "id": "f16",
-  "_key": [
-   "prince",
-   "OUT OF AAPL @everyone"
   ],
   "channel": null
  },
@@ -213,7 +161,7 @@
   "ts": "2026-07-23T16:50:47+00:00",
   "outcome": "managed",
   "rank": 3,
-  "id": "f17",
+  "id": "f13",
   "_key": [
    "prince",
    "Cut Out at 0.80 per contract @everyone"
@@ -226,23 +174,10 @@
   "ts": "2026-07-23T16:50:47+00:00",
   "outcome": "managed",
   "rank": 3,
-  "id": "f18",
+  "id": "f14",
   "_key": [
    "prince",
    "Sold all NVDA"
-  ],
-  "channel": null
- },
- {
-  "provider": "prince",
-  "text": "IWM 291P 20260724 @1.03",
-  "ts": "2026-07-23T18:16:58+00:00",
-  "outcome": "carded",
-  "rank": 5,
-  "id": "f19",
-  "_key": [
-   "prince",
-   "IWM 291P 20260724 @1.03"
   ],
   "channel": null
  }

@@ -520,31 +520,73 @@ def save_feed():
         pass
 
 
+FEED_SEEN_STORE = _P.CHANNELS / "_feed_seen.json"
+
+
+def _feed_sig(prov, text):
+    """A COARSE content signature: provider + first 40 alphanumerics of the whitespace-collapsed text.
+    This is what makes a re-capture recognisable. Providers' messages get re-scraped by the extension
+    days later (prince's 07-21 GOOGL entry reappeared on 07-23), sometimes with newlines flattened to
+    spaces or the text truncated — all of which change an exact-match key but NOT this signature. The
+    feed is "what's NEW", so a message whose signature was ever seen before is a repeat, not news."""
+    import re as _re
+    n = _re.sub(r"[^a-z0-9 ]", "", _re.sub(r"\s+", " ", (text or "").replace("\\n", " ")).strip().lower())
+    return prov + "|" + n[:40]
+
+
+def _load_feed_seen():
+    try:
+        d = json.loads(FEED_SEEN_STORE.read_text())
+        return set(d) if isinstance(d, list) else set()
+    except Exception:
+        return set()
+
+
+def _save_feed_seen():
+    try:
+        from safe_io import safe_write_json
+        # bound it: keep the most recent signatures (a set has no order, so cap by conversion)
+        safe_write_json(FEED_SEEN_STORE, list(FEED_SEEN)[-4000:], min_keep_ratio=0.0)
+    except Exception:
+        pass
+
+
 def _feed_note(channel, prov, text, outcome):
-    """Maintain the live feed ring. RECV opens a row; any later outcome for the same message upgrades
-    it (never downgrades). Chat with no provider mapping is skipped — the feed is provider signal, not
-    system noise."""
+    """Maintain the live feed ring. A message's FIRST appearance opens a row; later outcomes for the
+    same message upgrade it (never downgrade). A re-capture of a message seen on an earlier session —
+    same coarse signature — is suppressed, so the feed shows genuinely NEW provider activity, not the
+    extension re-scraping old history. Chat with no provider mapping is skipped."""
     # chip is the desk's OWN self-generating shadow provider — it does not "post messages", it emits
     # scalps, and it has a dedicated scalp log on the right rail. Letting its ~30/day auto-scalps into
     # the provider feed would bury the handful of human messages this panel exists to surface.
     if not prov or prov in ("?", "-", "SYSTEM", "chip") or not text:
         return
+    sig = _feed_sig(prov, text)
     badge, rank = _FEED_OUTCOME.get(outcome, (outcome.lower()[:8], 2))
-    key = (prov, (text or "")[:80])
-    row = next((r for r in reversed(FEED) if r.get("_key") == list(key)), None)
     now = datetime.now(ET).isoformat()
-    if row is None:
-        _FEED_SEQ[0] += 1
-        FEED.append({"id": f"f{_FEED_SEQ[0]}", "_key": list(key), "provider": prov,
-                     "text": (text or "")[:280], "ts": now, "outcome": badge, "rank": rank,
-                     "channel": channel})
-        del FEED[:-FEED_MAX]
-    elif rank >= row.get("rank", 0):
-        row["outcome"], row["rank"], row["ts"] = badge, rank, now
+    row = next((r for r in reversed(FEED) if r.get("_sig") == sig), None)
+    if row is not None:                                   # already on the feed today -> upgrade outcome
+        if rank >= row.get("rank", 0):
+            row["outcome"], row["rank"], row["ts"] = badge, rank, now
+            save_feed()
+        return
+    if sig in FEED_SEEN:                                  # seen before, not on today's feed -> RE-CAPTURE
+        return                                            # do not resurrect old history as "new"
+    FEED_SEEN.add(sig); _save_feed_seen()
+    _FEED_SEQ[0] += 1
+    FEED.append({"id": f"f{_FEED_SEQ[0]}", "_sig": sig, "provider": prov,
+                 "text": (text or "")[:280], "ts": now, "outcome": badge, "rank": rank,
+                 "channel": channel})
+    del FEED[:-FEED_MAX]
     save_feed()
 
 
 FEED = _load_feed()
+FEED_SEEN = _load_feed_seen()
+# Backfilled rows carry _key, live rows carry _sig — normalise so dedup works across the transition.
+for _r in FEED:
+    _r.setdefault("_sig", _feed_sig(_r.get("provider"), _r.get("text")))
+    FEED_SEEN.add(_r["_sig"])
 try:                       # keep the sequence monotonic across restarts
     _FEED_SEQ[0] = max((int(str(r.get("id", "f0"))[1:]) for r in FEED if str(r.get("id", "")).startswith("f")),
                        default=0)
@@ -3037,7 +3079,7 @@ class H(http.server.BaseHTTPRequestHandler):
                                     "now": datetime.now(ET).isoformat(),
                                     "sleeve": SLEEVE, "sources": SOURCES, "discipline": D.state(),
                                     "held": [h for h in HELD if h.get("status") == "held"],
-                                    "feed": [{k: v for k, v in r.items() if k not in ("_key", "rank")}
+                                    "feed": [{k: v for k, v in r.items() if k not in ("_key", "_sig", "rank")}
                                              for r in FEED[-45:][::-1]],
                                     "killed": V.killed_providers(), "day_override": _day_override_active(),
                                     "positions": orphans, "totals": _tot, "ibkr": IBKR,
