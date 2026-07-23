@@ -14,6 +14,20 @@ import json, sqlite3
 from datetime import datetime, timezone
 
 
+def _n(v, spec=".2f", dash="—", pre="", suf=""):
+    """Format a number, or return a dash. Every numeric field on this page can legitimately be NULL —
+    a trade that never resolved has no exit, an unparsed signal has no strike, an old row predates the
+    cost columns. Ten separate f-string guards is ten places to forget one, which is exactly what
+    happened: the page 500'd with "unsupported format string passed to NoneType" on the first trade
+    whose fields differed from the one I tested. One formatter, used everywhere, cannot be forgotten."""
+    if v is None:
+        return dash
+    try:
+        return f"{pre}{v:{spec}}{suf}"
+    except (TypeError, ValueError):
+        return dash
+
+
 def _fmt_t(iso, tz_offset_h=-4):
     if not iso:
         return "—"
@@ -57,12 +71,12 @@ def _ladder_story(t1, t2, t3, stop, peak, trough, plan):
         reached = (peak or -999) >= tgt
         gap = (tgt - (peak or 0))
         rows.append({"leg": name, "target_pct": tgt, "reached": reached,
-                     "detail": (f"peak {peak:+.0f}% cleared it" if reached
-                                else f"peak {peak:+.0f}% — missed by {gap:.0f}pp")})
+                     "detail": (f"peak {_n(peak,'+.0f')}% cleared it" if reached
+                                else f"peak {_n(peak,'+.0f')}% — missed by {_n(gap,'.0f')}pp")})
     rows.append({"leg": "STOP", "target_pct": -abs(stop or 0),
                  "reached": (trough or 0) <= -abs(stop or 0),
-                 "detail": (f"trough {trough:+.0f}% hit it" if (trough or 0) <= -abs(stop or 0)
-                            else f"trough {trough:+.0f}% held above it")})
+                 "detail": (f"trough {_n(trough,'+.0f')}% hit it" if (trough or 0) <= -abs(stop or 0)
+                            else f"trough {_n(trough,'+.0f')}% held above it")})
     return rows
 
 
@@ -120,7 +134,7 @@ def render(sid, db_path, book_row=None, life=None):
     # the money section — what was actually committed, and what came back
     money = f"""<div class=card><div class=h>money</div><div class=kv>
       <div><div class=k>contracts</div><div class=v>{qty if qty else '—'}</div></div>
-      <div><div class=k>entry fill</div><div class="v mono">${entry:.2f}</div></div>
+      <div><div class=k>entry fill</div><div class="v mono">{_n(entry,'.2f',pre='$')}</div></div>
       <div><div class=k>capital deployed</div><div class="v mono">{'$'+format(capital,',.0f') if capital else '—'}</div></div>
       <div><div class=k>at risk (1%)</div><div class="v mono">{'$'+format(risk,',.0f') if risk else '—'}</div></div>
       <div><div class=k>realised</div><div class="v mono {pcls}">{('$'+format(pnl,'+,.2f')) if pnl is not None else '—'}</div></div>
@@ -132,7 +146,7 @@ def render(sid, db_path, book_row=None, life=None):
     # the ladder — the actual answer to "why did the thesis fail"
     lrows = "".join(
         f"<tr><td><b>{l['leg']}</b></td>"
-        f"<td class=mono>{l['target_pct']:+.0f}%</td>"
+        f"<td class=mono>{_n(l['target_pct'],'+.0f')}%</td>"
         f"<td class='{'g' if (l['reached'] and l['leg']!='STOP') else ('r' if l['reached'] else 'd')}'>"
         f"{'REACHED' if l['reached'] else 'not reached'}</td>"
         f"<td class='d mono'>{l['detail']}</td></tr>" for l in legs)
@@ -148,7 +162,7 @@ def render(sid, db_path, book_row=None, life=None):
         <div class=bar><i style="left:0;width:{max(0,min(100,abs(trough or 0)/max(span,1)*100)):.0f}%;background:var(--r)"></i>
           <i style="right:0;width:{max(0,min(100,abs(peak or 0)/max(span,1)*100)):.0f}%;background:var(--g)"></i></div>
         <div class="sub mono" style="display:flex;justify-content:space-between;margin-top:3px">
-          <span class=r>trough {trough:+.0f}%</span><span class=g>peak {peak:+.0f}%</span></div>
+          <span class=r>trough {_n(trough,'+.0f')}%</span><span class=g>peak {_n(peak,'+.0f')}%</span></div>
       </div></div>"""
 
     # timeline
@@ -161,11 +175,11 @@ def render(sid, db_path, book_row=None, life=None):
 
     # the contract
     contract = f"""<div class=card><div class=h>contract</div><div class=kv>
-      <div><div class=k>leg</div><div class=v>{tk} {strike:.0f}{typ}</div></div>
+      <div><div class=k>leg</div><div class=v>{tk} {_n(strike,'.0f')}{typ or ''}</div></div>
       <div><div class=k>expiry</div><div class="v mono">{expiry or '—'}</div></div>
       <div><div class=k>delta / IV</div><div class="v mono">{f'{delta:.2f}' if delta else '—'} / {f'{iv:.1%}' if iv else '—'}</div></div>
       <div><div class=k>spread at entry</div><div class="v mono">{f'{spread:.1f}%' if spread else '—'}</div></div>
-      <div><div class=k>stop / T1 / T2 / T3</div><div class="v mono" style="font-size:13px">{stop_pct:.0f} · {t1:.0f} · {t2:.0f} · {t3:.0f}%</div></div>
+      <div><div class=k>stop / T1 / T2 / T3</div><div class="v mono" style="font-size:13px">{_n(stop_pct,'.0f')} · {_n(t1,'.0f')} · {_n(t2,'.0f')} · {_n(t3,'.0f')}%</div></div>
       <div><div class=k>tape at entry</div><div class="v mono">{score or '—'}</div></div>
     </div></div>"""
 
@@ -181,8 +195,8 @@ def render(sid, db_path, book_row=None, life=None):
 
     return f"""<!doctype html><html><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
-<title>{tk} {strike:.0f}{typ} — trade detail</title><style>{CSS}</style></head><body><div class=wrap>
-<h1>{tk} {strike:.0f}{typ} <span class="pill" style="background:{'rgba(34,197,94,.16)' if (pnl or 0)>0 else 'rgba(239,68,68,.16)'};color:var(--{'g' if (pnl or 0)>0 else 'r'})">{result or '—'}</span></h1>
+<title>{tk} {_n(strike,'.0f')}{typ or ''} — trade detail</title><style>{CSS}</style></head><body><div class=wrap>
+<h1>{tk} {_n(strike,'.0f')}{typ or ''} <span class="pill" style="background:{'rgba(34,197,94,.16)' if (pnl or 0)>0 else 'rgba(239,68,68,.16)'};color:var(--{'g' if (pnl or 0)>0 else 'r'})">{result or '—'}</span></h1>
 <div class=sub>{provider} · {sid} · <span class=mono>{_fmt_t(ts)}</span></div>
 <div class=sub style="margin-top:6px;font-style:italic;color:var(--dim)">{(raw or '')[:180]}</div>
 {money}{ladder}{tl}{contract}{checks}
