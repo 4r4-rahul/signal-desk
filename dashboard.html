@@ -934,6 +934,34 @@ function renderChipLive(chip,edge){
     a.slice(-4).reverse().map(e=>`<div style="margin-top:2px"><span style="color:var(--dim)">${e.t}</span> ${e.msg}</div>`).join('')+`</div>`;
   el.innerHTML=`<div class="stats-h">🤖 Chip — Live <span style="margin-left:auto;font-weight:500">${sess}</span></div>${score}${rows}${act}`;
 }
+// ── TRADE LIFECYCLE CHECKLIST ────────────────────────────────────────────────────────────────────
+// Three stages, because a trade is three decisions with different failure modes: is it tradeable,
+// is the plan being followed, and did we get what the plan promised. Colour carries the state so it
+// reads at a glance; the detail line carries the number so it can be argued with.
+const CHK={ok:['#22c55e','✓'],warn:['#f59e0b','!'],fail:['#ef4444','✕'],'n/a':['var(--dim)','·']};
+function chkRow(c){
+  const [col,ic]=CHK[c.state]||CHK['n/a'];
+  return `<div style="display:flex;gap:7px;align-items:baseline;padding:1px 0">
+    <span style="color:${col};font-weight:700;width:11px;flex:none;font-size:11px">${ic}</span>
+    <span style="flex:none;min-width:118px;font-size:11px">${c.label}</span>
+    <span class="mono" style="color:var(--dim);font-size:10.5px;flex:1">${c.detail||''}</span></div>`;
+}
+function chkStage(title, block){
+  if(!block||!block.items||!block.items.length) return '';
+  const s=block.summary||{};
+  const pill=(n,col,lbl)=>n?`<span style="color:${col};font-weight:700">${n}</span><span style="color:var(--dim)"> ${lbl}</span>`:'';
+  const head=[pill(s.ok,'#22c55e','ok'),pill(s.warn,'#f59e0b','warn'),pill(s.fail,'#ef4444','fail')].filter(Boolean).join(' · ');
+  const blocked=s.fail?`<div class="sub" style="color:#ef4444;font-size:10.5px">⛔ blocking: ${(s.blocking||[]).join(', ')}</div>`:'';
+  return `<div style="margin-top:7px">
+    <div style="display:flex;gap:8px;align-items:baseline;border-bottom:1px solid var(--bg2);padding-bottom:3px;margin-bottom:3px">
+      <span style="font-size:10px;text-transform:uppercase;letter-spacing:.7px;color:var(--muted);font-weight:700">${title}</span>
+      <span style="margin-left:auto;font-size:10.5px">${head}</span></div>
+    ${block.items.map(chkRow).join('')}${blocked}</div>`;
+}
+function chipChecksHTML(cr){
+  if(!cr) return '';
+  return chkStage('before entry', cr.checks);
+}
 function chipBookHTML(b){
   // The REAL paper book: contracts, dollars, and P&L by day/week/month. R-multiples are abstract —
   // "+0.34R" does not say whether that was $40 or $400, or how many contracts were on.
@@ -2011,6 +2039,7 @@ function renderChipWatchCard(s){
     </div></div>
     ${cr?chipVerdictHTML(cr):''}
     ${cr?chipReadyHTML(cr):''}
+    ${cr?chipChecksHTML(cr):''}
     ${cr?chipExtHTML(cr.extension):''}
     ${cr?chipProbsHTML(cr.probs):''}
     ${cr?chipMechHTML(cr.tape):''}

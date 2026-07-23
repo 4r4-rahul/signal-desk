@@ -617,6 +617,29 @@ def dte_choice(ticker, mech, now, expiries):
 _TAPE_WEIGHTS = {"VWAP": 0.35, "EMA": 0.25, "RSI": 0.25, "room": 0.15}   # market.tape_strength blend
 
 
+def _pre_checks(pq, mech, probs, ext, a, spot, now, smin):
+    """Assemble the pre-trade checklist from what the desk already computed. Reads only — it cannot
+    disagree with the card because it is derived from the same values the card shows."""
+    try:
+        import trade_checks as TC, chip_book as CB, exec_plan as EP
+        entry = (pq or {}).get("ask") or (pq or {}).get("mid")
+        eq = CB.equity()
+        qty, risk_ct, _ = CB.size_position(eq, entry, mech.get("stop_pct")) if entry else (0, None, "")
+        lad = None
+        if qty >= 1:
+            lp = EP.resolve_ladder(qty, mech.get("t1_pct"), mech.get("t2_pct"), mech.get("t3_pct"),
+                                   mech.get("stop_pct"))
+            lad = {**lp, "tests": EP.tests_t2_t3(lp)}
+        checks = TC.pre_trade(quote=pq, mech=mech, qty=qty,
+                              risk_usd=(qty * risk_ct) if (qty and risk_ct) else None,
+                              equity=eq, probs=probs, extension=ext, htf=a.get("htf"),
+                              news=None, session_min=smin, ladder=lad)
+        return {"stage": "pre", "items": checks, "summary": TC.summarise(checks),
+                "qty": qty, "equity": round(eq, 2)}
+    except Exception:
+        return None
+
+
 def build_chip_read(ind, mech, spot, pq, a, now, smin, strike, dte_tuple):
     """chip's REASONING block for a watch card: strike + DTE verdicts (why optimal), tape decomposition,
     fill quality, distance-to-trigger, and the would-be plan. Pure — takes the already-computed
@@ -743,7 +766,10 @@ def build_chip_read(ind, mech, spot, pq, a, now, smin, strike, dte_tuple):
         probs_b = None
     return {"available": True, "strike": strike_b, "dte": dte_b, "tape": tape_b,
             "fill": fill_b, "trigger": trig, "plan": plan_b, "regime_live": regime_live, "ready": ready,
-            "extension": ext_b, "probs": probs_b, "ladder": a.get("ladder")}
+            "extension": ext_b, "probs": probs_b, "ladder": a.get("ladder"),
+            # THE PRE-TRADE CHECKLIST — every dimension verified before money is committed, named and
+            # visible instead of scattered across five modules. `fail` means do not take it.
+            "checks": _pre_checks(pq, mech, probs_b, ext_b, a, spot, now, smin)}
 
 
 def build_live_read(ind, spot, side, sid, ts):
