@@ -275,6 +275,8 @@ def load_signals():
 SIGNALS_CAP = 350   # in-memory ceiling — mirrors the 250 disk window with headroom for kept-alive cards
 CHIP_LOG_KEEP = 24  # keep the last N completed chip scalps as the persistent per-provider trade-log
 SHADOW_TICK_BATCH = 40   # live shadows ticked per heavy lap, ROTATING so every one is covered (see below)
+UNPRICED_MAX_TICKS = 6      # heavy laps with no quote before a shadow is retired UNPRICED
+BASIS_SANITY_X = 8.0        # mark/basis ratio above which the BASIS is wrong, not the trade
 _SHADOW_RR = [0]         # rotation offset (list so the monitor loop can mutate it)
 
 
@@ -1311,6 +1313,22 @@ def monitor_loop():
                     if _e and str(_e) < today:
                         _s["status"] = "EXPIRED"
                         dirty = True
+                # ORPHANED SHADOWS. The tick list excludes CLOSED/TAKEN cards, so the moment a card is
+                # retired its shadow can never re-enter the loop that would END it — it stays "live"
+                # forever, and every consumer that counts open risk counts a position that is long gone.
+                # Two were orphaned this way. Retiring the CARD has to retire the SHADOW with it.
+                for _s in SIGNALS:
+                    _sh = _s.get("shadow") or {}
+                    if _sh.get("state") != "live" or _s.get("status") not in ("CLOSED", "TAKEN", "EXPIRED"):
+                        continue
+                    _sh["state"], _sh["ended_utc"] = "ended", now_utc
+                    _sh.setdefault("end_reason", f"card {_s.get('status','retired').lower()}")
+                    if not _sh.get("result"):
+                        _p = _sh.get("peak_net", _sh.get("peak", 0)) or 0
+                        _t = _sh.get("trough_net", _sh.get("trough", 0)) or 0
+                        _sh["result"] = ("WIN" if _p >= (_sh.get("t1_pct") or 999)
+                                         else "LOSS" if _t <= -abs(_sh.get("stop_pct") or 30) else "SCRATCH")
+                    dirty = True
             # ROUND-ROBIN, not "newest 20". The old `shadows[-20:]` silently starved every shadow beyond
             # the 20 most recent: on a busy multi-provider day the older ones stopped receiving path ticks
             # entirely, so their story just stopped being recorded mid-trade. Rotating covers ALL live
@@ -1330,6 +1348,26 @@ def monitor_loop():
                     sh, sg = s["shadow"], s["sig"]
                     if sh.get("state") in ("WIN", "LOSS"):        # migrate old resolved -> keep tracking the full life
                         sh["result"], sh["state"] = sh.get("result") or sh["state"], "live"
+                    # WE MANAGE THE TRADE, NOT THE PROVIDER. The desk sets its own stop the moment a
+                    # signal is carded, so a position that blows through it is CLOSED — whether or not the
+                    # provider ever says a word. Until now a shadow only ended on EXPIRY, so two prince
+                    # HIMS 36C positions sat "live" on the board at trough -92% against a 30% stop: our own
+                    # rule had been breached three times over and the card still showed it open.
+                    # Ends BEFORE T1 only. Once T1 fills the stop moves to breakeven and the runner is
+                    # managed by the trail, so an early exit there would truncate a trade that is still
+                    # legitimately running.
+                    _tr_net = sh.get("trough_net", sh.get("trough", 0)) or 0
+                    _pk_net = sh.get("peak_net", sh.get("peak", 0)) or 0
+                    _stop_p = sh.get("stop_pct") or 30
+                    if (sh.get("state") == "live" and _pk_net < (sh.get("t1_pct") or 999)
+                            and _tr_net <= -abs(_stop_p)):
+                        sh["state"], sh["ended_utc"] = "ended", now_utc
+                        sh["end_reason"] = f"our stop ({_stop_p:.0f}%) — trough {_tr_net:.0f}%"
+                        sh["result"] = sh.get("result") or "LOSS"
+                        if s.get("status") in ("NEW", "WATCHING"):
+                            s["status"] = "CLOSED"
+                        dirty = True
+                        continue
                     exp = sh.get("expiry") or _resolve_expiry(sg) or (s.get("opt") or {}).get("expiry")
                     if exp and exp < today:                       # contract expired -> END its life
                         sh["state"], sh["ended_utc"] = "ended", now_utc
@@ -1349,6 +1387,33 @@ def monitor_loop():
                         continue
                     q = MK.option_quote(sg["ticker"], str(sg["strike"]).split(".")[0], sg["type"], expiry=exp, ib=conn)
                     if not q or q.get("error") or q.get("mid") is None:
+                        # WE CANNOT MANAGE WHAT WE CANNOT PRICE. This branch used to `continue` in silence,
+                        # so a contract that never resolved sat on the board as an open managed position
+                        # forever — 6 of them, mark=None, path empty, peak/trough frozen at 0.0. Our stop can
+                        # never fire on a position with no quote, so calling it "live" is a lie the board
+                        # tells. Count the misses and retire it as UNPRICED, loudly, with the reason kept.
+                        sh["unpriced"] = int(sh.get("unpriced", 0)) + 1
+                        if sh["unpriced"] >= UNPRICED_MAX_TICKS:
+                            sh["state"], sh["ended_utc"] = "ended", now_utc
+                            sh["end_reason"] = (f"UNPRICED — no quote in {sh['unpriced']} attempts"
+                                                + (" (contract never resolved)" if not exp else f" (exp {exp})"))
+                            sh["result"] = sh.get("result") or "UNTRACKED"
+                            if s.get("status") in ("NEW", "WATCHING"):
+                                s["status"] = "EXPIRED"
+                            dirty = True
+                        continue
+                    sh.pop("unpriced", None)                      # a good quote clears the miss streak
+                    # BASIS SANITY. A strike correction repriced the contract but never the cost basis, so
+                    # prince_small's SMCI showed peak +3391%: ref 0.22 was a 31C, mark 7.2 a 25C. A mark that
+                    # far from the basis is a broken basis, not a 34-bagger — refuse to score it.
+                    if sh.get("ref") and q["mid"] / sh["ref"] > BASIS_SANITY_X:
+                        sh["basis_suspect"] = f"mark {q['mid']:.2f} is {q['mid']/sh['ref']:.0f}x basis {sh['ref']:.2f}"
+                        sh["state"], sh["ended_utc"] = "ended", now_utc
+                        sh["end_reason"] = "BASIS SUSPECT — " + sh["basis_suspect"]
+                        sh["result"] = sh.get("result") or "UNTRACKED"
+                        if s.get("status") in ("NEW", "WATCHING"):
+                            s["status"] = "EXPIRED"
+                        dirty = True
                         continue
                     pct = round((q["mid"] / sh["ref"] - 1) * 100, 1)
                     sh["now"] = pct

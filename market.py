@@ -83,6 +83,27 @@ def _ok(x):
     return x is not None and x == x and x > 0        # not None, not NaN, positive
 
 
+SNAP_MAX_PTS = 2.5      # how far a loose strike may be snapped to a listed one before we refuse
+
+
+def _snap_expiry(exp):
+    """A weekend expiry is always wrong — US options expire on trading days. Providers write the weekend
+    date routinely ("Jul 25" for the Jul 24 Friday). Roll back to the preceding Friday rather than
+    returning no contract at all, which is how AAPL 325C sat unpriced and unmanaged on the board."""
+    if not exp or len(str(exp)) != 8 or not str(exp).isdigit():
+        return exp
+    from datetime import date
+    e = str(exp)
+    try:
+        d = date(int(e[:4]), int(e[4:6]), int(e[6:]))
+    except ValueError:
+        return exp
+    if d.weekday() < 5:                       # Mon-Fri: already a trading day
+        return exp
+    d = d.fromordinal(d.toordinal() - (d.weekday() - 4))   # Sat->Fri, Sun->Fri
+    return d.strftime("%Y%m%d")
+
+
 def _resolve_option(ib, tk, strike, r, expiry):
     """Resolve+qualify the standard OCC contract once; cache explicit-expiry results (conId is stable)."""
     key = (tk, str(strike), r, expiry or "")
@@ -94,10 +115,28 @@ def _resolve_option(ib, tk, strike, r, expiry):
     today = datetime.now(timezone(timedelta(hours=-4))).strftime("%Y%m%d")
     exch = "CBOE" if tk in ("SPX", "SPXW", "VIX", "NDX", "RUT") else "SMART"
     tclass = "SPXW" if tk == "SPX" else ""
+    # PROVIDERS WRITE LOOSE CONTRACTS, AND THE DESK MUST STILL PRICE THEM. Two real misses found on the
+    # board, both silently unpriceable for days: prince's "NVDA 212C" (NVDA lists 210/212.5 — 212 is not a
+    # strike) and prince_small's "AAPL 325C Jul 25" (Jul 25 2026 is a SATURDAY; the contract is Jul 24).
+    # Neither is a parse error — it is how humans type. Snapping here fixes every call site at once.
+    expiry = _snap_expiry(expiry)
     base = Option(tk, expiry or "", float(strike), r, exchange=exch, tradingClass=tclass)
     cds = [cd.contract for cd in ib.reqContractDetails(base)]
     if not cds:
-        return None
+        # Exact strike is not listed -> ask for the whole expiry and take the NEAREST listed strike.
+        # Bounded: only accept a snap within SNAP_MAX_PTS, so "NVDA 212" -> 212.5 is fine but a
+        # badly-parsed strike is still refused rather than quietly repriced onto a different trade.
+        try:
+            probe = Option(tk, expiry or "", 0.0, r, exchange=exch, tradingClass=tclass)
+            allc = [cd.contract for cd in ib.reqContractDetails(probe)]
+        except Exception:
+            allc = []
+        want = float(strike)
+        near = [c for c in allc if abs(c.strike - want) <= SNAP_MAX_PTS]
+        if not near:
+            return None
+        snapped = min(near, key=lambda c: (abs(c.strike - want), c.strike))
+        cds = [c for c in allc if c.strike == snapped.strike]
     exp = expiry
     if not exp:
         exps = sorted(e for e in {c.lastTradeDateOrContractMonth for c in cds} if e >= today)
@@ -182,12 +221,23 @@ def option_quote(ticker, strike, right, expiry=None, ib=None):
         if opt is None:
             return {"error": "contract not found at IBKR"}
         exp = opt.lastTradeDateOrContractMonth
+        # If we snapped, SAY SO. A quote for a contract other than the one on the card is exactly the
+        # failure that produced a fabricated +3391% peak; the difference must travel with the price.
+        _snap = None
+        try:
+            if abs(float(opt.strike) - float(strike)) > 1e-9:
+                _snap = f"strike {strike} -> {opt.strike:g}"
+            if expiry and exp != str(expiry):
+                _snap = (_snap + "; " if _snap else "") + f"expiry {expiry} -> {exp}"
+        except Exception:
+            pass
         if own:                                       # transient connection -> snapshot, then clean up
             t = ib.reqMktData(opt, "106", False, False)
             ib.sleep(2.0)
             q = _read_ticker(t, exp)
             try: ib.cancelMktData(opt)
             except Exception: pass
+            if _snap and isinstance(q, dict): q["snapped"] = _snap
             return q
         t = _live_ticker(ib, opt)                     # persistent stream (pooled)
         q = _read_ticker(t, exp)
@@ -197,6 +247,7 @@ def option_quote(ticker, strike, right, expiry=None, ib=None):
                 q = _read_ticker(t, exp)
                 if q.get("mid") is not None:
                     break
+        if _snap and isinstance(q, dict): q["snapped"] = _snap
         return q
     except Exception as e:
         return {"error": str(e)}
