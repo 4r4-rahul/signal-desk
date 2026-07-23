@@ -1,0 +1,267 @@
+{
+  "version": "2026-07-23.1",
+  "companion_spec": "eval/provider_context.md",
+  "builds_on": "eval/message_taxonomy.md (19-type taxonomy) + eval/routing_corpus.jsonl (366 labelled). This file does NOT redefine types; it supplies per-provider dialect only.",
+  "usage": "Inject providers[<provider>] ONLY -- one object per parse call, never the whole file. `shared` (~250 tok) is small enough to always include. A single provider block is ~1.7-2.1k tokens; to halve that, strip the keys `unsure`, `sample` and `reliability` at injection time -- they are written for the human maintainer, not the parser. Do NOT strip `verbatim_evidence`: those quoted lines are the highest-value few-shot content in the file and are what make an exit like 'OUT of $GOOGL calls' recognisable.",
+  "confidence_legend": {
+    "M": "MEASURED - counted in this provider's own history, n stated",
+    "I": "INFERRED - consistent with evidence but n too small to be certain",
+    "G": "GUESS - plausible house style, no direct evidence; do not act alone on it"
+  },
+  "coverage_note": "Profiles built 2026-07-06..2026-07-23 from logs/inbound.log (text TRUNCATED at ~120 chars) + channels/*/live_signals.jsonl (~200 chars). No source in this repo holds a provider message longer than ~200 chars, so rules about message TAILS are weaker than rules about message HEADS.",
+  "excluded_providers": {
+    "mike": "out of scope for v1",
+    "sulker": "out of scope for v1",
+    "chip": "synthetic desk provider, always well-formed, needs no dialect model",
+    "?/unknown": "NOT a signal provider (AGORA ops bot + unmapped room chat). Drop before parsing. 33 msgs, 2 carded historically."
+  },
+
+  "shared": {
+    "hard_rules": [
+      "A PNL_UPDATE must never emit strike/expiry/premium. It MAY emit {ticker,right} for linking only.",
+      "An EXIT/TRIM/STOP must never create a position. No linkable position => orphan, flag the book, ask.",
+      "A WATCH must card even with premium=null; it is the anchor a later FILL attaches to.",
+      "Never link across providers, even prince <-> prince_small (see cross_post warning).",
+      "Discord edit footer ('(edited)' + 'Weekday, Month D, YYYY at H:MM AM') is NEVER an expiry and its digits are NEVER a strike or premium."
+    ],
+    "cross_post_warning": {
+      "conf": "I",
+      "n": 3,
+      "detail": "3 of prince_small's 59 distinct texts are verbatim prince texts re-posted 76-115 min later (GOOGL $385c watch 07-07 13:50:52 -> 15:06:55; the AAPL $315 pivot note; 'AAPL $300 JULY 10 Calls 0.85 entry'). Same author, two rooms. Carding both = DOUBLE real-money risk on one idea. Flag same-contract entries across these two providers within 3h as suspected duplicates; do not auto-merge."
+    }
+  },
+
+  "providers": {
+
+    "prince": {
+      "sample": {"recv": 120, "distinct": 100, "days": 14, "range": "2026-07-06..2026-07-23", "weight": "good - profile all categories"},
+      "shape": "Multi-line prose, one field per line. `$`-prefixed tickers AND strikes. `@everyone` sign-off on ~70% of msgs (noise token, strip it).",
+      "cues": {
+        "entry": ["In <TICKER> <strike>c/puts", "IN AT <px>", "im in at <px> per contract", "Getting in <TICKER> here @<px>", "Back in <TICKER>", "Swinging $X", "Also swinging $X", "Adding $X ... entry", "I'm gonna take a shot at these <TICKER> $<strike>c here", "From the LIVE: IM IN ...", "Filled now @everyone <px> for the <strike> puts", "<TICKER> <strike>c <Month D> <px> entry"],
+        "watch": ["Watching", "Watch", "Watch swings", "Watchimg (his recurring typo, 3x)", "Keeping an eye on", "looks nice for <px> per contract", "Limit order set", "Set a limit order for <px> ... didnt get any fill", "May enter today", "could possibly go today"],
+        "fill_of_prior_watch": ["IN AT <px>", "im in at <px> per contract", "Filled now", "Getting in <TICKER> here @<px>"],
+        "add": ["Adding <TICKER> ... at <px>", "Adding $<TICKER> $<strike>c <px> entry"],
+        "trim": ["Probably cutting half the <TICKER> calls (INTENTION, not a fill - do not reduce size on this alone)"],
+        "exit_full": ["OUT of $<TICKER> calls", "OUT OF <TICKER>", "Cutting $<TICKER>", "Cut Out at <px> per contract", "Profits locked im out"],
+        "stop_set": ["<px> stop limit", "<px> stop loss", "stop limit <px>", "stop loss <px>", "s/l <px>", "no stop yet (= stop is explicitly ABSENT, not unknown)"],
+        "pnl": ["Up N% on $<TICKER> calls", "N% ON $<TICKER> CALLS", "WE UP N%", "We are up N%", "Back up N%", "Down N% on <TICKER>"]
+      },
+      "numbers": {
+        "strike": {"conf": "M", "rule": "The `$`-prefixed number, or the number bound to c/p/call/put. `$` PREFIX WINS OVER ADJACENCY.", "trap": "'AAPL $300 JULY 10 Calls 0.85 entry' -- adjacency picks 10 (the day-of-month); the truth is 300. Never let a date component become a strike."},
+        "premium": {"conf": "M", "rule": "Labelled: `<n> entry`, `<n> fill`, `<n> limit`, `<n> limit buy`, `<n> per contract`, `@<n>`. Typically 0.85-3.40.", "trap": "'85c per contract' means $0.85 PREMIUM, not an 85-strike call. In 'Watch $GOOGL $385c July 10 / 85c per contract' the FIRST 385c is strike+right, the SECOND 85c is cents."},
+        "stop": {"denomination": "PREMIUM", "conf": "M", "n": 8, "band": [0.71, 0.85], "median": 0.80, "rule": "Stop is 15-29% BELOW the entry premium. Evidence (premium->stop): 1.81->1.29, 1.25->1.00, 3.10->2.50, 2.15->1.80, 3.00->2.20, 2.95->2.20, 3.40->2.90, 2.10->1.70.", "position": "The value appears on EITHER side of the stop keyword ('2.90 stop limit' 07-21 AND 'stop loss 2.20' 07-16). Disambiguate by the ratio band, not by word order.", "veto": "If a stop candidate is not within 0.6x-0.95x of the premium, it is NOT the stop -- it is a date or a price target. 'stop loss 7/17 expiry' and 'stop limit $359.59 first price target' are both misreads of this kind."},
+        "price_target": {"denomination": "UNDERLYING", "conf": "M", "n": 13, "rule": "Labelled 'Price target' / 'PRICE TARGET' / 'first price target' / 'target'. Always an underlying price level, NEVER a premium and NEVER the strike.", "danger": "|target-strike|/strike: median 0.95%, max 9.15%; 4 of 13 are EXACTLY EQUAL to the strike (PLTR 134C target 134; QQQ 700C target 700; AAPL 300C target 300; IWM 290P target 290). Magnitude CANNOT disambiguate -- only the label can.", "recovery_use": {"conf": "I", "rule": "When an entry states a target but NO strike, the target is the best available strike estimate (4/13 exact, 11/13 within 3%). Propose it, mark strike_source=inferred_from_target, and ASK. Do NOT silently card it."}},
+        "quantity": {"conf": "I", "rule": "Rarely stated. 'Limit order for 55 contracts at 1.30' -- 55 is QTY, 1.30 is premium, and there is no strike/right in that message at all (MUST_ASK)."}
+      },
+      "linking": {
+        "watch_to_fill_same_session_min": {"conf": "M", "n": 4, "obs": [2.6, 9.8, 14.0, 15.2], "max": 15.2, "window_recommended": 45, "why": "Every same-session prince fill landed within 16 min; 45 gives ~3x headroom without spanning a session."},
+        "cross_session": {"conf": "M", "n": 2, "obs_hours": [65.6, 144.0], "detail": "NVDA 210C 'Limit order set' 07-17 19:56 -> first P&L 07-20 13:31 (65.6h). GOOGL 370c watched 07-15 14:03 (2.04) -> entered 07-21 16:24 (3.40) = 6.0 days.", "window_recommended_days": 6, "requires": "message must NAME the ticker; cap at the watched contract's own expiry."},
+        "bare_anaphora": {"conf": "M", "rule": "40% of his explicit exits name NO ticker ('Cut Out at 0.80 per contract', 'Profits locked im out'). Resolve only if exactly ONE position is open; otherwise MUST_ASK.", "window_min": 30}
+      },
+      "exit": {
+        "priority": "HIGHEST - this is the failure that motivated this file",
+        "explicit_exit_rate": {"conf": "M", "rate": 0.33, "detail": "~5 explicit exits against ~15 identifiable entries. AMD 73C, PLTR 134C (+213%), HIMS 36C, TSLA 405C (+388%), MSFT 395C (+107%), GOOGL 385C, QQQ 705P, QQQ 705C (+40%), CELH 33C ALL went silent with no exit ever posted."},
+        "full_exit_phrases": ["OUT of", "OUT OF", "im out", "Profits locked im out", "Cut Out at", "Cutting $<TICKER>"],
+        "verbatim_evidence": [
+          "2026-07-23 16:16 'OUT of $GOOGL calls @everyone absolute horrible drop'  <- MISSED by the desk; dead position stayed live",
+          "2026-07-20 22:04 'Cutting $NVDA @everyone this market is wild'",
+          "2026-07-17 16:00 'Profits locked im out @everyone that was a grind but job done for me!!!'  (no ticker)",
+          "2026-07-15 15:34 'OUT OF AAPL @everyone'",
+          "2026-07-06 18:08 'Cut Out at 0.80 per contract @everyone'  (no ticker)"
+        ],
+        "case_sensitivity": {"conf": "M", "rule": "Match 'out' case-INSENSITIVELY. He writes OUT/OUT OF/out interchangeably in the same week."},
+        "not_an_exit": ["'Probably cutting half the SOFI calls today' (hedged intention)", "'First 15 has closed' (the 15-min candle, not a position)", "'We tapped the $134 price target and came right back down' (commentary)"],
+        "staleness_rule": {"conf": "I", "rule": "Because 2/3 of his positions never get an exit message, an exit message CANNOT be the only close path. Auto-flag any prince position with no message referencing it for > 1 trading day, or past its expiry, as STALE and ask."}
+      },
+      "reposts": {
+        "conf": "M",
+        "rate": 0.17,
+        "gap_range_min": [0.0, 4440],
+        "rule": "Dedupe horizon must be >= 74h (his GOOGL 370c entry re-appeared 07-21 -> 07-23, 45h later, and '50 on qqq calls' repeated at 74h).",
+        "re_entry_markers": ["Back in <TICKER>", "new day new setup", "same contract with a DIFFERENT premium"],
+        "evidence": "'Back in QQQ $722 puts here at 0.90, new day new setup' (07-07 15:17) is a genuine RE-ENTRY, not a repost of the 1.10 fill.",
+        "caution": "Log truncation at 120 chars makes long prose entries normalize differently across re-scrapes. Dedupe on the first ~100 chars, whitespace- and @mention-insensitive."
+      },
+      "pnl_updates": {"conf": "M", "median_per_active_day": 4, "max_per_day": 7, "monotonic": true, "use": "Dense and near-monotonic within a position (07-09 TSLA: 10,45,55,70,128,165,188). A P&L in the last 60 min is strong evidence the position is STILL OPEN. Absence of P&L for a full session is weak evidence it is gone.", "never": "must not mint strike/premium/expiry"},
+      "noise": ["bare '@everyone'", "macro/news paragraphs (NATO summit 07-08)", "chart narration ('full V shape recovery', '1H/4H/1D look better')", "'First 15 has closed.'", "congratulation posts", "'May enter today' (no ticker anywhere -> MUST_ASK, not a watch)"],
+      "reliability": {
+        "posts": "intentions AND fills, mixed",
+        "premium_achievable": {"conf": "M", "n": 4, "detail": "watch premium -> actual fill: 2.05->2.03 (-1%), 0.85->0.93 (+9%), 2.40->2.95 (+23%), 3.00->3.00 (0%). Aspirational by up to +23%; treat the watch premium as a plan, never as a fill."},
+        "edits": "rare; he re-posts rather than edits"
+      },
+      "unsure": ["Whether 'Cut Out at 0.80' was a real fill price -- the entry was 1.10 and the same message claims 'Was up 35%'. Exit PRICES from prince are unreliable; his exit FACT is reliable.", "'From the LIVE:' appears once (07-23). Treated as a transparent prefix meaning he announced it in voice first. n=1."]
+    },
+
+    "prince_small": {
+      "sample": {"recv": 62, "distinct": 59, "days": 12, "range": "2026-07-07..2026-07-23", "weight": "moderate - entries/watches/numbers solid; exit vocabulary thin (n=4)"},
+      "shape": "Same house prose as prince but looser and more anaphoric. `@everyone` sign-off on ~80% of msgs. Frequently omits the ticker AND strike in the fill.",
+      "cues": {
+        "entry": ["In $<TICKER> calls at <px>", "In <TICKER> <month> <day>", "In 1 contract at <px>", "IN AT <px> on <TICKER>", "<TICKER> <strike> <Month D> / <px> limit entry"],
+        "watch": ["Watching $<TICKER> $<strike>c", "Watch <TICKER> <strike>c <date> <px>", "I'm eyeing", "might be a play watching", "Waiting for entry", "STILL looking to get in", "Looking for an entry here", "Limit order been set for N contracts"],
+        "fill_of_prior_watch": ["In $<TICKER> calls at <px>", "In 1 contract at <px>", "IN AT <px> on <TICKER>", "In <TICKER> <month> <day> / <px> per contract"],
+        "add": [],
+        "trim": [],
+        "exit_full": ["Sold <TICKER> here at N%", "Sold <TICKER> calls as <px>", "Cutting <TICKER>", "selling here"],
+        "stop_set": ["stop loss <px>", "Stop limit <px>", "stop limit for <px>", "<px> stop", "I will implement a stop limit at <px>"],
+        "pnl": ["Up N% on $<TICKER> calls", "N% on $<TICKER> calls", "WE ARE UP N%", "Down N% on <TICKER>", "Back down N%"]
+      },
+      "numbers": {
+        "strike": {"conf": "M", "rule": "`$`-prefixed or bound to call/put. VERY OFTEN ABSENT from the fill message and recoverable only from the prior watch.", "trap": "'In SMCI july 31 / 1.67 per contract' (07-21) has NO strike -- 31 is the day of month. Truth: SMCI 25C, from 'Watching SMCI 25 calls July 31'. Never read a day-of-month as a strike."},
+        "premium": {"conf": "M", "rule": "`<n> entry`, `<n> limit entry`, `at <n>`, `<n> per contract`. Range observed 0.82-1.91.", "ranges": "May be a RANGE: '0.85-0.90 entry' (07-20). Store both bounds; the fill came at 0.90, the top."},
+        "stop": {"denomination": "PREMIUM", "conf": "M", "n": 5, "band": [0.73, 0.81], "median": 0.78, "rule": "Stop is 19-27% below the entry premium. Evidence (premium->stop): 1.03->0.80, 0.90->0.70, 0.82->0.60, 1.18->0.95, 1.10->0.85.", "position": "Value usually FOLLOWS the keyword ('stop limit for 0.60') but sometimes precedes ('0.95 stop'). Use the ratio band."},
+        "price_target": {"denomination": "UNDERLYING", "conf": "M", "n": 5, "danger": "|target-strike|/strike median 1.46%, max 2.64%; 1 of 5 exactly equal. Same confusability as prince.", "worst_case": "'303% on $SMCI calls ... My price target for today is $32.16' (07-22 14:00) is a PNL_UPDATE. 32.16 became a phantom strike; SMCI has no 32.16 strike (0.50 increments). A message whose leading token is a percentage can never mint a strike."},
+        "quantity": {"conf": "I", "rule": "'1 contract', '2 contracts'. In 'In 1 contract at 1.91' the 1 is QTY and 1.91 is the premium -- and there is no ticker at all (anaphoric to 'Watching NVDA 205 calls' 3 min earlier)."}
+      },
+      "linking": {
+        "watch_to_fill_same_session_min": {"conf": "M", "n": 5, "obs": [0.07, 2.9, 7.3, 52.1, 60.9], "median": 7.3, "max": 60.9, "window_recommended": 90, "why": "His distribution is much wider than prince's -- two of five fills came ~1h after the watch. 45 min would have missed AMZN 260C and AAPL 315C."},
+        "cross_session": {"conf": "M", "n": 1, "detail": "WMT 115C watched 07-15 14:23 -> 'Wmt calls are up over 120%' 07-20 22:20 = 127.9h, with 'STILL looking to get in' at 28.5h in between. n=1: treat 5 trading days as an observed maximum, not a safe default."},
+        "arrival_order_inversion": {"conf": "M", "n": 2, "severity": "high", "detail": "His messages reach the desk OUT OF ORDER. (a) SMCI: the anchoring watch ARRIVED 17.8h AFTER the fill it was supposed to anchor. (b) AAPL 07-08: the fill 'In $AAPL calls at 1.03' arrived 17:08, AFTER the 16:29-16:55 P&L run and after 'price target has been HIT selling here'. Link on the PROVIDER'S POST TIME, and re-run linkage when a late watch arrives."},
+        "bare_anaphora": {"conf": "M", "rule": "Fills routinely omit ticker+strike ('In 1 contract at 1.91'). Resolve against the most recent watch within 90 min with exactly one candidate; else MUST_ASK.", "window_min": 90}
+      },
+      "exit": {
+        "priority": "HIGHEST",
+        "explicit_exit_rate": {"conf": "I", "rate": 0.44, "detail": "~4 exits against ~9 identifiable entries. AMZN 260C (last seen +70%), SMCI 25C (last seen +340%) and the 07-23 AAPL 325C never got an exit."},
+        "full_exit_phrases": ["Sold <TICKER>", "Sold <TICKER> calls as <px>", "Cutting <TICKER>", "selling here"],
+        "verbatim_evidence": [
+          "2026-07-10 15:43 'Sold NVDA here at 84% @everyone'",
+          "2026-07-08 13:35 'Sold GOOGL calls as .31 @everyone'   (note: 'as' where he means 'at')",
+          "2026-07-14 17:06 'Cutting AAPL, didn't know NVDA was moving like that woulda been out otherwise.'",
+          "2026-07-08 16:55 'Up 83% on AAPL calls @everyone price target has been HITselling here. Moving onto the next trade!!'"
+        ],
+        "buried_exit_warning": {"conf": "M", "severity": "high", "rule": "His exits hide INSIDE what looks like a brag. The 07-08 message opens 'Up 83% on AAPL calls' -- classified on its head it is a PNL_UPDATE, but 'selling here' + 'Moving onto the next trade' make it a full EXIT. Scan the WHOLE message for exit verbs, never just the opening clause. Note also the missing space in 'HITselling' -- tokenize on case transitions."},
+        "not_an_exit": ["'I sold too early' / 'I sold too early. NVDA blowing' (07-10, regret commentary AFTER an exit already recorded 40 min earlier -- must not double-close)", "'woulda been out otherwise' (counterfactual)"],
+        "staleness_rule": {"conf": "I", "rule": "Same as prince: exits are optional for him. Flag positions untouched for >1 trading day."}
+      },
+      "reposts": {
+        "conf": "M",
+        "rate": 0.05,
+        "note": "Lowest repost rate of the profiled providers. Only 2 texts ever repeated (both WMT), at 18.7h-80.7h. A near-duplicate from prince_small is much more likely a genuine second post than a scrape artifact.",
+        "critical_negative": "A WATCH and its FILL are NOT duplicates even when they look similar. 'Watching $AAPL 325 call July 25 / 1.18 limit entry' (07-23 14:04) then 'In $AAPL calls at 0.82' (14:12) -- the desk deduped the fill as a repost of the watch. Different premium + different verb (Watching vs In) = different message, always."
+      },
+      "pnl_updates": {"conf": "M", "median_per_active_day": 3, "max_per_day": 7, "use": "Dense within a position (07-20 AMZN: 35,42,50,55,67,70). Recent P&L = position open. His P&L messages carry percentages up to 340% -- a leading 2-3 digit number followed by % is NEVER a strike or premium.", "never": "must not mint strike/premium/expiry"},
+      "noise": ["'$9 run in 30 mins is definitely what the higher time frames said'", "'We just need 1 trade. Just 1.'", "klipy.com GIF links", "'I sold too early'", "hype tails ('if you been struggling please make sure...')"],
+      "reliability": {
+        "posts": "watches then fills, and the fill price often differs materially from the watch",
+        "premium_achievable": {"conf": "M", "n": 5, "detail": "watch -> fill: 1.15/1.10->1.03 (-6..-10%), 1.35->1.91 (+41%), 0.85-0.90->0.90 (top of range), 1.50->1.30 (-13%), 1.18->0.82 (-31%). Deviation is LARGE and BIDIRECTIONAL (-31% to +41%). Never assume the watch premium is the fill.", "implication": "A fill whose premium differs >25% from the watch should still LINK (that is the observed norm) but must raise a price-drift flag -- it is also consistent with a silent strike change."},
+        "edits": "posts near-identical watches 25s apart with a changed premium (1.15 -> 1.10, 07-08 16:07:09/16:07:34) -- treat as an EDIT of the watch, not two watches."
+      },
+      "unsure": ["Whether the 07-23 14:12:17 / 14:12:19 messages ('AAPL 325C Jul 25 @0.82', 'AAPL 325C 07/25 @0.82') are provider text at all -- they look machine-normalized and arrived 3s and 5s after the real prose fill. Excluded from all counts. Worth confirming they are not test injections.", "Exit sample is n=4. The phrase list is probably incomplete; 'all out' / 'flat' / 'done' have NOT been observed from him but cannot be ruled out."]
+    },
+
+    "optionking": {
+      "sample": {"recv": 165, "distinct": 78, "days": 13, "range": "2026-07-06..2026-07-22", "weight": "good for ENTRIES (68 contract-bearing msgs); very weak for exits (n=3) and P&L (n=6)"},
+      "shape": "Single-line machine-readable template. Most parseable provider in the corpus. `@everyone` PREFIX (not sign-off) on essentially every entry; its presence is a strong ENTRY signal for him specifically.",
+      "template": "@everyone <TICKER> <strike><C|P> at <premium> [SL <n>%|SL <n>] [0DTE|1DTE|weekly expiry|MM/DD expiry|EOD] [lotto] [size note] [N cons]",
+      "cues": {
+        "entry": ["@everyone <TICKER> <strike>C at <px>", "swing call <TICKER> ...", "bare template with no verb at all"],
+        "watch": ["NONE OBSERVED - he has ZERO watch messages in 165. He posts entries only."],
+        "fill_of_prior_watch": ["N/A - no watches to fill"],
+        "add": ["Avg here..", "Avg here.. new avg is <px>"],
+        "trim": ["Left runner N cons now..", "secure some profit guys"],
+        "exit_full": ["Sold all <TICKER>", "sold all", "Sold all <TICKER> with N%"],
+        "stop_set": ["SL <n>%", "SL <n>", "SL.<n>%"],
+        "pnl": ["<TICKER> <px> now.. N% up guys..", "<TICKER> <strike>C up N% guys", "N% up guys"]
+      },
+      "numbers": {
+        "strike": {"conf": "M", "rule": "Immediately precedes C/P, no `$` prefix. SPX strikes are 4-digit (7500-7600) and sit in the same range as SPX index LEVELS he quotes in 'PT' -- only position in the template disambiguates.", "traps": ["'AAPL.330C at 1.30' -- period instead of space (07-21)", "'NVDA 200 at 0.10 lotto 0DTE' -- NO right letter at all; assume C only with an assumed_call flag", "'SPX 8520C' (07-20 14:02:08) was a typo, corrected to 7520C by edit 16s later. A strike >5% away from the index is a typo, not a contract."]},
+        "premium": {"conf": "M", "rule": "Follows the literal word `at`. Occasionally bare ('SPX 7515C 0.50 lotto EOD 2 cons', 07-22).", "missing": "Can be ABSENT: 'AMZN 255C lotto 1DTE.. small.size' (07-21) has no premium at all. Card it as an entry with premium=null rather than dropping it."},
+        "stop": {"denomination": "PERCENT_OF_PREMIUM (default) or ABSOLUTE_PREMIUM (rare)", "conf": "M", "n": 28, "rule": "`SL <n>%` = n percent of the entry premium -- 26 of 28 stop-bearing messages. `SL <n>` with NO percent sign = an absolute premium stop -- 2 of 28: 'SPX 7535C at 1.50 SL 1.00 0DTE' (07-13) and 'PLTR 130C at 1.20 SL 1.00 07/24 expiry' (07-22).", "never": "NEVER an underlying price. Observed values: 20% (17x), 30% (7x), 40% (1x), absolute 1.00 (2x).", "disambiguator": "If the SL number is bare and LESS than the premium, it is an absolute premium stop. If it is bare and >= 5x the premium, it is a misparse -- veto."},
+        "price_target": {"denomination": "UNDERLYING/INDEX LEVEL", "conf": "I", "n": 2, "rule": "Written `PT <n> <n>` -- TWO levels, ladder style: 'SPX 7575C at 1.80 SL 20%. PT 7575 7580' (07-10), 'SPX 7565C at 0.60 0DTE lotto.. PT 7560 8570' (07-14, where 8570 is a typo for 7570). n=2, so this is INFERRED. Never a premium."},
+        "quantity": {"conf": "M", "rule": "`N cons`, `1 con only`, `2 cons`. `size 0`, `small size`, `go small`, `lotto` are SIZE FLAGS, not contract fields -- 27 of 68 entries carry `lotto`."}
+      },
+      "linking": {
+        "watch_to_fill_same_session_min": {"conf": "M", "n": 0, "rule": "NOT APPLICABLE. He never posts watches, so there is no watch->fill link to make. Every contract-bearing message from him is a live entry."},
+        "bare_anaphora": {"conf": "M", "severity": "high", "rule": "His management messages name almost nothing: 'Avg here.. guys.. manage ur risk' (07-15, three positions open -> MUST_ASK), 'Left runner 2 cons now..' (07-20). Because he runs MANY concurrent positions, bare anaphora is usually UNRESOLVABLE. Default to MUST_ASK rather than the most-recent-position heuristic.", "window_min": 30},
+        "named_link": {"conf": "M", "rule": "When he DOES name the contract the link is unambiguous: 'SPX 7520C up 110% guys' (07-21), 'NVDA 205C up 50% secure some profit guys' (07-09). Use the named contract; if the desk does not hold it, log an orphan P&L -- do not open a position."}
+      },
+      "exit": {
+        "priority": "HIGHEST, and this is his largest gap",
+        "explicit_exit_rate": {"conf": "M", "rate": 0.04, "detail": "THREE exit messages against ~68 entries. He essentially does not announce closes."},
+        "full_exit_phrases": ["Sold all <TICKER>", "sold all"],
+        "verbatim_evidence": [
+          "2026-07-08 13:50 'Sold all NVDA'",
+          "2026-07-09 16:09 'Sold all SPY with 150%..'",
+          "2026-07-20 19:26 'SPY 500% up guys.. sold all'"
+        ],
+        "partial_exit_phrases": ["Left runner N cons now..", "secure some profit guys"],
+        "lifecycle_example": {"conf": "M", "detail": "07-20 SPY 745P is his only complete observed lifecycle: entry 'SPY 745P at 0.50 lotto 0DTE' 16:17 -> reposted 4x while OPEN (17:20, 18:40, 18:42) -> 'SPY 2.45 now.. 380% up guys..' 18:45 (0.50*4.9=2.45, arithmetic checks out) -> 'Left runner 2 cons now..' 18:45:36 (TRIM) -> 'SPY 500% up guys.. sold all' 19:26 (EXIT). Total 189 min."},
+        "staleness_rule": {"conf": "M", "severity": "critical", "rule": "With a 4% exit rate, exit messages CANNOT close his book. Use EXPIRY: 42 of 68 entries are tagged 0DTE/ODTE/EOD or 1DTE. Auto-close on expiry. For his 8 `weekly expiry` positions there is no close signal at all -- these are the ones that will rot on the board."}
+      },
+      "reposts": {
+        "conf": "M",
+        "rate": 0.53,
+        "severity": "critical",
+        "detail": "HIGHEST repost rate in the corpus -- 36 of 74 distinct texts repeat, 75 repeat-gaps ranging 0.8 min to 1460 min (24.3h). GOOGL 360C repeated 6x across 24h.",
+        "cause": "Scraper re-reads his still-visible message list; a repost means the position is STILL ON HIS BOARD, not that he re-entered.",
+        "dedupe_rule": {"conf": "M", "rule": "Same (ticker,strike,right) AND same premium AND same SL => REPOST. Dedupe horizon must be >= 25h."},
+        "re_entry_rule": {"conf": "M", "rule": "Same (ticker,strike,right) with a DIFFERENT premium => genuine second entry. Evidence: 'SPX 7550C at 1.10 lotto' 07-09 16:40 then 'SPX 7550C at 0.70 lotto...1 con only' 07-09 18:41; 'AAPL 315C at 0.90' 07-09 then 'AAPL 315C at 0.18 lotto' 07-10."},
+        "edits": {"conf": "M", "n": 2, "rule": "He is the only profiled provider who genuinely EDITS. 'SPX 8520C at 2.20' -> 'SPX 7520C at 2.20 ... (edited)' 16s later; 'META 660C at 2.50' -> 'META 665C at 2.50 ... (edited)' 2 min later. An edit RE-STRIKES the existing card; it must never mint a second position. SPX 8520C never existed."},
+        "status_restatement": {"conf": "I", "n": 1, "rule": "'Current holding @everyone / $SPCX 180C at 1.30 07/10' (07-06 22:53) restates an OPEN position. The 'Current holding' prefix means status, not entry."}
+      },
+      "pnl_updates": {"conf": "M", "count_total": 6, "days": 4, "severity": "high", "use": "He barely posts P&L (6 messages in 13 days, vs 39 for prince). ABSENCE of P&L is NOT evidence a position closed -- for him it is the norm. Do not use P&L silence as a close signal.", "mark_vs_entry_trap": {"conf": "M", "rule": "'SPY 2.45 now.. 380% up guys..' -- 2.45 is the CURRENT MARK of an open position, not a new entry at 2.45. Disambiguators: the word 'now', an accompanying %, and the ABSENCE of both a strike and the word 'at'."}, "never": "must not mint strike/premium/expiry"},
+      "noise": ["'AMZN about to pop up.' (commentary)", "'Microsoft Price Target Maintained With a $646.00/Share by Bernstein' (07-22 -- a NEWS HEADLINE containing a ticker-word, 'Price Target' and '$646.00'. Must never card. Detect on: analyst/firm name, 'Maintained', '/Share')", "'manage ur risk' / 'go small' (WARNING, attach as a risk flag)"],
+      "reliability": {
+        "posts": "fills/live alerts, not intentions -- the template IS the entry",
+        "premium_achievable": {"conf": "G", "rule": "Not measurable from text alone: he posts no watch->fill pairs. The desk's own IBKR verification is the only check. Treat his stated premium as a live quote at post time, subject to slippage on the 0DTE lottos."},
+        "size_discipline": "27 of 68 entries carry `lotto`, 'size 0', '1 con only' or 'small size'. These are real risk instructions and should propagate to sizing."
+      },
+      "unsure": ["His exit vocabulary rests on 3 messages. 'all out', 'cut', 'stopped' have NOT been observed from him -- but with n=3 that is far more likely a sampling gap than a real absence. Do not treat the phrase list as closed.", "Whether 'Avg here..' means an add at the current price or a restatement of a new blended basis. 'Avg here.. new avg is 1.10' (07-20) states the new BASIS; bare 'Avg here..' (07-15) states nothing and is MUST_ASK.", "PT semantics rest on n=2."]
+    },
+
+    "jmt": {
+      "sample": {"recv": 106, "distinct": 78, "days": 12, "range": "2026-07-06..2026-07-21", "weight": "INCLUDED for number conventions + entries (15 fully-specified template entries, the cleanest sample in the corpus). EXIT section is THIN (5 messages) and is flagged as a gap, not padded."},
+      "shape": "4-line template, no ticker, no verb. Sign-off '@JMoneyAlerts' + emoji on nearly every message (noise token). Went quiet after 2026-07-21 (posted a health message).",
+      "template": "<strike><C|P>\\n<premium>\\n<M/D | 0DTE | today>\\nSL:<underlying price>",
+      "cues": {
+        "entry": ["bare template", "Trying calls here", "Back in calls", "Swing play (suffix)"],
+        "watch": ["NONE OBSERVED - zero watch messages in 106."],
+        "add": ["Back at B/E gonna add more here"],
+        "trim": ["N% taking some off here", "N% gonna take N off here have N left", "leaving runners here", "gonna leave some runners", "Gonna take some profit here", "taking some profit here"],
+        "exit_full": ["Stopped out", "Stopped out here", "Stopped out on runners", "Selling my runners here at N%"],
+        "pnl": ["bare 'N%'", "N% SPY CALLS", "N% SPY PUTS", "Back up N%", "Back down to N%", "Down N%", "Up N%"]
+      },
+      "numbers": {
+        "ticker": {"conf": "M", "rule": "NEVER STATED. Always SPY. One exception in 106 messages: 'SPY 752C 1.97 7/15 SL:748.5' (07-14 17:51)."},
+        "strike": {"conf": "M", "rule": "First token, immediately followed by C or P. 3-digit, 740-760 range."},
+        "premium": {"conf": "M", "rule": "Second token / second line. 1.20-2.20 observed."},
+        "stop": {"denomination": "UNDERLYING (SPY price)", "conf": "M", "n": 15, "severity": "critical", "rule": "`SL:<n>` is an SPY PRICE, never a premium. All 15 observed values sit in 743.85-754.30 against an SPY spot near 750.", "directional_proof": "Calls: SL BELOW strike in 13/13 (750C SL:747.65, 760C SL:748, 755C SL:750.30, 756C SL:752.20...). Puts: SL ABOVE strike in 2/2 (740P SL:744.50, 752P SL:754.30). This directionality is only coherent for an UNDERLYING stop.", "veto": "|SL - strike| ranges 2.00-12.00 SPY points (median 3.80). If a jmt SL were read as a premium the implied stop would be ~450x the entry premium -- veto anything with SL/premium > 5.", "contrast": "This is the exact inverse of prince's 's/l 1.29', which IS a premium. Same keyword, 500x apart. NEVER share a stop rule between these two providers."},
+        "expiry": {"conf": "M", "rule": "Third token: `M/D`, `0DTE`, or `today`. Beware backfilled historical dates -- '580C 1.64 3/17' is four months in the past and must not open a position."},
+        "price_target": {"conf": "M", "rule": "He does not use 'price target'. A trailing bare number in commentary is an SPY LEVEL ('swinging my runners into tomorrow ... 756', 07-06)."},
+        "quantity": {"conf": "M", "rule": "Stated only in trims: 'gonna take 3 off here have 3 left' (07-09) -- implies a 6-lot."}
+      },
+      "linking": {
+        "watch_to_fill_same_session_min": {"conf": "M", "n": 0, "rule": "NOT APPLICABLE - no watches."},
+        "bare_anaphora": {"conf": "M", "severity": "low", "rule": "Nearly all his management is bare ('12%', '40%', 'taking some off here'). This is SAFE for him because he runs essentially ONE SPY position at a time -- unlike optionking. Resolve bare anaphora to his single open position; window 1 trading day.", "window_min": 480}
+      },
+      "exit": {
+        "priority": "HIGH but the sample is THIN - treat this list as INCOMPLETE",
+        "explicit_exit_rate": {"conf": "I", "detail": "5 exit-ish messages against 15 template entries. Every observed voluntary close is a STOP-OUT or a runner sale; no 'all out' / 'flat' / 'done' has ever been seen from him."},
+        "full_exit_phrases": ["Stopped out", "Stopped out here", "Stopped out on runners", "Selling my runners here at N%"],
+        "verbatim_evidence": [
+          "2026-07-08 16:11 'Stopped out on runners @JMoneyAlerts'",
+          "2026-07-15 18:30 'Stopped out here @JMoneyAlerts got to greedy'",
+          "2026-07-15 18:30 'Stopped out @JMoneyAlerts'",
+          "2026-07-15 18:30 'Selling my runners here at 40% gonna find an re entry @JMoneyAlerts'"
+        ],
+        "not_an_exit": {"conf": "M", "severity": "high", "items": ["'Down 28% if hourly closes below my SL I'm out' (07-15 16:15) -- CONDITIONAL. Contains 'I'm out' but he is still in. Do not close.", "'Down 20% and close below SL but I'm gonna hold till tomorrow' (07-14) -- he EXPLICITLY OVERRIDES his own stop. The desk must not auto-close a jmt position on the stated SL being hit.", "'leaving runners here' / 'take some off' are TRIMS, not exits."]},
+        "gap": "GAP ADMITTED: 4 distinct exit phrases from 5 messages is not enough to close the vocabulary. Any unrecognised jmt message containing out/sold/closed/flat/done near a percentage should be escalated, not dropped."
+      },
+      "reposts": {
+        "conf": "M",
+        "rate": 0.26,
+        "severity": "high",
+        "critical_negative": {"conf": "M", "rule": "DO NOT TEXT-DEDUPE HIS SHORT MESSAGES. Bare percentages recur naturally across days as genuinely NEW P&L updates: '20%' appeared 5 times spanning 12949 min, '40%' 3 times spanning 14354 min, '12%' 4 times. Text-identical does NOT mean duplicate for messages under ~14 characters. Restrict dedupe to texts >= 14 chars, or require a msg_id match."},
+        "burst_artifact": {"conf": "M", "rule": "The scraper replays his messages in ~0.4-minute bursts (nine messages replayed within one second on 2026-07-15T18:30:25). Gaps < 2 min on a long text are scrape artifacts; gaps > 2 min on a short numeric text are real."},
+        "re_entry_markers": ["Back in calls", "Trying calls here", "gonna find an re entry"]
+      },
+      "pnl_updates": {"conf": "M", "median_per_active_day": 5, "max_per_day": 7, "monotonic": false, "use": "Densest P&L of any provider and NON-monotonic -- he reports drawdowns honestly ('Back down to 30% still holding', 'Down 56% with the gap down gonna hold'). A recent bare percentage is strong evidence the single SPY position is open.", "never": "must not mint strike/premium/expiry. A bare 'N%' has no contract in it at all."},
+      "noise": ["'@JMoneyAlerts' + emoji sign-off (strip)", "'manage your trade' / 'ya on your own' (WARNING flag)", "'we still in?' (QUESTION)", "'What I'm watching for / I wanna see spy break and hold above this supply...' (COMMENTARY -- level talk in the same numeric range as his strikes)", "07-21 personal health update (CHAT)"],
+      "reliability": {
+        "posts": "fills, not intentions -- the template is the entry",
+        "stop_honoured": {"conf": "M", "severity": "high", "rule": "He states an SL and then routinely overrides it (07-14, 07-15). His SL is a reference level, not a commitment. Do not mirror it as a hard desk stop without your own risk rule."},
+        "edits": "none observed"
+      },
+      "unsure": ["Whether he is still active -- last message 2026-07-21, preceded by a health note. Profile may be stale.", "Exit vocabulary (see gap above).", "Whether he ever holds two SPY positions at once. The single-position assumption underpins his generous bare-anaphora window and was not exhaustively verified."]
+    }
+  }
+}

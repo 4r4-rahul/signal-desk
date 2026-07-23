@@ -98,6 +98,17 @@ def classify(text):
                  "leaving a few", "leave rest", "let it ride", "ride")
     full = has("all out", "fully out", "completely out", "out rest", "out the rest", "closing rest",
                "closing the rest", "sold out", "sold the rest", "im out", "i'm out", " out here", "flat ")
+    # "OUT of $GOOGL calls" — prince's standard full exit, and it was recognised NOWHERE. On 07-23 he
+    # posted "OUT of $GOOGL calls @everyone absolute horrible drop" while GOOGL had gapped 342 -> 320.8
+    # and the 370C was worth $0.01; the desk kept showing the position as live. An unrecognised exit is
+    # worse than a missed entry — a missed entry costs an opportunity, a missed exit shows a position
+    # that no longer exists. He writes it "OUT of", "OUT OF" and "im out" in the same week, so match
+    # case-insensitively (has() already lowercases).
+    # Deliberately NOT a bare "out of" substring: that fires on "out of the money" and "running out of
+    # time". Requires "out of" followed by a $TICKER, a ticker-shaped token, or a contract word.
+    if re.search(r"\bout\s+of\s+(?:the\s+)?(?:\$[a-z]{1,5}\b|[a-z]{2,5}\s+(?:calls?|puts?|c\b|p\b)|"
+                 r"(?:calls?|puts?|position|trade|it)\b)", low):
+        full = True
     # NOTE: "taking one"/"took one" mean BUYING a starter lot (an ENTRY), not trimming — Mike posts
     # entries like "mu 1000c 2.75 taking one". The real-trim variants ("taking one off", "took some")
     # are still caught by " off" / "taking some" / "took some".
