@@ -32,10 +32,15 @@ from datetime import datetime, timezone
 HORIZONS_MIN = (20, 60, 240, 1950)          # 20m, 1h, 4h(~session), ~5 sessions — minutes vs days
 MODEL = "claude-haiku-4-5"
 MAX_TOKENS = 900
-DAILY_CAP = 60                              # hard money stop; a thesis costs ~$0.005
+DAILY_CAP = 120                             # 74 slots/day + headroom. At 60 a 74-call day truncated at
+                                            # ~12:40 ET, producing a MORNING-BIASED sample — the exact
+                                            # time-of-day bias the no-blackout decision exists to avoid.
+PER_TICKER_CAP = 45                         # one ticker cannot starve the other
+EXPERIMENT = "v1-10min-grid"                # stamped on every thesis: a later prompt/model change becomes
+                                            # a separable COHORT instead of silent contamination
 MIN_CONVICTION = 0.55                       # below this we record it but flag it as low-conviction
 
-_STATE = {"day": None, "calls": 0}
+_STATE = {"day": None, "calls": 0, "by_ticker": {}}
 _LOCK = threading.Lock()
 
 # Strict tool schema. Every field that makes the claim falsifiable is REQUIRED — the model cannot return
@@ -83,14 +88,18 @@ def _today():
     return datetime.now(timezone.utc).strftime("%Y%m%d")
 
 
-def _budget_ok():
+def _budget_ok(ticker=None):
     with _LOCK:
         d = _today()
         if _STATE["day"] != d:
-            _STATE["day"], _STATE["calls"] = d, 0
+            _STATE["day"], _STATE["calls"], _STATE["by_ticker"] = d, 0, {}
         if _STATE["calls"] >= DAILY_CAP:
             return False
+        if ticker and _STATE["by_ticker"].get(ticker, 0) >= PER_TICKER_CAP:
+            return False
         _STATE["calls"] += 1
+        if ticker:
+            _STATE["by_ticker"][ticker] = _STATE["by_ticker"].get(ticker, 0) + 1
         return True
 
 
@@ -120,7 +129,7 @@ def propose(ticker, ctx, *, actor="llm", signal_id=None):
         if _num(ctx.get("spot")) is None:
             return None
         import llm_parse as LP
-        if not LP.available() or not _budget_ok():
+        if not LP.available() or not _budget_ok(ticker):
             return None
         raw = LP.call_tool(SYSTEM, THESIS_TOOL, _render(ticker, ctx), model=MODEL, max_tokens=MAX_TOKENS)
         if not raw or not isinstance(raw, dict):
@@ -154,6 +163,14 @@ def propose(ticker, ctx, *, actor="llm", signal_id=None):
             "low_conviction": conv < MIN_CONVICTION,
             "proposed_utc": datetime.now(timezone.utc).isoformat(),
             "model": MODEL, "horizons_to_grade": list(HORIZONS_MIN),
+            "experiment": EXPERIMENT, "slot_id": ctx.get("slot_id"),
+            # SNAPSHOT the conditioning variables. The experiment is deliberately UNCONDITIONAL, but
+            # recording the covariates turns one unconditional sample into an unlimited set of post-hoc
+            # conditional tests. Costs nothing now; unrecoverable if skipped.
+            "ctx_snapshot": {k: ctx.get(k) for k in
+                             ("session_min", "time_et", "vwap", "ema9", "ema21", "ema135", "ema315",
+                              "rsi", "day_range_pct", "rel_volume", "tape_score", "tape_grade",
+                              "chip_verdict", "regime_live", "news") if ctx.get(k) is not None},
         }
         # a directional call must be settleable, or it is commentary and we discard it
         if direction != "NONE" and (not th["horizon_min"] or th["target_pct"] is None
@@ -187,7 +204,7 @@ def _str(v):
     return v if isinstance(v, str) else ("" if v is None else str(v))
 
 
-def pending(limit=None, horizons=HORIZONS_MIN):
+def pending(limit=None, horizons=HORIZONS_MIN):   # limit MUST default None: see the warning below
     """Theses with at least one UNRESOLVED horizon — the queue Phase 3 works.
 
     Three corrections over the first version, each of which silently lost data:
@@ -213,3 +230,25 @@ def pending(limit=None, horizons=HORIZONS_MIN):
         return out
     except Exception:
         return []
+
+
+_INFLIGHT = threading.Semaphore(4)      # bounded: a slow API can never pile up threads on a 5s loop
+
+
+def propose_async(ticker, ctx, *, actor="llm", signal_id=None):
+    """Fire-and-forget proposal on a daemon thread.
+
+    propose() makes a blocking API call with a 12s timeout. chip_desk.scan_loop runs every 5 SECONDS, so
+    calling it inline would stall the entire scan — spot reads, cross detection, the book, everything.
+    The desk's standing rule is that the LLM never sits on the hot path; this is that rule applied here."""
+    if not _INFLIGHT.acquire(blocking=False):
+        return False                     # already saturated -> skip this slot rather than queue behind it
+    def _run():
+        try:
+            propose(ticker, ctx, actor=actor, signal_id=signal_id)
+        except Exception:
+            pass
+        finally:
+            _INFLIGHT.release()
+    threading.Thread(target=_run, daemon=True).start()
+    return True

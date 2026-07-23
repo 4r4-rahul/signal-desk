@@ -104,9 +104,13 @@ def _fwd_return(bars, t0_utc, horizon_min):
     return {"pct": (px1 / px0 - 1.0) * 100.0, "crossed_session": crossed}
 
 
-def resolve(ib=None, limit=500, write=True):
-    """Settle every pending thesis at every horizon. Writes one OUTCOME event per (thesis, horizon) into
-    the ledger. Idempotent: a thesis that already has OUTCOMEs is skipped by chip_thesis.pending()."""
+def resolve(ib=None, limit=None, write=True):   # limit=None is MANDATORY, not stylistic
+    """Settle every pending thesis at every horizon. One OUTCOME per (thesis, horizon); idempotent.
+
+    limit MUST stay None. events_of_kind is ORDER BY seq ASC — OLDEST FIRST — so any LIMIT means that once
+    the oldest N theses are resolved, pending() returns ZERO while unresolved theses exist beyond the
+    window. Verified: with 520 theses and limit=500, pending() returned 0 with 20 outstanding. At 74/day
+    that silently kills the experiment on session 7, with no error anywhere."""
     import chip_thesis as CT
     own = ib is None
     if own:
@@ -160,6 +164,14 @@ def resolve(ib=None, limit=500, write=True):
     return settled
 
 
+FLAG_HORIZONS = (20, 60)     # h=240/1950 are RECORDED but never flagged: a 1950-min window spans five
+                             # sessions, so day-blocking is formally invalid there (eff_n is ~26 over 29
+                             # sessions REGARDLESS of cadence, true independent count ~6). Week-blocking is
+                             # the right estimator and needs 15+ weekly blocks (~4 months) to mean anything.
+                             # Flagging 2 instead of 4 also lifts the Holm threshold 0.05/4 -> 0.05/2.
+# Per-ticker 20-min sd, MEASURED over 29 real sessions. Raw pooling lets QQQ's 1.75x dispersion dominate
+# and silently inflates eff_n; normalising puts both tickers on one scale.
+VOL_NORM_20M = {"SPY": 0.149, "QQQ": 0.261}
 MIN_BLOCKS_FOR_SIG = 15      # below ~15 independent days the block bootstrap's CI is far too narrow:
 MIN_EFF_N_FOR_SIG = 10       # measured false-positive rate on NULL data was 49.8% at 2 days, 27.2% at 3,
                              # 17.7% at 5, 9.9% at 10 — against a nominal 5%. The flag is what the module
@@ -199,7 +211,7 @@ def report(limit=2000):
         return {"n": 0, "horizons": {}, "note": "no resolved theses yet"}
     out = {}
     for h in HORIZONS_MIN:
-        vals, blocks, hits, declines = [], [], [], 0
+        vals, blocks, hits, declines, drift_terms = [], [], [], 0, []
         for e in evs:
             p = e["payload"]
             if int(p.get("horizon_min") or -1) != h:
@@ -207,13 +219,27 @@ def report(limit=2000):
             if p.get("direction") == "NONE":
                 declines += 1                     # recorded, and reported — but not a directional hit
                 continue
-            vals.append(p["signed_pct"])
+            # DRIFT DE-MEANING, free and necessary. QQQ's unconditional 20-min drift is -1.50 bp, so an
+            # always-short model books fake "edge" LARGER than the 8-week MDE. edge = signed - sign*mean(fwd)
+            # removes the market's own move using the unsigned fwd_pct already in every payload, on the same
+            # timestamps, so the regime cancels. This is the paired design — with no extra proposals.
+            sgn = 1.0 if p.get("direction") == "LONG" else -1.0
+            raw_signed = p["signed_pct"]
+            sd = VOL_NORM_20M.get(p.get("ticker"), 1.0) or 1.0
+            vals.append(raw_signed / sd)                 # vol-normalised so SPY and QQQ pool honestly
+            drift_terms.append((sgn, (p.get("fwd_pct") or 0.0) / sd))
             blocks.append(((p.get("proposed_utc") or e.get("ts") or "")[:10]) or "?")
             if p.get("hit") is not None:
                 hits.append(1 if p["hit"] else 0)
         if not vals:
             out[h] = {"n": 0, "declines": declines}
             continue
+        mean_raw = sum(vals) / len(vals)
+        # subtract mean(sign) * mean(fwd): the drift a zero-skill model of this long/short mix would book
+        if drift_terms:
+            msign = sum(x[0] for x in drift_terms) / len(drift_terms)
+            mfwd = sum(x[1] for x in drift_terms) / len(drift_terms)
+            vals = [v - msign * mfwd for v in vals]
         mean = sum(vals) / len(vals)
         try:
             bs = EH.block_bootstrap(vals, blocks) or {}
@@ -227,8 +253,10 @@ def report(limit=2000):
         # UNDERPOWERED unless there are enough INDEPENDENT days. Measured FPR on null data: 49.8% @ 2
         # blocks, 9.9% @ 10, 6.2% @ 40. Gating here is the difference between a flag that means something
         # and one that fires on noise one time in five.
-        powered = bool(nb >= MIN_BLOCKS_FOR_SIG and (eff or 0) >= MIN_EFF_N_FOR_SIG and se and se > 0)
+        powered = bool(h in FLAG_HORIZONS and nb >= MIN_BLOCKS_FOR_SIG
+                       and (eff or 0) >= MIN_EFF_N_FOR_SIG and se and se > 0)
         out[h] = {"n": len(vals), "declines": declines, "mean_signed_pct": round(mean, 4),
+                  "mean_before_demean": round(mean_raw, 4), "vol_normalised": True,
                   "se": round(se, 4) if se else None,
                   "ci": [round(lo, 4), round(hi, 4)] if lo is not None else None,
                   "eff_n": eff, "n_days": len(set(blocks)),

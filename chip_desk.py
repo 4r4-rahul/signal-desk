@@ -871,6 +871,75 @@ def _emit(conn, tkr, dec, mech, book, now, chip_read=None, bookkey=None, role="p
 
 
 # ─────────────────────────── scan loop (daemon thread) ───────────────────────────
+
+# ── THESIS EXPERIMENT (Phase 2/3) ────────────────────────────────────────────────────────────────────
+# A fixed 10-minute clock grid, SPY and QQQ STAGGERED by 5 minutes. 74 proposals/day, ~$0.37/day.
+#
+# WHY 10 MINUTES AND NOT 30, which was my first instinct: day-blocking only discounts an observation when
+# the HORIZON EXCEEDS THE SPACING. MEASURED lag-1 correlation of adjacent same-day 20-min forward returns
+# at 30-min spacing is -0.036 — there is nothing to discount, and eff_n tracks the proposal count 1:1 up
+# to ~25/day. My "days, not theses/day" reasoning was a correct lesson from the 33-second path data
+# (~36x overlap) applied outside its domain. Cost of that error: 340 sessions to breakeven resolution
+# instead of ~135. Nine months, for $0.24/day.
+#
+# STAGGERED because corr(SPY,QQQ) at the same timestamp is +0.919 — a simultaneous second ticker is worth
+# ~0.4 of an independent observation, a second time slot is worth ~1.0.
+#
+# A FIXED grid also balances time-of-day BY CONSTRUCTION, so no blackout is needed and none is applied:
+# time-of-day is undecidable on this desk's data, and excluding hours we cannot justify excluding would
+# bias the sample before it starts.
+THESIS_GRID = {"SPY": (9 * 60 + 35, 15 * 60 + 35), "QQQ": (9 * 60 + 40, 15 * 60 + 40)}
+THESIS_STEP_MIN = 10
+RESOLVE_EVERY_S = 900                       # settle pending theses every 15 min of session time
+_THESIS_FIRED = {}                          # {"YYYYMMDD": {(ticker, slot_min), ...}}
+_LAST_RESOLVE = [0.0]
+
+
+def _thesis_slot(ticker, now):
+    """The grid slot this ticker is currently in, or None. Fires on the first 5-second lap at/after the
+    slot rather than demanding an exact minute match, so a slow lap can never skip a slot."""
+    span = THESIS_GRID.get(ticker)
+    if not span:
+        return None
+    lo, hi = span
+    m = now.hour * 60 + now.minute
+    if m < lo or m > hi:
+        return None
+    return lo + THESIS_STEP_MIN * ((m - lo) // THESIS_STEP_MIN)
+
+
+def _maybe_thesis(tkr, ind, spot, now, a, mech):
+    """Propose once per grid slot, ASYNCHRONOUSLY. Unconditional by design — NOT gated on the tape score,
+    which measured silent-to-anti-predictive; conditioning a clean experiment on a known-bad filter would
+    make the sample unrepresentative. The covariates are snapshotted instead, so the conditioning can be
+    done post-hoc against the record."""
+    try:
+        slot = _thesis_slot(tkr, now)
+        if slot is None or not spot:
+            return
+        day = now.strftime("%Y%m%d")
+        fired = _THESIS_FIRED.setdefault(day, set())
+        if len(_THESIS_FIRED) > 3:                       # bounded: keep only the last few days
+            for k in sorted(_THESIS_FIRED)[:-3]:
+                _THESIS_FIRED.pop(k, None)
+        key = (tkr, slot)
+        if key in fired:
+            return
+        fired.add(key)
+        import chip_thesis as CT
+        ctx = {"spot": spot, "time_et": now.strftime("%H:%M"), "slot_id": f"{day}-{tkr}-{slot}",
+               "session_min": _session_min(now), "vwap": ind.get("vwap"), "rsi": ind.get("rsi"),
+               "ema9": ind.get("ema9"), "ema21": ind.get("ema21"),
+               "ema135": ind.get("ema135"), "ema315": ind.get("ema315"),
+               "recent_closes": [round(c, 2) for c in (ind.get("closes") or [])[-20:]],
+               "tape_score": a.get("score"), "tape_grade": a.get("grade"),
+               "chip_verdict": a.get("verdict"), "regime_live": a.get("regime"),
+               "news": (_news(tkr) or {}).get("state")}
+        CT.propose_async(tkr, ctx, signal_id=ctx["slot_id"])
+    except Exception:
+        pass
+
+
 def scan_loop():
     conn = None
     book = {}
@@ -916,6 +985,9 @@ def scan_loop():
                     aC = assess(tkr, ind, mech, smin, "C", crossed_up, crossed_down)
                     aP = assess(tkr, ind, mech, smin, "P", crossed_up, crossed_down)
                     strong_side = "C" if (aC.get("score") or 0) >= (aP.get("score") or 0) else "P"
+                    # THESIS EXPERIMENT: once per ticker per grid slot, async, direction-agnostic (the
+                    # model picks its own direction, so it is proposed from the ticker's state, not a side).
+                    _maybe_thesis(tkr, ind, spot, now, aC if strong_side == "C" else aP, mech)
                     exps = None
                     for side, a in (("C", aC), ("P", aP)):
                         key = f"{tkr}|{side}"
@@ -974,6 +1046,15 @@ def scan_loop():
                                 STATUS[key]["state"], STATUS[key]["reason"] = r
                 except Exception:
                     continue
+            # THESIS EXPERIMENT: settle whatever is now coverable, reusing THIS connection (never open a
+            # second IBKR handle on a 5-second loop). limit=None is mandatory — see horizon.resolve.
+            try:
+                if time.time() - _LAST_RESOLVE[0] > RESOLVE_EVERY_S:
+                    _LAST_RESOLVE[0] = time.time()
+                    import horizon as HZ
+                    HZ.resolve(ib=conn, limit=None, write=True)
+            except Exception:
+                pass
             try:
                 MK.reap_subs(conn, cap=80)
             except Exception:
