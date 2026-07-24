@@ -56,6 +56,17 @@ def _period(day, kind):
     return day
 
 
+def _seller_cells(rows):
+    """Uncapped {'day|ticker': pnl} over ALL resolved seller positions."""
+    agg = defaultdict(float)
+    for p in rows:
+        d = (p.get("closed") or p.get("day") or "")[:10]
+        tk = p.get("ticker")
+        if d and tk:
+            agg[f"{d}|{tk}"] += float(p.get("pnl") or 0)
+    return {k: round(v, 2) for k, v in agg.items()}
+
+
 def replay(arm=None):
     """Roll resolved positions into the $50k curve. arm=None => both; 'arm1'/'arm2' => that arm only."""
     rows = [p for p in _load()
@@ -93,6 +104,9 @@ def replay(arm=None):
         "n": n, "wins": len(wins), "win_rate": round(100.0 * len(wins) / n, 1) if n else None,
         "by_day": by["day"], "by_week": by["week"], "by_month": by["month"],
         "positions": out[-40:], "daily": {d: round(v, 2) for d, v in sorted(daily.items())},
+        # UNCAPPED per-(day,ticker) P&L, mirroring chip_book — `positions` above is capped at 40 for the
+        # payload and must never be the pairing's source. Key is "day|ticker" (JSON has no tuple keys).
+        "cells": _seller_cells(out),
         "note": "premium seller (long theta) — mirror of chip. Costs real: cross the spread, all-leg "
                 "commission. WIN-SMALL / rare-BIG-LOSS shape; 40 calm days will UNDER-sample the tail.",
     }
@@ -114,26 +128,23 @@ def paired_vs_chip():
     that day's shared-ticker diffs). The day remains the bootstrap block for significance; the per-cell
     pairing is what removes the universe-mismatch bias inside each block.
     """
+    # BOTH sides read the UNCAPPED `cells` map, never the display-capped trades/positions lists. Consuming
+    # the capped list is exactly what made the buyer read -11,948 (last 60 of 180 trades) while the book's
+    # own by_day said -49,863. Parse "day|ticker" keys back to (day, ticker) tuples.
+    def _parse(cells):
+        out = {}
+        for k, v in (cells or {}).items():
+            d, _, tk = k.partition("|")
+            if d and tk:
+                out[(d, tk)] = float(v or 0)
+        return out
+
     try:
         import chip_book as CB
-        chip_trades = CB.replay().get("trades", [])
+        buyer_cell = _parse(CB.replay().get("cells"))
     except Exception:
-        chip_trades = []
-
-    def _by_cell(rows, day_of, pnl_of, tk_of):
-        agg = defaultdict(float)
-        for r in rows:
-            d, tk = day_of(r), tk_of(r)
-            if d and tk:
-                agg[(d, tk)] += float(pnl_of(r) or 0)
-        return agg
-
-    seller_cell = _by_cell(replay()["positions"],
-                           lambda p: (p.get("closed") or p.get("day") or "")[:10],
-                           lambda p: p.get("pnl"), lambda p: p.get("ticker"))
-    buyer_cell = _by_cell(chip_trades,
-                          lambda t: (t.get("closed") or t.get("day") or "")[:10],
-                          lambda t: t.get("pnl"), lambda t: t.get("ticker"))
+        buyer_cell = {}
+    seller_cell = _parse(replay().get("cells"))
 
     # SHARED cells only: both sides traded that ticker that day.
     shared = sorted(set(seller_cell) & set(buyer_cell))

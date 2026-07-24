@@ -153,6 +153,15 @@ def _period(day, kind):
     return day
 
 
+def _cells(rows):
+    """Uncapped {'day|ticker': pnl} over ALL rows — the pairing's source of truth, immune to the
+    display cap on `trades`."""
+    agg = defaultdict(float)
+    for r in rows:
+        agg[f"{r['day']}|{r['ticker']}"] += r["pnl"]
+    return {k: round(v, 2) for k, v in agg.items()}
+
+
 def _summarise(rows, refused, daily, eq, peak, plans=None):
     n = len(rows)
     wins = [r for r in rows if r["pnl"] > 0]
@@ -183,6 +192,12 @@ def _summarise(rows, refused, daily, eq, peak, plans=None):
         "expectancy_usd": round((eq - START_EQUITY) / n, 2) if n else None,
         "by_day": by["day"], "by_week": by["week"], "by_month": by["month"],
         "trades": rows[-60:],
+        # UNCAPPED per-(day,ticker) P&L for the theta pairing. `trades` above is capped at 60 for the
+        # payload, and paired_vs_chip used to consume THAT — so on a 180-trade day it silently paired
+        # only the last 60 and reported the buyer at -11,948 when the book's own by_day said -49,863.
+        # Same cap-mistaken-for-full-data bug as the scalp log. This field aggregates ALL rows, and JSON
+        # cannot key on a tuple so the key is "day|ticker".
+        "cells": _cells(rows),
         "refused": refused[-20:], "n_refused": len(refused),
         # DOES THE BOOK ACTUALLY TEST ITS OWN TARGETS? A book of 1-lots can never learn whether its T2/T3
         # are any good, because the data to answer that is never generated. This is that number.
