@@ -42,6 +42,9 @@ _FIRED = {}                                             # day -> set of (ticker,
 # Decide the number from seller_stop_lab (replays real trades against the ladder), not by guessing —
 # and note there are ZERO losing trades so far, so a stop would not yet have fired on anything.
 SELLER_STOP_MULT = None
+# Within this many minutes of the 16:00 ET close, FORCE-flatten every open position (settling at
+# intrinsic if quotes are gone). 3 min, because the ladder's last snapshot lands ~2 min before the bell.
+EOD_SETTLE_MIN = 3
 
 
 def _load_open():
@@ -87,6 +90,61 @@ def _latest_chain(ticker):
         return chain, spot, ts, expiry
     finally:
         con.close()
+
+
+def _last_spot(ticker):
+    """Most recent ladder spot for a ticker, NO freshness gate — for settling an expired 0DTE after the
+    market has closed and the chain has gone cold."""
+    try:
+        import ladder_logger as LL
+        con = sqlite3.connect("file:" + str(LL.LADDER_DB) + "?mode=ro", uri=True)
+    except Exception:
+        return None
+    try:
+        r = con.execute("SELECT spot FROM ladder WHERE ticker=? ORDER BY ts_utc DESC LIMIT 1",
+                        (ticker,)).fetchone()
+        return r[0] if r else None
+    finally:
+        con.close()
+
+
+def _intrinsic_buyback(spot, p):
+    """Cost to SETTLE the spread at expiry given the final spot — intrinsic value, and deliberately NOT
+    quote-based. The quote mark returns None the moment a wing goes worthless (no bid), which is exactly
+    when a 0DTE position is deep in trouble — so the quote path left 4 breached condors hanging open,
+    unbooked, and the next-day fallback then assumed them expired WORTHLESS (full credit kept) when they
+    were losses. Intrinsic is the true expiry value and needs no quote: call = clamp(S-Ks, 0, width),
+    put = clamp(Ks-S, 0, width); a condor settles both."""
+    sp = p.get("spread") or {}
+    if spot is None:
+        return None
+
+    def _vert(short_k, long_k, right):
+        w = abs(long_k - short_k)
+        return max(0.0, min(spot - short_k, w)) if right == "C" else max(0.0, min(short_k - spot, w))
+
+    if p.get("kind") == "condor":
+        c, pu = sp.get("call") or {}, sp.get("put") or {}
+        if c.get("short_strike") is None or pu.get("short_strike") is None:
+            return None
+        return round(_vert(c["short_strike"], c["long_strike"], "C")
+                     + _vert(pu["short_strike"], pu["long_strike"], "P"), 3)
+    if sp.get("short_strike") is None:
+        return None
+    return round(_vert(sp["short_strike"], sp["long_strike"], sp.get("right")), 3)
+
+
+def _settle_all_orphans(open_rows, now):
+    """Market is closed: every still-open position is an expired 0DTE that never got flattened intraday.
+    Settle each at intrinsic vs the last spot the ladder holds for it, and book it. Returns [] — nothing
+    survives past its own expiry. This is the backstop for the intraday EOD flatten (see _manage_open),
+    and what recovers positions orphaned by a worthless-wing None-quote or a restart across the close."""
+    now_iso = now.astimezone(timezone.utc).isoformat()
+    for p in open_rows:
+        spot = _last_spot(p["ticker"])
+        bb = _intrinsic_buyback(spot, p)
+        _resolve(p, bb, "expiry_settle", now_iso, close_legs=[{"settle": "intrinsic", "spot": spot}])
+    return []
 
 
 def _chip_side(ticker):
@@ -204,24 +262,40 @@ def _manage_open(open_rows, now, day, session_min):
     """Mark & manage every open position; move resolved ones to seller_book. Returns the still-open list."""
     still = []
     mins_to_close = max(0, 390 - session_min)
+    now_iso = now.astimezone(timezone.utc).isoformat()
     for p in open_rows:
-        if p.get("day") != day:                                  # a stale prior-day position -> force EOD
-            _resolve(p, buyback=None, trigger="stale_eod", now=now.astimezone(timezone.utc).isoformat())
+        # PRIOR-DAY ORPHAN — a 0DTE that never settled. Book it at INTRINSIC vs the last spot, not the
+        # old "stale_eod, buyback=None" which kept full credit and turned breached losers into wins.
+        if p.get("day") != day:
+            _resolve(p, _intrinsic_buyback(_last_spot(p["ticker"]), p), "expiry_settle_late", now_iso,
+                     close_legs=[{"settle": "intrinsic"}])
             continue
         chain, spot, ts, _exp = _latest_chain(p["ticker"])
+        sp = p["spread"]
+        buyback, close_legs = None, None
+        if chain:
+            if p["kind"] == "condor":
+                m_c = _mark_vertical(chain, "C", sp["call"]["short_strike"], sp["call"]["long_strike"])
+                m_p = _mark_vertical(chain, "P", sp["put"]["short_strike"], sp["put"]["long_strike"])
+                both = m_c and m_p and m_c["buyback"] is not None and m_p["buyback"] is not None
+                buyback = (m_c["buyback"] + m_p["buyback"]) if both else None
+                close_legs = [m_c, m_p] if (m_c and m_p) else None
+            else:
+                m = _mark_vertical(chain, sp["right"], sp["short_strike"], sp["long_strike"])
+                buyback = m["buyback"] if m else None
+                close_legs = [m] if m else None
+        # EOD FLATTEN — force a close in the final minutes, and settle at INTRINSIC when the quote mark
+        # is unusable (a worthless wing has no bid -> buyback None). This is the exact gap that left 4
+        # breached condors open past the close: the quote mark was None, so manage() just held them, then
+        # the loop stopped at 16:00 and they were orphaned. Never rely on a quote to close a 0DTE.
+        if mins_to_close <= EOD_SETTLE_MIN:
+            s = spot if spot is not None else _last_spot(p["ticker"])
+            bb = buyback if buyback is not None else _intrinsic_buyback(s, p)
+            _resolve(p, bb, "eod", now_iso,
+                     close_legs=close_legs or [{"settle": "intrinsic", "spot": s}])
+            continue
         if not chain:
             still.append(p); continue
-        sp = p["spread"]
-        if p["kind"] == "condor":
-            m_c = _mark_vertical(chain, "C", sp["call"]["short_strike"], sp["call"]["long_strike"])
-            m_p = _mark_vertical(chain, "P", sp["put"]["short_strike"], sp["put"]["long_strike"])
-            both = m_c and m_p and m_c["buyback"] is not None and m_p["buyback"] is not None
-            buyback = (m_c["buyback"] + m_p["buyback"]) if both else None
-            close_legs = [m_c, m_p] if (m_c and m_p) else None
-        else:
-            m = _mark_vertical(chain, sp["right"], sp["short_strike"], sp["long_strike"])
-            buyback = m["buyback"] if m else None
-            close_legs = [m] if m else None
         action, pnl_per_ct, reason = SE.manage(p["credit"], buyback, mins_to_close, p["legs"],
                                                stop_mult=SELLER_STOP_MULT)
         if action in ("take_profit", "eod", "stop"):
@@ -257,6 +331,12 @@ def scan_loop():
             now = datetime.now(ET)
             smin = (now.hour * 60 + now.minute) - (9 * 60 + 30)
             if now.weekday() >= 5 or not (0 <= smin <= 390):
+                # MARKET CLOSED — but positions must never hang open past their 0DTE expiry. Settle any
+                # still-open ones at intrinsic (this is what recovers a position orphaned by a worthless
+                # wing or a restart across the close). No-op once the book is flat.
+                orphans = _load_open()
+                if orphans:
+                    _save_open(_settle_all_orphans(orphans, now))
                 time.sleep(30); continue
             day = now.strftime("%Y-%m-%d")
             now_iso = now.astimezone(timezone.utc).isoformat()
