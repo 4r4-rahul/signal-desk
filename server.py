@@ -51,6 +51,29 @@ except Exception:
 
 
 _SELLER_CACHE = {"ts": 0.0, "data": None}
+_TEDGE_CACHE = {"ts": 0.0, "data": None}
+
+
+def _ticker_edge_cached():
+    """Per-ticker buy-vs-sell edge (win%/avg win/avg loss by ticker × day/week/month), cached ~30s and
+    period-capped so the payload stays bounded as history grows — recent buckets are what get reviewed."""
+    import time as _t
+    if _t.time() - _TEDGE_CACHE["ts"] < 30 and _TEDGE_CACHE["data"] is not None:
+        return _TEDGE_CACHE["data"]
+    try:
+        import ticker_edge as TE
+        e = TE.edge()
+        caps = {"day": 15, "week": 10, "month": 12}     # keep the last N buckets per granularity
+        for kind, cap in caps.items():
+            keep = set(e["periods"][kind][:cap])
+            e["periods"][kind] = e["periods"][kind][:cap]
+            for side in ("buy", "sell"):
+                e[side][kind] = {p: v for p, v in e[side][kind].items() if p in keep}
+        data = e
+    except Exception:
+        data = None
+    _TEDGE_CACHE.update(ts=_t.time(), data=data)
+    return data
 
 
 def _seller_snap():
@@ -3185,6 +3208,7 @@ class H(http.server.BaseHTTPRequestHandler):
                                     "calibration": _sc_cal, "exit_quality": _sc_exit,
                                     "provider_edge": _provider_edge_cached(), "chip": _chip,
                                     "seller": _seller_snap(),
+                                    "ticker_edge": _ticker_edge_cached(),
                                     # A frozen book must announce itself. sync_outcomes swallowed a
                                     # malformed record for a whole session and the only symptom was a
                                     # P&L that stopped moving — which reads as "quiet day", not "broken".

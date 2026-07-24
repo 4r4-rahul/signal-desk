@@ -675,7 +675,21 @@ def _shadow_outcome(e):
             "realized_usd": None, "r_multiple": None, "return_pct": _f(sh.get("result_pct")),
             "entry_px": sh.get("ref"), "entry_fill_px": _f(sh.get("fill")), "exit_px": None,
             "peak_pct": _f(sh.get("peak")), "trough_pct": _f(sh.get("trough")),
-            "hold_secs": None, "opened_utc": sh.get("start_utc"), "closed_utc": sh.get("ended_utc")}
+            # hold_secs was hard-None, so EVERY chip trade reported a 0-minute hold. Compute it from the
+            # shadow's own start/end so the book (and the new scalp-detail hold field) are truthful.
+            "hold_secs": _secs_between(sh.get("start_utc"), sh.get("ended_utc")),
+            "opened_utc": sh.get("start_utc"), "closed_utc": sh.get("ended_utc")}
+
+
+def _secs_between(a, b):
+    """Whole seconds between two ISO timestamps, or None if either is missing/unparseable."""
+    if not a or not b:
+        return None
+    try:
+        from datetime import datetime as _dt
+        return max(0, int((_dt.fromisoformat(b) - _dt.fromisoformat(a)).total_seconds()))
+    except Exception:
+        return None
 
 
 def _entry_from_closed(r):

@@ -489,6 +489,7 @@
     <div id="chiplive" class="stats"></div>
     <div id="chipledger" class="stats"></div>
     <div id="sellerbook" class="stats"></div>
+    <div id="tickeredge" class="stats"></div>
     <div id="daypnl" class="stats"></div>
     <div id="drawdown" class="stats"></div>
     <div id="calibration" class="stats"></div>
@@ -1403,15 +1404,36 @@ function chipBookHTML(b){
   if(!b||!b.n) return `<div class="sub" style="color:var(--dim)">paper book $${(b&&b.equity||50000).toLocaleString()} · no resolved trades yet</div>`;
   const pc=b.pnl>=0?'#22c55e':'#ef4444';
   const row=(p)=>`<tr><td class="mono">${p.period}</td><td class="mono" style="text-align:right;color:${p.pnl>=0?'#22c55e':'#ef4444'}">${p.pnl>=0?'+':''}$${Math.round(p.pnl).toLocaleString()}</td><td class="mono" style="text-align:right;color:var(--dim)">${p.n}</td><td class="mono" style="text-align:right;color:var(--dim)">${p.win_rate==null?'—':p.win_rate+'%'}</td></tr>`;
-  const tbl=(title,arr)=>!arr||!arr.length?'':`<div style="flex:1;min-width:150px"><div class="sub" style="color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:.5px">${title}</div>
-     <table style="width:100%;font-size:11px;border-collapse:collapse">${arr.slice(-6).map(row).join('')}</table></div>`;
+  // AUDITED: header + a TOTAL row that sums the column, so the periods reconcile to the book. If the
+  // sum of the buckets does NOT equal the book's own P&L, flag it red — a silent mismatch is how a
+  // reporting bug hides. No slice(-6) truncation now; the panel scrolls so nothing is quietly dropped.
+  const tbl=(title,arr)=>{
+    if(!arr||!arr.length) return '';
+    const tot=arr.reduce((a,p)=>({pnl:a.pnl+(p.pnl||0),n:a.n+(p.n||0),wins:a.wins+(p.wins||0)}),{pnl:0,n:0,wins:0});
+    const wr=tot.n?Math.round(100*tot.wins/tot.n):null;
+    const reconciles=Math.abs(tot.pnl-(b.pnl||0))<1;         // buckets must sum to the book
+    return `<div style="flex:1;min-width:160px"><div class="sub" style="color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:.5px">${title} <span style="color:var(--dim)">(${arr.length})</span></div>
+     <div style="max-height:180px;overflow-y:auto"><table style="width:100%;font-size:11px;border-collapse:collapse">
+       <tr style="color:var(--dim);font-size:9px"><td>period</td><td style="text-align:right">P&L</td><td style="text-align:right">n</td><td style="text-align:right">win</td></tr>
+       ${arr.slice().reverse().map(row).join('')}
+       <tr style="border-top:2px solid var(--line);font-weight:700"><td class="mono">TOTAL</td>
+         <td class="mono" style="text-align:right;color:${reconciles?(tot.pnl>=0?'#22c55e':'#ef4444'):'#f59e0b'}" title="${reconciles?'reconciles to book':'DOES NOT match book P&L $'+Math.round(b.pnl)}">${tot.pnl>=0?'+':''}$${Math.round(tot.pnl).toLocaleString()}${reconciles?'':' ⚠'}</td>
+         <td class="mono" style="text-align:right">${tot.n}</td><td class="mono" style="text-align:right">${wr==null?'—':wr+'%'}</td></tr>
+     </table></div></div>`;
+  };
+  const periods=chipFold('chipbook-periods',false)
+    ? `<div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:6px">${tbl('by day',b.by_day)}${tbl('by week',b.by_week)}${tbl('by month',b.by_month)}</div>`
+    : '';
+  const pHead=`<div onclick="toggleFold('chipbook-periods')" style="cursor:pointer;user-select:none;margin-top:7px;font-size:10px;color:var(--muted)">
+     <span style="display:inline-block;width:9px;transform:rotate(${chipFold('chipbook-periods',false)?90:0}deg);transition:transform .18s">▸</span>
+     by day / week / month <span style="color:var(--dim)">— audited, reconciles to book</span></div>`;
   return `<div class="sub" style="display:flex;gap:14px;flex-wrap:wrap;align-items:baseline">
       <b style="font-size:17px">$${b.equity.toLocaleString(undefined,{minimumFractionDigits:2})}</b>
       <b style="color:${pc}">${b.pnl>=0?'+':''}$${Math.round(b.pnl).toLocaleString()} (${b.return_pct>=0?'+':''}${b.return_pct}%)</b>
       <span class="mono" style="color:var(--dim)">start $${b.start.toLocaleString()} · risk/trade $${Math.round(b.risk_per_trade).toLocaleString()} · dd ${b.drawdown_pct}%</span>
     </div>
     <div class="sub mono" style="color:var(--dim)">${b.n} trades · ${b.wins}W/${b.losses}L · win ${b.win_rate}% · avg win ${b.avg_win==null?'—':'$'+b.avg_win} · avg loss ${b.avg_loss==null?'—':'$'+b.avg_loss} · PF ${b.profit_factor==null?'—':b.profit_factor} · exp ${b.expectancy_usd==null?'—':'$'+b.expectancy_usd}/trade${b.n_refused?' · '+b.n_refused+' refused on size':''}</div>
-    <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:6px">${tbl('by day',b.by_day)}${tbl('by week',b.by_week)}${tbl('by month',b.by_month)}</div>`;
+    ${pHead}${periods}`;
 }
 // The scalp-log time was the raw UTC HH:MM off the ISO string, so a scalp that closed 12:32 ET read
 // "16:32" and the last one of the day read "20:02" — 8pm, hours after the close, which is meaningless
@@ -1615,6 +1637,78 @@ function renderSeller(s){
     <div style="font-size:9px;color:var(--dim);margin-top:5px">win-small / rare-big-loss · 40 calm days under-sample the tail</div>`;
   el.innerHTML = fld.html + (fld.open ? body
     : `<div style="font-size:10.5px;color:var(--dim);padding:2px 2px 4px">${b.n} closed · ${money(b.pnl)} · tap to expand</div>`);
+}
+// ── PER-TICKER EDGE — BUY vs SELL ────────────────────────────────────────────────────────────────
+// The scoreboard the owner asked for: for each ticker in the universe, its win%, avg win, avg loss on
+// the BUY side (chip) and the SELL side (seller), at day / week / month granularity. Answers "which
+// names are worth buying premium on vs selling premium on" — they are usually not the same names.
+let _edgeGran = localStorage.getItem('edgeGran')||'day';    // day | week | month
+let _edgePer = {day:null, week:null, month:null};           // selected period per granularity ('' = latest)
+function setEdgeGran(g){ _edgeGran=g; localStorage.setItem('edgeGran',g); refresh(); }
+function setEdgePer(p){ _edgePer[_edgeGran]=p; refresh(); }
+function renderTickerEdge(te){
+  const el=document.getElementById('tickeredge'); if(!el) return;
+  if(!te||!te.universe){ el.innerHTML=''; return; }
+  const gran=_edgeGran, pers=(te.periods||{})[gran]||[];
+  const per = _edgePer[gran] || pers[0] || null;            // default = latest bucket
+  const buy=(te.buy||{})[gran]||{}, sell=(te.sell||{})[gran]||{};
+  const B=(buy[per]||{}), S=(sell[per]||{});
+  const money=v=>v==null?'<span style="color:var(--dim)">—</span>':(v>=0?'+$':'-$')+Math.abs(v).toLocaleString();
+  const winCol=w=>w==null?'var(--dim)':w>=55?'#22c55e':w<=45?'#ef4444':'var(--fg)';
+  const granBtn=(g,l)=>`<span onclick="setEdgeGran('${g}')" style="cursor:pointer;padding:1px 6px;border-radius:4px;${gran===g?'background:var(--line);color:var(--fg);font-weight:600':'color:var(--dim)'}">${l}</span>`;
+  const perOpts = pers.map(p=>`<option value="${p}"${p===per?' selected':''}>${p}</option>`).join('');
+  // one ticker row: BUY block | divider | SELL block. A cell with no trades that period reads faint "·".
+  const cell=(s)=>{ if(!s||!s.n) return `<td colspan="3" style="text-align:center;color:var(--dim)">·</td>`;
+    return `<td style="text-align:right;color:${winCol(s.win_pct)};font-weight:600">${s.win_pct==null?'—':s.win_pct+'%'}<span style="color:var(--dim);font-weight:400;font-size:9px"> n${s.n}</span></td>`
+         + `<td style="text-align:right;color:#22c55e">${s.avg_win==null?'<span style="color:var(--dim)">—</span>':'$'+s.avg_win.toLocaleString()}</td>`
+         + `<td style="text-align:right;color:#ef4444">${s.avg_loss==null?'<span style="color:var(--dim)">—</span>':'-$'+Math.abs(s.avg_loss).toLocaleString()}</td>`; };
+  const rows=(te.universe||[]).map(tk=>`<tr style="border-top:1px solid var(--line)">
+      <td style="font-weight:700;padding-right:6px">${esc(tk)}</td>
+      ${cell(B[tk])}
+      <td style="width:8px;border-left:1px solid var(--line)"></td>
+      ${cell(S[tk])}
+    </tr>`).join('');
+  // totals across the universe for the period
+  const sum=(o)=>{let n=0,w=0,net=0;Object.values(o).forEach(s=>{n+=s.n||0;w+=s.wins||0;net+=s.net||0;});
+    return {n, win:n?Math.round(100*w/n):null, net};};
+  const tb=sum(B), ts=sum(S);
+  const fld=foldHead('tickeredge','📊','Per-Ticker Edge — Buy vs Sell',
+    `buy ${tb.win==null?'—':tb.win+'%'} · sell ${ts.win==null?'—':ts.win+'%'} (${gran})`, false);
+  const body=`
+    <div style="display:flex;gap:8px;align-items:center;margin:5px 0 6px;flex-wrap:wrap;font-size:11px">
+      <span style="color:var(--dim)">granularity</span>${granBtn('day','Day')}${granBtn('week','Week')}${granBtn('month','Month')}
+      <span style="margin-left:auto;color:var(--dim)">period</span>
+      <select onchange="setEdgePer(this.value)" style="font-size:10px;background:var(--panel,#1a1a1a);color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:1px 3px">${perOpts||'<option>—</option>'}</select>
+    </div>
+    <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:10.5px" class="mono">
+      <thead>
+        <tr style="color:var(--muted)">
+          <th></th>
+          <th colspan="3" style="text-align:center;color:#c4b5fd;border-bottom:1px solid var(--line)">BUY · chip (buy premium)</th>
+          <th></th>
+          <th colspan="3" style="text-align:center;color:#7dd3fc;border-bottom:1px solid var(--line)">SELL · seller (sell premium)</th>
+        </tr>
+        <tr style="color:var(--dim);font-size:9px">
+          <th style="text-align:left">ticker</th>
+          <th style="text-align:right">win%</th><th style="text-align:right">avg win</th><th style="text-align:right">avg loss</th>
+          <th></th>
+          <th style="text-align:right">win%</th><th style="text-align:right">avg win</th><th style="text-align:right">avg loss</th>
+        </tr>
+      </thead>
+      <tbody>${rows}
+        <tr style="border-top:2px solid var(--line);font-weight:700">
+          <td>ALL</td>
+          <td style="text-align:right;color:${winCol(tb.win)}">${tb.win==null?'—':tb.win+'%'}<span style="color:var(--dim);font-weight:400;font-size:9px"> n${tb.n}</span></td>
+          <td colspan="2" style="text-align:right;color:${winCol(tb.win)}">net ${money(tb.net)}</td>
+          <td></td>
+          <td style="text-align:right;color:${winCol(ts.win)}">${ts.win==null?'—':ts.win+'%'}<span style="color:var(--dim);font-weight:400;font-size:9px"> n${ts.n}</span></td>
+          <td colspan="2" style="text-align:right;color:${winCol(ts.win)}">net ${money(ts.net)}</td>
+        </tr>
+      </tbody>
+    </table></div>
+    <div style="font-size:9px;color:var(--dim);margin-top:5px">win% green ≥55 / red ≤45 · avg win/loss are $ per trade · a ticker with no trades that ${gran} shows ·</div>`;
+  el.innerHTML = fld.html + (fld.open ? body
+    : `<div style="font-size:10.5px;color:var(--dim);padding:2px 2px 4px">buy ${tb.win==null?'—':tb.win+'%'} vs sell ${ts.win==null?'—':ts.win+'%'} · tap to expand</div>`);
 }
 function renderChipLedger(sigs, book){
   // Standalone CHIP-ONLY scalp results log (kept separate from real tastytrade trades until go-live).
@@ -2917,6 +3011,7 @@ async function refresh(){
     renderChipLive(d.chip,d.provider_edge);
     renderChipLedger(d.signals, (d.chip||{}).book);
     renderSeller(d.seller);
+    renderTickerEdge(d.ticker_edge);
     renderCalibration(d.calibration);
     renderExitQuality(d.exit_quality);
     renderProviderEdge(d.provider_edge);

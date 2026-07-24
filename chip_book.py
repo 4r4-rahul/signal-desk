@@ -28,6 +28,16 @@ from datetime import datetime, timezone
 
 import deskpaths as _P
 
+
+def _secs_between(a, b):
+    """Whole seconds between two ISO timestamps, or None if either is missing/unparseable."""
+    if not a or not b:
+        return None
+    try:
+        return max(0, int((datetime.fromisoformat(b) - datetime.fromisoformat(a)).total_seconds()))
+    except Exception:
+        return None
+
 # BUDGET RAISED 50k -> 250k when the universe went to 10 tickers (owner's call, 2026-07-24).
 # The binding reason is NOT risk appetite, it is EXECUTABILITY of the runner discipline: at $50k the
 # most expensive ticker (TSLA, ~$130 risk/contract) sized to just 3 contracts, and exec_plan degrades
@@ -85,6 +95,31 @@ def replay(con=None):
         import db as DB
         con = sqlite3.connect(str(DB.DB_PATH))
     try:
+        return _summarise(*_build_rows(con))
+    finally:
+        if own:
+            try: con.close()
+            except Exception: pass
+
+
+def trades_all(con=None):
+    """EVERY resolved chip trade, uncapped — the same rows replay() builds before its 60-row display cap.
+    Backs the per-ticker edge box, which needs per-trade win/loss, not just the recent window."""
+    own = con is None
+    if own:
+        import db as DB
+        con = sqlite3.connect(str(DB.DB_PATH))
+    try:
+        return _build_rows(con)[0]
+    finally:
+        if own:
+            try: con.close()
+            except Exception: pass
+
+
+def _build_rows(con):
+    """The core replay loop, factored out so replay() and trades_all() share ONE source of truth."""
+    if True:
         eq = peak = START_EQUITY
         rows, refused, plans = [], [], []
         daily = defaultdict(float)
@@ -121,7 +156,9 @@ def replay(con=None):
                 "return_pct": round(float(ret), 2), "r": round(float(r or 0), 3),
                 "pnl": round(pnl, 2), "equity_after": round(eq, 2),
                 "result": result, "peak_pct": peak_pct, "trough_pct": trough_pct,
-                "hold_min": round((hold or 0) / 60.0, 1),
+                # Fall back to opened->closed when hold_secs is absent, so old rows recorded before the
+                # hold_secs fix still show a real duration instead of 0m.
+                "hold_min": round((hold if hold else _secs_between(opened, closed) or 0) / 60.0, 1),
             })
             # POST-CLOSE checklist: what we learn once it is done — realised dollars on the contract
             # count actually held, exit vs peak, whether the plan that RAN was the plan intended, and
@@ -132,11 +169,7 @@ def replay(con=None):
                 rows[-1]["checks"] = {"stage": "post", "items": _pc, "summary": TC.summarise(_pc)}
             except Exception:
                 pass
-        return _summarise(rows, refused, daily, eq, peak, plans)
-    finally:
-        if own:
-            try: con.close()
-            except Exception: pass
+        return rows, refused, daily, eq, peak, plans
 
 
 def _period(day, kind):
