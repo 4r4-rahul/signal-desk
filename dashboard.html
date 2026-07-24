@@ -842,22 +842,31 @@ function renderSources(src,nowIso,ibkr){
   const isMute=k=>{const t=Date.parse(src[k].last_signal_iso||0);
     return freshestRelay>0 && (!t || (freshestRelay-t)>MUTE_LAG_MS);};
   const darkAge=k=>(Date.parse(nowIso)-Date.parse(src[k].last_beat||0))/1000;
-  const stateOf=k=>darkAge(k)>180?'dark':(!isLive(k)?'stale':(!isHealthy(k)?'blind':(isMute(k)?'mute':'live')));
-  const liveN=keys.filter(k=>stateOf(k)==='live').length;   // truly RECEIVING, not just tab-open
-  const RANK={live:4,mute:3,blind:2,stale:1,dark:0}, DOT={live:'#22c55e',mute:'#f97316',blind:'#f59e0b',stale:'#6b7280',dark:'#ef4444'};
+  // chip is a SERVER-SIDE DAEMON, not a watched browser tab: there is no tab to reload, and it only
+  // beats when it EMITS a scalp, so a quiet stretch is normal rather than an outage. Telling the
+  // operator to "reload tab" for it is advice they cannot act on. It gets its own state and is excluded
+  // from the watched-provider count, the dark alarm and the extension-outage banner.
+  const isLocal=k=>(src[k].provider||k)==='chip';
+  const stateOf=k=>isLocal(k)?'local'
+    :(darkAge(k)>180?'dark':(!isLive(k)?'stale':(!isHealthy(k)?'blind':(isMute(k)?'mute':'live'))));
+  const liveN=keys.filter(k=>stateOf(k)==='live').length;
+  const watched=keys.filter(k=>!isLocal(k)).length;   // chip is not an extension-watched channel   // truly RECEIVING, not just tab-open
+  const RANK={live:5,local:4,mute:3,blind:2,stale:1,dark:0}, DOT={live:'#22c55e',local:'#a78bfa',mute:'#f97316',blind:'#f59e0b',stale:'#6b7280',dark:'#ef4444'};
   keys.sort((a,b)=>(RANK[stateOf(b)]-RANK[stateOf(a)])||((src[b].count||0)-(src[a].count||0)));
-  el.innerHTML=extensionOutageHTML(src,nowIso)+`<div class="rail-h">📡 Data feeds <span class="rail-n">${liveN}/${keys.length} providers</span></div>`+ib+keys.map(k=>{
+  el.innerHTML=extensionOutageHTML(src,nowIso)+`<div class="rail-h">📡 Data feeds <span class="rail-n">${liveN}/${watched} providers</span></div>`+ib+keys.map(k=>{
     const s=src[k], stt=stateOf(k);
     const hrs=Math.max((Date.parse(nowIso)-Date.parse(s.first||nowIso))/3.6e6,0.05);
     const rate=s.count?(s.count/hrs).toFixed(1):'0';
     const last=s.last_signal?`${ago(s.last_signal_iso,nowIso)} · ${s.last_signal}`:'no signal yet';
     const key=s.provider||k;
     const tip={live:'live — receiving & reading Discord (click to mute)',
+               local:'local engine — chip runs server-side, not in a browser tab. Nothing to reload; it beats when it emits a scalp.',
                dark:'🔴 NO HEARTBEAT — the browser has throttled this tab. Messages are NOT reaching the desk. RELOAD IT.',
                mute:'⚠ READING but NOT RELAYING — the tab sees Discord yet posts nothing to the desk. RELOAD this channel tab.',
                blind:'⚠ tab is open but NOT reading Discord — scrape broke, reload the channel',
                stale:'stale — window not sending (minimized/closed?)'}[stt];
-    const tag={live:'',dark:'<small style="color:#ef4444;font-weight:800">DARK — reload tab</small>',
+    const tag={live:'',local:'<small style="color:#a78bfa">local engine</small>',
+              dark:'<small style="color:#ef4444;font-weight:800">DARK — reload tab</small>',
               mute:'<small style="color:#f97316;font-weight:700">not relaying — reload tab</small>',
               blind:'<small style="color:var(--amber)">not reading</small>',
                stale:'<small style="color:var(--amber)">stale</small>'}[stt];
