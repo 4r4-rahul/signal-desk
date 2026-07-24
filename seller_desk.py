@@ -58,27 +58,28 @@ def _save_open(rows):
 
 def _latest_chain(ticker):
     """Build a chain [{strike,right,delta,bid,ask,mid,iv}] from the ladder logger's most recent fresh
-    snapshot for `ticker`. Returns (chain, spot, ts) or ([], None, None)."""
+    snapshot for `ticker`. Returns (chain, spot, ts, expiry) or ([], None, None, None)."""
     try:
         import ladder_logger as LL
         con = sqlite3.connect("file:" + str(LL.LADDER_DB) + "?mode=ro", uri=True)
     except Exception:
-        return [], None, None
+        return [], None, None, None
     try:
         ts = con.execute("SELECT MAX(ts_utc) FROM ladder WHERE ticker=?", (ticker,)).fetchone()
         if not ts or not ts[0]:
-            return [], None, None
+            return [], None, None, None
         ts = ts[0]
         age = (datetime.now(timezone.utc) - datetime.fromisoformat(ts.replace("Z", "+00:00"))).total_seconds()
         if age > FRESH_SEC:
-            return [], None, None
+            return [], None, None, None
         rows = con.execute(
-            "SELECT strike, right, bid, ask, mid, iv, delta, spot FROM ladder "
+            "SELECT strike, right, bid, ask, mid, iv, delta, spot, expiry FROM ladder "
             "WHERE ticker=? AND ts_utc=?", (ticker, ts)).fetchall()
         chain = [{"strike": r[0], "right": r[1], "bid": r[2], "ask": r[3], "mid": r[4],
                   "iv": r[5], "delta": r[6]} for r in rows]
         spot = rows[0][7] if rows else None
-        return chain, spot, ts
+        expiry = rows[0][8] if rows else None      # which expiry these strikes belong to (YYYYMMDD)
+        return chain, spot, ts, expiry
     finally:
         con.close()
 
@@ -162,7 +163,7 @@ def _open_positions(equity, day, now_iso, open_rows=()):
     fired = _FIRED.setdefault(day, set()) | _already_open_today(open_rows, day)
     opened = []
     for tk in TICKERS:
-        chain, spot, ts = _latest_chain(tk)
+        chain, spot, ts, expiry = _latest_chain(tk)
         if not chain:
             continue
         # ARM 1 — directional on chip's side
@@ -172,7 +173,7 @@ def _open_positions(equity, day, now_iso, open_rows=()):
             if v and _tradeable(tk, "arm1", v):
                 q, risk, note = SE.size(equity, v["defined_risk"])
                 if q >= 1:
-                    opened.append(_new_pos("arm1", tk, v, q, risk, note, spot, now_iso, day))
+                    opened.append(_new_pos("arm1", tk, v, q, risk, note, spot, now_iso, day, expiry))
                     fired.add((tk, "arm1"))
         # ARM 2 — neutral condor
         if (tk, "arm2") not in fired:
@@ -180,15 +181,16 @@ def _open_positions(equity, day, now_iso, open_rows=()):
             if c and _tradeable(tk, "arm2", c):
                 q, risk, note = SE.size(equity, c["defined_risk"])
                 if q >= 1:
-                    opened.append(_new_pos("arm2", tk, c, q, risk, note, spot, now_iso, day))
+                    opened.append(_new_pos("arm2", tk, c, q, risk, note, spot, now_iso, day, expiry))
                     fired.add((tk, "arm2"))
     return opened
 
 
-def _new_pos(arm, tk, spread, qty, risk_usd, note, spot, now_iso, day):
+def _new_pos(arm, tk, spread, qty, risk_usd, note, spot, now_iso, day, expiry=None):
     legs = spread.get("legs", 2)
     return {"arm": arm, "ticker": tk, "kind": spread.get("kind", "vertical"), "spread": spread,
             "qty": qty, "risk_usd": risk_usd, "sizing": note, "entry_spot": spot,
+            "expiry": expiry,        # the contract expiry these legs trade (YYYYMMDD) — 0DTE if == day
             "credit": spread["credit"], "defined_risk": spread["defined_risk"], "legs": legs,
             "open_comm": SE.open_cost(legs) * qty, "opened": now_iso, "day": day, "state": "open"}
 
@@ -201,7 +203,7 @@ def _manage_open(open_rows, now, day, session_min):
         if p.get("day") != day:                                  # a stale prior-day position -> force EOD
             _resolve(p, buyback=None, trigger="stale_eod", now=now.astimezone(timezone.utc).isoformat())
             continue
-        chain, spot, ts = _latest_chain(p["ticker"])
+        chain, spot, ts, _exp = _latest_chain(p["ticker"])
         if not chain:
             still.append(p); continue
         sp = p["spread"]
@@ -228,8 +230,8 @@ def _resolve(p, buyback, trigger, now_iso, pnl_per_ct=None, close_legs=None):
     if pnl_per_ct is None:
         rt = SE.COMM_PER_LEG * 2 * p["legs"]
         pnl_per_ct = round(((p["credit"] - (buyback if buyback is not None else 0)) * 100) - rt, 2)
-    SB.record({**{k: p[k] for k in ("arm", "ticker", "kind", "credit", "defined_risk", "qty",
-                                     "entry_spot", "opened", "day")},
+    SB.record({**{k: p.get(k) for k in ("arm", "ticker", "kind", "credit", "defined_risk", "qty",
+                                         "entry_spot", "opened", "day", "expiry")},
                # KEEP THE STRUCTURE. The resolved record dropped `spread`, so the ledger could show P&L
                # but never WHICH spread produced it — the click-to-expand detail (strikes, wings, short
                # delta/IV, the friction that gated it) had nothing to render for a closed trade.

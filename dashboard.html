@@ -1371,6 +1371,17 @@ function _holdStr(a,b){
   try{ const ms=Date.parse(b)-Date.parse(a); if(isNaN(ms)||ms<0) return '';
     const m=Math.round(ms/60000); return m<60?m+'m':(m/60).toFixed(1)+'h'; }catch(e){return '';}
 }
+// Expiry "20260724" -> "Jul 24 · 0DTE" (DTE relative to the trade's own day, so a same-day expiry reads
+// as the 0DTE it is — the seller currently sells the nearest expiry on every name).
+function _expStr(ymd, day){
+  if(!ymd||String(ymd).length<8) return '';
+  const s=String(ymd), y=+s.slice(0,4), mo=+s.slice(4,6), d=+s.slice(6,8);
+  const M=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][mo-1]||'';
+  let dte='';
+  try{ const exp=Date.UTC(y,mo-1,d); const base=day?Date.parse(day+'T00:00:00Z'):null;
+    if(base!=null){ const n=Math.round((exp-base)/86400000); dte=' · '+(n<=0?'0DTE':n+'DTE'); } }catch(e){}
+  return `${M} ${d}${dte}`;
+}
 // PER-LEG fills: every contract, what we did to it, and the price BOTH at entry and at close. This is
 // the "which contract, bought/sold at what price" view — a credit spread is 2 legs, a condor is 4.
 function _legRows(p){
@@ -1431,6 +1442,7 @@ function sellerDetail(p){
     ${netLine}
     <table style="border-collapse:collapse"><tbody>
       ${r('strategy', p.arm==='arm1'?'directional — sell ONE side, same direction as chip':'condor — sell BOTH sides, neutral')}
+      ${r('expiry', _expStr(p.expiry, p.day))}
       ${r('size', q+' contract'+(q>1?'s':''))}
       ${r('credit collected', '$'+p.credit+'/ct &nbsp;=&nbsp; $'+(p.credit*100*q).toLocaleString()+' in')}
       ${r('defined risk', maxLoss==null?'':'$'+p.defined_risk+'/ct &nbsp;=&nbsp; $'+maxLoss.toLocaleString()+' max loss')}
@@ -1475,6 +1487,7 @@ function renderSeller(s){
       <div style="display:flex;align-items:baseline;gap:6px;flex-wrap:wrap">
         <span style="color:var(--dim);font-size:10px">${open?'▾':'▸'}</span>
         <b style="font-size:13px">${p.ticker}</b>${armTag(p.arm)}
+        ${p.expiry?`<span style="font-size:9px;color:var(--dim)">${_expStr(p.expiry,p.day)}</span>`:''}
         <span style="font-size:11px">${legs}</span>
         <span style="margin-left:auto;font-weight:700;color:${col(pnl)}">${money(pnl)}</span></div>
       <div style="font-size:10.5px;color:var(--muted);margin-top:4px">
