@@ -1141,7 +1141,12 @@ function chipBookHTML(b){
 function renderChipLedger(sigs, book){
   // Standalone CHIP-ONLY scalp results log (kept separate from real tastytrade trades until go-live).
   const el=document.getElementById('chipledger'); if(!el) return;
-  const done=(sigs||[]).filter(s=>s.provider==='chip'&&s.chip_lifecycle&&['RESOLVED','STOPPED','TRAILED_OUT'].includes(s.chip_lifecycle.phase));
+  // MEASUREMENT_START — mirrors chip_book.MEASUREMENT_START. Trades that closed before this were
+  // recorded pre-time-stop-fix and are excluded from the measurement (kept in the DB, not counted),
+  // so the scalp-log stats and the $50k roll agree on the same clean window.
+  const MEAS_START='2026-07-23';
+  const done=(sigs||[]).filter(s=>s.provider==='chip'&&s.chip_lifecycle&&['RESOLVED','STOPPED','TRAILED_OUT'].includes(s.chip_lifecycle.phase)
+    &&(s.chip_lifecycle.closed||s.chip_lifecycle.opened||'').slice(0,10)>=MEAS_START);
   if(!done.length){ el.innerHTML=''; return; }
   done.sort((a,b)=>Date.parse((b.chip_lifecycle.closed||b.chip_lifecycle.opened||0))-Date.parse((a.chip_lifecycle.closed||a.chip_lifecycle.opened||0)));
   const rc=r=>r==null?'var(--dim)':r>0.05?'#22c55e':r<-0.05?'#ef4444':'var(--fg)';

@@ -33,6 +33,11 @@ RISK_PCT = 1.0               # % of CURRENT equity risked per position
 MAX_CONCURRENT = 4           # open positions at once — a real book has finite attention and margin
 RT_COST_PER_CT = 1.30        # $1.00 open + ~$0.30 fees; $0 to close
 BOOK_FILE = _P.CHANNELS / "chip" / "paper_book.json"
+# MEASUREMENT START — the book (and the R measurement) begins here. Everything BEFORE this date was
+# recorded before the 20-min time-stop scoring fix and is not a clean read (e.g. the QQQ 708C held
+# 12.6h and booked -1.13R). Owner's call: exclude 07-22 from the $50k roll, start flat at 07-23. The
+# raw rows stay in the DB (nothing is deleted) — they are simply not counted in the book's equity.
+MEASUREMENT_START = "2026-07-23"      # UTC date; trades closing before this are excluded from the roll
 
 
 def size_position(equity, entry_px, stop_pct, risk_pct=RISK_PCT):
@@ -58,7 +63,10 @@ def _trades(con):
         "       o.peak_pct, o.trough_pct, o.hold_secs "
         "FROM outcomes o JOIN signals s ON s.signal_id = o.signal_id "
         "WHERE s.provider='chip' AND o.kind='SHADOW' AND o.return_pct IS NOT NULL "
-        "ORDER BY COALESCE(o.opened_utc, o.signal_id)").fetchall()
+        # Measurement starts at MEASUREMENT_START — a trade that CLOSED before it is excluded from the
+        # roll (kept in the DB, just not counted). closed_utc is the day the book realises the P&L.
+        "AND COALESCE(o.closed_utc, o.opened_utc) >= ? "
+        "ORDER BY COALESCE(o.opened_utc, o.signal_id)", (MEASUREMENT_START,)).fetchall()
 
 
 def replay(con=None):
