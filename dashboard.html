@@ -711,6 +711,14 @@ if(!secOn) secOn={live:1,new:1,watch:1,closed:1,skip:0};   // hide dismissed by 
 SECS.forEach(([k])=>{ if(secOn[k]===undefined) secOn[k]=k.startsWith('chip')?0:(k==='skip'?0:1); });
 function saveSec(){try{localStorage.setItem('secOn',JSON.stringify(secOn))}catch(e){}}
 function toggleSec(k){secOn[k]=secOn[k]?0:1;saveSec();refresh();}
+// One click back to a sane board: every section on, nothing muted, chip-solo off. The filters are
+// sticky in localStorage, so without this a stray click can hide the board for days.
+function resetFilters(){
+  SECS.forEach(([k])=>secOn[k]=1); saveSec();
+  muted.clear();                       // in-memory only, so clearing is enough
+  chipOnly=false; try{localStorage.setItem('chipOnly','0');}catch(e){}
+  refresh();
+}
 function setAllSec(v){SECS.forEach(([k])=>secOn[k]=v);saveSec();refresh();}
 function renderSortbar(counts,chipCount){
   const bar=document.getElementById('sortbar'); if(!bar) return;
@@ -2606,9 +2614,29 @@ async function refresh(){
     const ORDER=SECS.map(([k])=>k);   // display order = the section table's order (humans first, chip last)
     const shown=S.filter(s=>secOn[secOf(s)]);
     if(!shown.length){
-      const sigE='EMPTY|'+JSON.stringify(secOn)+'|'+S.length;
+      // DIAGNOSE the empty board instead of shrugging at it. "Nothing to show" is useless when the
+      // cards exist and a client-side toggle is hiding them — the operator cannot tell a quiet market
+      // from a stuck filter, and spent a long time believing provider cards had stopped arriving when
+      // they were merely filtered out. Say exactly WHY it is empty, and offer one click to undo it.
+      const offSecs=SECS.filter(([k])=>!secOn[k]).map(([,l])=>l);
+      const mutedList=[...muted];
+      const reasons=[];
+      if(chipOnly) reasons.push(`the <b>🤖 Chip chips</b> solo filter is ON — only chip cards can show`);
+      if(mutedList.length) reasons.push(`muted provider(s): <b>${mutedList.map(esc).join(', ')}</b> (click them in Data feeds to unmute)`);
+      if(offSecs.length) reasons.push(`hidden section(s): <b>${offSecs.join(' · ')}</b>`);
+      const have=S.length, humanHave=S.filter(x=>x.provider!=='chip').length;
+      const sigE='EMPTY|'+JSON.stringify(secOn)+'|'+S.length+'|'+chipOnly+'|'+mutedList.join(',');
       if(feed.dataset.sig!==sigE){feed.dataset.sig=sigE;
-        feed.innerHTML=`<div class="empty"><div class="big">🫧</div>Nothing to show for this filter.<br>Pick a section in the bar above.</div>`;}
+        feed.innerHTML=`<div class="empty"><div class="big">🫧</div>
+          <div style="font-weight:700;margin-bottom:6px">Nothing matches the current filters</div>
+          <div style="font-size:12px;color:var(--muted);line-height:1.7">
+            The desk HAS <b>${have}</b> card(s) loaded (<b>${humanHave}</b> from human providers).
+            ${reasons.length?'<br>Hidden because: '+reasons.join('<br>'):'<br>No section is selected.'}
+          </div>
+          <div style="margin-top:12px"><button onclick="resetFilters()"
+             style="background:rgba(56,189,248,.16);border:1px solid rgba(56,189,248,.5);color:#bfe3fb;
+                    border-radius:9px;padding:7px 14px;font-size:12px;font-weight:600;cursor:pointer">
+             Show everything again</button></div></div>`;}
       return;
     }
     // re-render only on STRUCTURAL change (state/qty/realized/events/filter) — live P&L is patched separately
