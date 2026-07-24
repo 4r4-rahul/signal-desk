@@ -651,8 +651,14 @@ EXAMPLES (all real messages from this desk)
 
 
 _PROFILES = {"loaded": False, "data": {}}
-_PROFILE_SECTIONS = ("shape", "cues", "numbers", "linking", "exit", "reposts")
-_PROFILE_MAX_CHARS = 2600          # bound the per-call cost; the profile is context, not the message
+# ORDER IS LOAD-BEARING: the blob is truncated to fit, so whatever sits last gets dropped. `numbers` and
+# `linking` are what actually build a card (which number is the strike, which is a price target, how a
+# later fill points back to an earlier watch), so they go FIRST. `cues` is a long phrase catalogue that
+# is nice-to-have; when it led, it ate the whole budget and `numbers` never reached the model at all —
+# three of four providers were being read with no number rules. Measured, not assumed: see llm_accuracy.
+_PROFILE_SECTIONS = ("numbers", "linking", "shape", "exit", "cues", "reposts")
+_PROFILE_MAX_CHARS = 3200          # bound the per-call cost; the profile is context, not the message
+_PROFILE_SEC_CHARS = 900           # and no single section may starve the others
 
 
 def _load_profiles():
@@ -679,13 +685,16 @@ def _provider_context(provider):
     if not prof:
         return ""
     import json as _j
-    out = [f"[how {provider} writes — learned from their own message history; use it to READ them, "
-           f"never to invent a field they did not write]"]
+    out = [f"[how {provider} writes — learned from their own message history. Use it to READ them. Do "
+           f"NOT invent a strike, premium or expiry they did not write. One exception: if the profile "
+           f"states this provider ALWAYS trades a fixed ticker and never types it, supply that ticker — "
+           f"that is reading their template, not guessing.]"]
     for sec in _PROFILE_SECTIONS:
         v = prof.get(sec)
         if not v:
             continue
-        out.append(f"{sec}: {v if isinstance(v, str) else _j.dumps(v, default=str)}")
+        body = v if isinstance(v, str) else _j.dumps(v, default=str)
+        out.append(f"{sec}: {body[:_PROFILE_SEC_CHARS]}")
     blob = "\n".join(out)
     return blob[:_PROFILE_MAX_CHARS]
 
