@@ -569,6 +569,10 @@ function soundHeld(){   chipSeq(ROOT, 2, 0.34, {dur:110, gain:0.15, third:true})
 // It used to be the QUIETEST sound (a thin 80ms blip an octave up) because chip fired it constantly and
 // it had to avoid fatigue. Now chip is silent and this fires only for HUMAN callouts — a handful a day,
 // the rarest and most important event on the desk — so the old tuning was exactly backwards.
+// LIVE-FROM-PROVIDER MESSAGE — a provider said something that did NOT mint a tradeable card
+// (management updates, "up 48% on IWM", commentary). One soft note an octave up: clearly audible, but
+// unmistakably SUBORDINATE to the three-note signal triad. Glance at it; do not act on it.
+function soundMsg(){    chipMark(ROOT*2, {dur:70, gain:0.10}); }
 function soundNew(){
   const g=0.20, d=115;
   beep(ROOT,        d,     g, 0);          // root
@@ -608,7 +612,8 @@ function checkSounds(S,d){
   //   POS    an event on money you ALREADY HOLD             (rising urgent triple)
   //   ALARM  a card was corrected or is phantom             (falling minor third, twice)
   //   NOTICE a card is actionable right now (TAKE)          (rising pair)
-  //   NEW    a HUMAN provider signal arrived                 (rising 3-note triad — unique)
+  //   NEW    a HUMAN provider SIGNAL carded                  (rising 3-note triad — unique)
+  //   MSG    a HUMAN provider MESSAGE landed (no card)      (single soft note, octave up)
   //   CHIP   chip fired — shadow-only, so deliberately quietest
   // Highest tier wins per refresh and each key fires once, so a burst is one sound, not a machine-gun.
   // CHIP IS STRUCTURALLY SILENT. One predicate, applied at EVERY tier, rather than trusting each call
@@ -617,7 +622,7 @@ function checkSounds(S,d){
   const isChipRow=x=>!!x && (x.provider==='chip' || x._chipwatch===true
                              || String(x.id||'').startsWith('chipwatch')
                              || String(x.id||'').startsWith('chip-'));
-  let risk=false,pos=false,alarm=false,notice=false,held=false,fresh=false;
+  let risk=false,pos=false,alarm=false,notice=false,held=false,fresh=false,msg=false;
   const sl=(d&&d.sleeve)||{}, dis=(d&&d.discipline)||{};
   // HELD — the desk is asking you to resolve a signal it would not card on its own. Fires once per
   // item, and re-arms when it leaves the tray, so a standing question does not nag every refresh.
@@ -653,14 +658,15 @@ function checkSounds(S,d){
     if(_heard.has(k)) continue;
     _remember(k);
     const recent=(nowMs-(Date.parse(f.ts)||0))<120000;
-    if(recent && !isChipRow(f)){ fresh=true; providerToast(f.text, f.provider); }   // chip stays SILENT
+    if(recent && !isChipRow(f)){ msg=true; providerToast(f.text, f.provider); }    // chip stays SILENT
   }
   if(risk) soundRisk();
   else if(pos) soundPos();
   else if(alarm) soundAlarm();
   else if(notice) soundNotice();
   else if(held) soundHeld();
-  else if(fresh) soundNew();
+  else if(fresh) soundNew();     // a provider SIGNAL carded  -> 3-note triad
+  else if(msg) soundMsg();       // a provider MESSAGE landed  -> single soft note
   // chip NEVER sounds: entries, live&taken, watching and exits are all machine output. Only humans ping.
   // With 10 tickers chip emits ~200 cards/day against ~2-5 human signals; sounding it trains you to
   // ignore the alert entirely, which is worse than no alert.
@@ -673,7 +679,7 @@ function audioDiag(){    // so a SILENT test is diagnosable instead of a mystery
 }
 function testSounds(){   // hear every tier on demand — the only way to confirm audio works on this machine
   const seq=[['RISK',soundRisk],['POSITION',soundPos],['CORRECTED',soundAlarm],
-             ['TAKE',soundNotice],['HELD — NEEDS YOU',soundHeld],['NEW PROVIDER SIGNAL',soundNew]];
+             ['TAKE',soundNotice],['HELD — NEEDS YOU',soundHeld],['NEW PROVIDER SIGNAL',soundNew],['PROVIDER MESSAGE',soundMsg]];
   _ctx(); let i=0;
   (function nxt(){ if(i>=seq.length) return;
     const [nm,fn]=seq[i++]; const el=document.getElementById('sndtest');
