@@ -606,6 +606,36 @@ function providerToast(txt, prov){
   host.appendChild(el);
   setTimeout(()=>{ el.style.transition='opacity .5s'; el.style.opacity='0'; setTimeout(()=>el.remove(),600); }, 15000);
 }
+// CHANNEL WENT DARK. A provider window whose heartbeat has stopped is not a cosmetic grey dot: it
+// means the browser has throttled that tab (Chrome suspends timers in background/occluded tabs), the
+// extension's scrape-and-relay loop is not running, and you are BLIND on that channel. That is exactly
+// how prince's XOM callout was lost — heartbeat 13 MINUTES old when it should be ~20 SECONDS, so the
+// message was never relayed and the desk never complained. Blindness must announce itself.
+const DARK_AFTER_S=180;                 // ~9 missed heartbeats
+function checkDarkChannels(d){
+  const now=Date.parse(d&&d.now||'')||Date.now();
+  // market hours only — after the close every window is legitimately quiet
+  const et=new Date(now); const mins=et.getUTCHours()*60+et.getUTCMinutes()-(13*60+30);
+  const rth=(et.getUTCDay()>=1&&et.getUTCDay()<=5)&&mins>=0&&mins<=390;
+  const dark=[];
+  for(const [k,v] of Object.entries((d&&d.sources)||{})){
+    const prov=v.provider||k;
+    if(prov==='chip'||!v.last_beat) continue;
+    const age=(now-Date.parse(v.last_beat))/1000;
+    if(age>DARK_AFTER_S) dark.push({prov, mins:Math.round(age/60)});
+  }
+  if(!rth) return dark;
+  for(const c of dark){                                   // one alert per outage, re-arms on recovery
+    const key='dark:'+c.prov;
+    if(!_heard.has(key)){ _remember(key);
+      providerToast(`⚠ NO HEARTBEAT for ${c.mins}m — this tab is throttled and messages are NOT being relayed. Reload the ${c.prov} channel tab.`, c.prov+' — CHANNEL DARK');
+      soundRisk();                                        // blindness is a RISK-tier event
+    }
+  }
+  const live=new Set(Object.values((d&&d.sources)||{}).filter(v=>v.last_beat&&(now-Date.parse(v.last_beat))/1000<=DARK_AFTER_S).map(v=>v.provider));
+  for(const p of live) _heard.delete('dark:'+p);          // recovered -> re-arm the alarm
+  return dark;
+}
 function checkSounds(S,d){
   // FIVE tiers, strictly ordered — the sound alone must tell you what happened with your eyes elsewhere:
   //   RISK   day-stop / drawdown halt / provider disabled   (low slow triple — cannot be mistaken)
@@ -623,6 +653,7 @@ function checkSounds(S,d){
                              || String(x.id||'').startsWith('chipwatch')
                              || String(x.id||'').startsWith('chip-'));
   let risk=false,pos=false,alarm=false,notice=false,held=false,fresh=false,msg=false;
+  checkDarkChannels(d);                                   // blind channels announce themselves
   const sl=(d&&d.sleeve)||{}, dis=(d&&d.discipline)||{};
   // HELD — the desk is asking you to resolve a signal it would not card on its own. Fires once per
   // item, and re-arms when it leaves the tray, so a standing question does not nag every refresh.
@@ -788,9 +819,10 @@ function renderSources(src,nowIso,ibkr){
   const MUTE_LAG_MS=6*3600*1000;                 // >6h behind the freshest live channel = not relaying
   const isMute=k=>{const t=Date.parse(src[k].last_signal_iso||0);
     return freshestRelay>0 && (!t || (freshestRelay-t)>MUTE_LAG_MS);};
-  const stateOf=k=>!isLive(k)?'stale':(!isHealthy(k)?'blind':(isMute(k)?'mute':'live'));
+  const darkAge=k=>(Date.parse(nowIso)-Date.parse(src[k].last_beat||0))/1000;
+  const stateOf=k=>darkAge(k)>180?'dark':(!isLive(k)?'stale':(!isHealthy(k)?'blind':(isMute(k)?'mute':'live')));
   const liveN=keys.filter(k=>stateOf(k)==='live').length;   // truly RECEIVING, not just tab-open
-  const RANK={live:3,mute:2,blind:1,stale:0}, DOT={live:'#22c55e',mute:'#f97316',blind:'#f59e0b',stale:'#6b7280'};
+  const RANK={live:4,mute:3,blind:2,stale:1,dark:0}, DOT={live:'#22c55e',mute:'#f97316',blind:'#f59e0b',stale:'#6b7280',dark:'#ef4444'};
   keys.sort((a,b)=>(RANK[stateOf(b)]-RANK[stateOf(a)])||((src[b].count||0)-(src[a].count||0)));
   el.innerHTML=`<div class="rail-h">📡 Data feeds <span class="rail-n">${liveN}/${keys.length} providers</span></div>`+ib+keys.map(k=>{
     const s=src[k], stt=stateOf(k);
@@ -799,10 +831,12 @@ function renderSources(src,nowIso,ibkr){
     const last=s.last_signal?`${ago(s.last_signal_iso,nowIso)} · ${s.last_signal}`:'no signal yet';
     const key=s.provider||k;
     const tip={live:'live — receiving & reading Discord (click to mute)',
+               dark:'🔴 NO HEARTBEAT — the browser has throttled this tab. Messages are NOT reaching the desk. RELOAD IT.',
                mute:'⚠ READING but NOT RELAYING — the tab sees Discord yet posts nothing to the desk. RELOAD this channel tab.',
                blind:'⚠ tab is open but NOT reading Discord — scrape broke, reload the channel',
                stale:'stale — window not sending (minimized/closed?)'}[stt];
-    const tag={live:'',mute:'<small style="color:#f97316;font-weight:700">not relaying — reload tab</small>',
+    const tag={live:'',dark:'<small style="color:#ef4444;font-weight:800">DARK — reload tab</small>',
+              mute:'<small style="color:#f97316;font-weight:700">not relaying — reload tab</small>',
               blind:'<small style="color:var(--amber)">not reading</small>',
                stale:'<small style="color:var(--amber)">stale</small>'}[stt];
     return `<div class="src ${muted.has(key)?'off':''}" onclick="toggleSrc('${key}')" title="${tip}">
