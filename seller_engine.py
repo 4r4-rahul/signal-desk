@@ -24,6 +24,11 @@ RISK_PCT = 1.0              # % of equity risked on defined risk per position
 DEFAULT_TARGET_DELTA = 0.16
 DEFAULT_WIDTH = 5.0
 TAKE_PROFIT_FRAC = 0.50     # close at 50% of credit captured (standard mechanical seller)
+# Refuse a spread whose ROUND-TRIP exit cost eats this share of the credit. 0.35 is a judgement call,
+# not a measured optimum, and is deliberately loose enough to admit a tight day on a single name while
+# still rejecting the 10%-wide quotes that motivated keeping the seller on SPY/QQQ. Every refusal is
+# logged with its ratio, so after ~30 sessions this threshold can be replaced by evidence.
+MAX_FRICTION_RATIO = 0.35
 
 
 def _nearest_by_delta(chain, right, target_delta):
@@ -73,10 +78,26 @@ def build_vertical(chain, right, target_delta=DEFAULT_TARGET_DELTA, width=DEFAUL
     defined_risk = round(real_width - credit, 2)                  # per share; *100 for the contract
     if credit <= 0 or defined_risk <= 0:
         return None                                              # no credit / inverted -> not tradeable
+    # EXIT FRICTION — the cost that decides whether a wide-quoted name is sellable at all.
+    # The ENTRY crossing is already inside `credit` (short bid, long ask). The exit is not: closing
+    # means buying the short back at its ASK and selling the wing at its BID, so the round trip pays
+    # both leg spreads again. On SPY/QQQ that is pennies against the credit. On a single name quoting
+    # 10% wide it can exceed the entire credit collected, which is the real content of "you do not sell
+    # 0DTE credit spreads into a 10% spread" — it was previously enforced by never listing those
+    # tickers at all. Now it is measured per trade, so a name is refused on its ACTUAL quote that day
+    # rather than on its reputation, and a tight day on NVDA is allowed to trade.
+    # UNITS: leg quotes are PER SHARE, commission is PER CONTRACT — so the commission has to be divided
+    # by 100 to sit in the same units as the credit. Mixing them made a 3-cent SPY spread look like it
+    # cost twice its own credit to exit, which would have refused every trade on the desk.
+    sp_short = (short.get("ask") or 0) - (short.get("bid") or 0)
+    sp_long = (long.get("ask") or 0) - (long.get("bid") or 0)
+    exit_friction = round(max(0.0, sp_short) + max(0.0, sp_long) + 2 * COMM_PER_LEG / 100.0, 4)
     return {"right": right.upper(), "short_strike": short["strike"], "long_strike": long["strike"],
             "width": real_width, "credit": credit, "defined_risk": defined_risk,
             "short_delta": short["delta"], "short_iv": short.get("iv"),
             "credit_to_width": round(credit / real_width, 3),
+            "exit_friction": exit_friction,
+            "friction_ratio": round(exit_friction / credit, 3) if credit > 0 else None,
             "legs": 2}
 
 

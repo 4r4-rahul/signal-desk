@@ -28,7 +28,12 @@ import deskpaths as _P
 
 ET = timezone(timedelta(hours=-4))
 LADDER_DB = _P.CHANNELS / "ladder.db"
-TICKERS = ("SPY", "QQQ")
+# FULL UNIVERSE, matching chip. The seller can only trade what the ladder has logged, so this list is
+# the upper bound on the seller's universe — it was the real reason the seller sat on SPY/QQQ. Safe to
+# widen now that subscriptions are reaped per ticker (see the snapshot loop): peak line usage is one
+# ticker's ladder, not the sum. Whether a given name is WORTH selling is a separate question, decided
+# per-trade by the seller's spread gate rather than by silently never logging the data.
+TICKERS = ("SPY", "QQQ", "IWM", "NVDA", "AAPL", "GOOGL", "TSLA", "META", "AMZN", "MSFT")
 CLIENT_ID = 84                      # own line budget, distinct from monitor(80/81)/ustop/chip(82)
 SNAP_EVERY_S = 60                   # one ladder snapshot per minute per ticker
 # DELTA BAND — must span the seller's SHORT strike *and its WING*, or no spread can be constructed.
@@ -171,6 +176,12 @@ def scan_loop():
                         und_rows.append(und)
                 except Exception:
                     continue
+                # REAP PER TICKER, not once per lap. Reaping only at the end made peak subscriptions
+                # 28*len(TICKERS), which is why this logger could not leave SPY/QQQ: ten tickers would
+                # have demanded ~280 lines against an ~80 budget and starved the position monitor.
+                # Reaping here holds the peak at one ticker's ladder however many tickers are listed.
+                try: MK.reap_subs(conn)
+                except Exception: pass
             if all_rows or und_rows:
                 con = _con()
                 try:

@@ -62,7 +62,11 @@ def _seller_snap():
     try:
         import seller_book as SB, seller_desk as SD
         data = {"book": SB.replay(), "arm1": SB.replay(arm="arm1"), "arm2": SB.replay(arm="arm2"),
-                "paired": SB.paired_vs_chip(), "open": SD._load_open()}
+                "paired": SB.paired_vs_chip(), "open": SD._load_open(),
+                # WHY a ticker was skipped. The seller now runs the whole universe and refuses names on
+                # the day's actual quote, so "no NVDA position" must be distinguishable from "NVDA was
+                # never considered" — that ambiguity is exactly what the SPY/QQQ hard-coding created.
+                "universe": list(SD.TICKERS), "refusals": SD.REFUSALS[-12:]}
     except Exception:
         data = None
     _SELLER_CACHE.update(ts=_t.time(), data=data)

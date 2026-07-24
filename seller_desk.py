@@ -22,10 +22,20 @@ import seller_engine as SE
 import seller_book as SB
 
 ET = timezone(timedelta(hours=-4))
-TICKERS = ("SPY", "QQQ")
+# FULL UNIVERSE, matching chip and the ladder. Owner's call, asked twice. The original SPY/QQQ-only
+# rule was sound in substance — you do not sell defined-risk spreads into a 10% quote — but it enforced
+# that by never LOOKING at the other names, which also meant never learning whether they were sellable.
+# The rule now lives where it belongs: a per-trade exit-friction gate (_tradeable), evaluated on the
+# day's real quote. Wide days get refused and logged; tight days get traded.
+TICKERS = ("SPY", "QQQ", "IWM", "NVDA", "AAPL", "GOOGL", "TSLA", "META", "AMZN", "MSFT")
 OPEN_STORE = _P.CHANNELS / "seller" / "open.json"      # live (unresolved) positions
 ENTRY_AFTER_MIN = 30                                    # open ~10:00 ET (30 min after the 9:30 open)
-FRESH_SEC = 180                                         # a ladder snapshot older than this is stale
+# A ladder snapshot older than this is stale. MUST exceed the logger's LAP time, not just its nominal
+# 60s sleep: the lap is sequential over the universe, so widening from 2 tickers to 10 stretched it from
+# ~60s to ~270s measured. With the old flat 180 every chain read stale the moment the universe grew and
+# the seller silently found "no chain" for ALL TEN tickers — including the two that had always worked.
+# Scaled off the universe so this cannot silently break again the next time a ticker is added.
+FRESH_SEC = max(180, 60 * len(TICKERS))
 _FIRED = {}                                             # day -> set of (ticker, arm) already opened
 
 
@@ -113,6 +123,36 @@ def _already_open_today(open_rows, day):
     return seen
 
 
+REFUSALS = []          # (day, ticker, arm, ratio) — why a name was skipped; bounded, surfaced on /api
+
+
+def _friction_of(spread):
+    """Worst leg-pair friction in the structure. A condor is two verticals; the WORSE side governs,
+    because you have to be able to close both."""
+    if spread.get("kind") == "condor":
+        parts = [spread.get("call") or {}, spread.get("put") or {}]
+        ratios = [p.get("friction_ratio") for p in parts if p.get("friction_ratio") is not None]
+        return max(ratios) if ratios else None
+    return spread.get("friction_ratio")
+
+
+def _tradeable(tk, arm, spread):
+    """Is this spread's quote good enough to actually trade? See seller_engine.MAX_FRICTION_RATIO —
+    the round-trip exit cost must not eat the credit. This is what makes it safe to run the seller
+    across the whole universe instead of hard-coding it to SPY/QQQ: a wide name is refused on the day's
+    ACTUAL quote, and refusals are recorded rather than silently dropped, so the threshold can later be
+    replaced with evidence instead of judgement."""
+    fr = _friction_of(spread)
+    if fr is None:
+        return True                      # no quote detail — fall through to the existing credit checks
+    if fr > SE.MAX_FRICTION_RATIO:
+        REFUSALS.append({"ticker": tk, "arm": arm, "friction_ratio": fr,
+                         "credit": spread.get("credit"), "why": "exit friction > cap"})
+        del REFUSALS[:-60]
+        return False
+    return True
+
+
 def _open_positions(equity, day, now_iso, open_rows=()):
     # derive from STATE, not an in-memory flag, so a restart can't duplicate the day's entries
     fired = _FIRED.setdefault(day, set()) | _already_open_today(open_rows, day)
@@ -125,7 +165,7 @@ def _open_positions(equity, day, now_iso, open_rows=()):
         if (tk, "arm1") not in fired:
             side = _chip_side(tk)
             v = SE.directional(chain, side) if side else None
-            if v:
+            if v and _tradeable(tk, "arm1", v):
                 q, risk, note = SE.size(equity, v["defined_risk"])
                 if q >= 1:
                     opened.append(_new_pos("arm1", tk, v, q, risk, note, spot, now_iso, day))
@@ -133,7 +173,7 @@ def _open_positions(equity, day, now_iso, open_rows=()):
         # ARM 2 — neutral condor
         if (tk, "arm2") not in fired:
             c = SE.build_condor(chain)
-            if c:
+            if c and _tradeable(tk, "arm2", c):
                 q, risk, note = SE.size(equity, c["defined_risk"])
                 if q >= 1:
                     opened.append(_new_pos("arm2", tk, c, q, risk, note, spot, now_iso, day))
