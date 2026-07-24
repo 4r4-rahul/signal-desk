@@ -650,8 +650,51 @@ EXAMPLES (all real messages from this desk)
   "manage ur risk guys"                       -> WARNING."""
 
 
-def _render(window, text):
+_PROFILES = {"loaded": False, "data": {}}
+_PROFILE_SECTIONS = ("shape", "cues", "numbers", "linking", "exit", "reposts")
+_PROFILE_MAX_CHARS = 2600          # bound the per-call cost; the profile is context, not the message
+
+
+def _load_profiles():
+    """provider_profiles.json, once. Built from each provider's real corpus but never actually wired to
+    the model — the router was classifying prince with no knowledge of how prince writes."""
+    if _PROFILES["loaded"]:
+        return _PROFILES["data"]
+    _PROFILES["loaded"] = True
+    try:
+        import json as _j
+        from pathlib import Path as _P
+        d = _j.loads((_P(__file__).parent / "provider_profiles.json").read_text())
+        _PROFILES["data"] = d.get("providers") or {}
+    except Exception:
+        _PROFILES["data"] = {}
+    return _PROFILES["data"]
+
+
+def _provider_context(provider):
+    """A compact, per-provider briefing for the router: how THIS provider phrases entries and fills,
+    what their numbers mean, and — the case that keeps biting — how they LINK a later fill back to an
+    earlier watch. Only the current provider's profile is sent, so the cost is one profile per call."""
+    prof = (_load_profiles() or {}).get((provider or "").lower())
+    if not prof:
+        return ""
+    import json as _j
+    out = [f"[how {provider} writes — learned from their own message history; use it to READ them, "
+           f"never to invent a field they did not write]"]
+    for sec in _PROFILE_SECTIONS:
+        v = prof.get(sec)
+        if not v:
+            continue
+        out.append(f"{sec}: {v if isinstance(v, str) else _j.dumps(v, default=str)}")
+    blob = "\n".join(out)
+    return blob[:_PROFILE_MAX_CHARS]
+
+
+def _render(window, text, provider=None):
     lines = []
+    ctx = _provider_context(provider)
+    if ctx:
+        lines.append(ctx)
     for m in window or []:
         age = max(0, int((time.time() - m.get("ts", time.time())) / 60))
         lines.append(f"[earlier, {age} min ago]\n{m['text']}")
@@ -669,7 +712,7 @@ def classify(text, provider=None, window=None):
         return None
     if window is None:
         window = LP.CONTEXT.window(provider, exclude_text=text)
-    prompt = _render(window, text)
+    prompt = _render(window, text, provider)
     raw = LP.call_tool(SYSTEM, ROUTE_TOOL, prompt, model=MODEL, max_tokens=MAX_TOKENS)
     if raw is None:
         return None
