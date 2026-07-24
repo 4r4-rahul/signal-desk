@@ -1357,9 +1357,64 @@ function fmtET(iso){
 // THE THETA MIRROR — the premium-seller books (long theta) beside chip (the buyer). Two arms:
 // arm1 = directional credit spread on chip's side (isolates the theta sign), arm2 = neutral condor.
 // The headline is PAIRED: seller minus buyer per shared day, because pairing cancels the regime noise.
+// CLICK-TO-EXPAND for seller trades, matching the scalp log. Expanded state lives in a Set keyed by a
+// stable per-position id, NOT in the DOM — the 2.5s refresh rewrites innerHTML, so a native <details>
+// would collapse on every poll. On each render we re-open whatever is in the Set. Clicking toggles it
+// and re-renders from the cached last payload (instant, no network round trip).
+const _sellerOpenDetail = new Set();
+function _skey(p){ return `${p.arm}|${p.ticker}|${p.opened||p.closed||''}`; }
+function toggleSeller(k){
+  if(_sellerOpenDetail.has(k)) _sellerOpenDetail.delete(k); else _sellerOpenDetail.add(k);
+  if(window._lastSeller) renderSeller(window._lastSeller);
+}
+function _holdStr(a,b){
+  try{ const ms=Date.parse(b)-Date.parse(a); if(isNaN(ms)||ms<0) return '';
+    const m=Math.round(ms/60000); return m<60?m+'m':(m/60).toFixed(1)+'h'; }catch(e){return '';}
+}
+// The FULL trade — structure, what was collected, the risk it defines, the greeks it was sized off,
+// the friction that decided whether we'd trade the name at all, and how it ended.
+function sellerDetail(p){
+  const sp=p.spread||{}, isC=p.kind==='condor', q=p.qty||1;
+  const money=v=>v==null?'—':(v>=0?'+$':'-$')+Math.abs(v).toLocaleString(undefined,{maximumFractionDigits:0});
+  const col=v=>v==null?'var(--dim)':v>0?'#22c55e':v<0?'#ef4444':'var(--fg)';
+  const maxLoss = p.defined_risk!=null?p.defined_risk*100*q:null;
+  const maxProfit = p.credit!=null?p.credit*100*q:null;
+  const ror = (p.pnl!=null&&maxLoss)?Math.round(p.pnl/maxLoss*100):null;
+  const hasStruct = isC ? (sp.call&&sp.put) : (sp.short_strike!=null);
+  const struct = !hasStruct
+    ? `<div style="color:var(--dim)">structure not recorded (older trade) · ${isC?'iron condor':'credit spread'}</div>`
+    : isC
+    ? `<div>call side: sell <b style="color:#ef4444">${(sp.call||{}).short_strike}C</b> / buy ${(sp.call||{}).long_strike}C</div>
+       <div>put&nbsp; side: sell <b style="color:#ef4444">${(sp.put||{}).short_strike}P</b> / buy ${(sp.put||{}).long_strike}P</div>`
+    : `<div>sell <b style="color:#ef4444">${sp.short_strike}${sp.right}</b> / buy ${sp.long_strike}${sp.right} <span style="color:var(--dim)">· width $${sp.width}</span></div>`;
+  const fr = isC ? null : sp.friction_ratio;
+  const r=(l,v)=>(v==null||v==='')?'':`<tr><td style="color:var(--dim);padding:1px 12px 1px 0;white-space:nowrap">${l}</td><td class="mono">${v}</td></tr>`;
+  return `<div onclick="event.stopPropagation()" style="margin-top:7px;padding:8px 9px;background:rgba(0,0,0,.18);border-radius:7px;font-size:10.5px;cursor:default">
+    <div style="font-size:11px;margin-bottom:5px;line-height:1.5">${struct}</div>
+    <table style="border-collapse:collapse"><tbody>
+      ${r('strategy', p.arm==='arm1'?'directional — sell ONE side, same direction as chip':'condor — sell BOTH sides, neutral')}
+      ${r('size', q+' contract'+(q>1?'s':''))}
+      ${r('credit collected', '$'+p.credit+'/ct &nbsp;=&nbsp; $'+(p.credit*100*q).toLocaleString()+' in')}
+      ${r('defined risk', maxLoss==null?'':'$'+p.defined_risk+'/ct &nbsp;=&nbsp; $'+maxLoss.toLocaleString()+' max loss')}
+      ${r('max profit', maxProfit==null?'':'$'+maxProfit.toLocaleString()+' (keep all premium)')}
+      ${r('credit ÷ width', sp.credit_to_width!=null?(sp.credit_to_width*100).toFixed(0)+'%':'')}
+      ${r('short delta', sp.short_delta!=null?(+sp.short_delta).toFixed(3):'')}
+      ${r('short IV', sp.short_iv!=null?(sp.short_iv*100).toFixed(1)+'%':'')}
+      ${r('exit friction', sp.exit_friction!=null?'$'+sp.exit_friction+'/ct'+(fr!=null?' · '+(fr*100).toFixed(0)+'% of credit':''):'')}
+      ${r('spot at entry', p.entry_spot!=null?'$'+p.entry_spot:'')}
+      ${r('opened', fmtET(p.opened))}
+      ${r('closed', p.closed?fmtET(p.closed)+' · held '+_holdStr(p.opened,p.closed):'still OPEN')}
+      ${r('bought back at', p.buyback!=null?'$'+p.buyback:(p.mark_buyback!=null?'$'+(+p.mark_buyback).toFixed(2)+' (live mark)':''))}
+      ${r('why it closed', (p.mgmt_trigger||'').replace(/_/g,' '))}
+      ${p.pnl!=null?`<tr><td style="color:var(--dim);padding:4px 12px 1px 0">realized P&L</td><td class="mono" style="color:${col(p.pnl)};font-weight:700">${money(p.pnl)}${ror!=null?' &nbsp;('+(ror>=0?'+':'')+ror+'% of risk)':''}</td></tr>`:''}
+    </tbody></table>
+    <div style="color:var(--dim);font-size:9px;margin-top:5px">click the row again to collapse</div>
+  </div>`;
+}
 function renderSeller(s){
   const el=document.getElementById('sellerbook'); if(!el) return;
   if(!s||!s.book){ el.innerHTML=''; return; }
+  window._lastSeller=s;      // cache so toggleSeller can re-render without a refetch
   const b=s.book, a1=s.arm1||{}, a2=s.arm2||{}, pr=s.paired||{}, opn=s.open||[];
   const led=(b.positions||[]).slice().reverse();
   const money=v=>v==null?'—':(v>=0?'+$':'-$')+Math.abs(v).toLocaleString(undefined,{maximumFractionDigits:0});
@@ -1377,8 +1432,10 @@ function renderSeller(s){
       : `<span style="color:#ef4444">${sp.short_strike}${sp.right}</span> <span style="color:var(--dim)">wing ${sp.long_strike}</span>`;
     const pnl=p.open_pnl, mk=p.mark_buyback;
     const cap = (mk!=null&&p.credit) ? Math.round((1-mk/p.credit)*100) : null;
-    return `<div style="background:rgba(125,211,252,.05);border:1px solid rgba(125,211,252,.2);border-radius:10px;padding:8px 9px;margin-top:7px">
+    const k=_skey(p), open=_sellerOpenDetail.has(k);
+    return `<div onclick="toggleSeller('${k}')" title="click for full trade detail" style="cursor:pointer;background:rgba(125,211,252,${open?.09:.05});border:1px solid rgba(125,211,252,.2);border-radius:10px;padding:8px 9px;margin-top:7px">
       <div style="display:flex;align-items:baseline;gap:6px;flex-wrap:wrap">
+        <span style="color:var(--dim);font-size:10px">${open?'▾':'▸'}</span>
         <b style="font-size:13px">${p.ticker}</b>${armTag(p.arm)}
         <span style="font-size:11px">${legs}</span>
         <span style="margin-left:auto;font-weight:700;color:${col(pnl)}">${money(pnl)}</span></div>
@@ -1386,18 +1443,22 @@ function renderSeller(s){
         collected <b>$${p.credit}</b> × ${p.qty} · risk <b>$${p.defined_risk}</b>/ct
         · now costs <b>${mk==null?'—':'$'+mk.toFixed(2)}</b>
         ${cap!=null?`· captured <b style="color:${col(cap)}">${cap}%</b> of credit <span style="color:var(--dim)">(take at 50%)</span>`:''}</div>
+      ${open?sellerDetail(p):''}
     </div>`;
   }).join('');
   // LEDGER of resolved seller trades — the mirror of chip's scalp log.
   const ledRows=led.slice(0,12).map(p=>{
     const t=fmtET(p.closed||p.opened||'');
-    const sp=p.spread||{};
-    return `<div style="display:flex;gap:6px;align-items:center;font-size:10.5px;padding:3px 0;border-top:1px solid var(--line)">
-      <span style="color:var(--dim);width:34px">${t}</span>
-      <b style="width:32px">${p.ticker}</b>${armTag(p.arm)}
-      <span style="color:var(--dim);width:52px">cr $${p.credit}</span>
-      <span style="margin-left:auto;color:${col(p.pnl)};font-weight:700;width:52px;text-align:right">${money(p.pnl)}</span>
-      <span style="color:var(--dim);font-size:9.5px;width:66px;text-align:right">${(p.mgmt_trigger||'').replace('_',' ')}</span></div>`;
+    const k=_skey(p), open=_sellerOpenDetail.has(k);
+    return `<div style="border-top:1px solid var(--line)">
+      <div onclick="toggleSeller('${k}')" title="click for full trade detail" style="cursor:pointer;display:flex;gap:6px;align-items:center;font-size:10.5px;padding:3px 0">
+        <span style="color:var(--dim);width:10px">${open?'▾':'▸'}</span>
+        <span style="color:var(--dim);width:34px">${t}</span>
+        <b style="width:32px">${p.ticker}</b>${armTag(p.arm)}
+        <span style="color:var(--dim);width:52px">cr $${p.credit}</span>
+        <span style="margin-left:auto;color:${col(p.pnl)};font-weight:700;width:52px;text-align:right">${money(p.pnl)}</span>
+        <span style="color:var(--dim);font-size:9.5px;width:66px;text-align:right">${(p.mgmt_trigger||'').replace('_',' ')}</span></div>
+      ${open?sellerDetail(p):''}</div>`;
   }).join('');
   el.innerHTML=`<div class="stats-h">💰 Seller Book <span style="margin-left:auto;font-weight:500;color:var(--muted)">long theta · shadow</span></div>
     <div style="display:flex;align-items:baseline;gap:8px;margin:4px 0 2px">

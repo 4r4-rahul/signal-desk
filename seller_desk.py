@@ -222,6 +222,10 @@ def _resolve(p, buyback, trigger, now_iso, pnl_per_ct=None):
         pnl_per_ct = round(((p["credit"] - (buyback if buyback is not None else 0)) * 100) - rt, 2)
     SB.record({**{k: p[k] for k in ("arm", "ticker", "kind", "credit", "defined_risk", "qty",
                                      "entry_spot", "opened", "day")},
+               # KEEP THE STRUCTURE. The resolved record dropped `spread`, so the ledger could show P&L
+               # but never WHICH spread produced it — the click-to-expand detail (strikes, wings, short
+               # delta/IV, the friction that gated it) had nothing to render for a closed trade.
+               "spread": p.get("spread"), "legs": p.get("legs"),
                "closed": now_iso, "buyback": buyback, "mgmt_trigger": trigger,
                "pnl": round(pnl_per_ct * p["qty"], 2)})
 
