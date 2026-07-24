@@ -150,20 +150,30 @@ def spread_buyback(short_ask, long_bid):
     return round(short_ask - long_bid, 2)
 
 
-def manage(credit, buyback_cost, minutes_to_close, legs, take_frac=TAKE_PROFIT_FRAC):
+def manage(credit, buyback_cost, minutes_to_close, legs, take_frac=TAKE_PROFIT_FRAC, stop_mult=None):
     """The seller's management rule, on ONE mark. Returns (action, realized_pnl_per_ct, reason).
       · take profit when buyback_cost has decayed to <= (1-take_frac)*credit  (captured >= take_frac)
+      · STOP (optional, default OFF) when the loss reaches stop_mult × the credit collected
       · EOD flatten at the close (avoid pin/assignment) — books the current mark
-      · else hold. Defined risk is the wing, so we do NOT run a hard 2x stop (SME: it converts
-        eventual-expire-worthless winners into realized losses on gappy 0DTE).
-    P&L per contract (per share*100) = (credit - exit_cost)*100 - commission_round_trip."""
+      · else hold.
+    P&L per contract (per share*100) = (credit - exit_cost)*100 - commission_round_trip.
+
+    WHY THE STOP IS OFF BY DEFAULT. Defined risk is already the wing, so there is no account-blowup tail
+    to fence. And on gappy 0DTE a hard stop converts eventual-expire-worthless WINNERS into realized
+    losses: spot pierces the short strike, the stop fires, then it reverts before the close (SME). The
+    parameter exists so the stop can be switched on FROM EVIDENCE (seller_stop_lab replays real trades
+    against the ladder) rather than from opinion — and only a LOOSE stop (>= ~2.5× credit) is defensible
+    here, because a tight one is exactly what 0DTE gamma whipsaws."""
     rt_comm = COMM_PER_LEG * 2 * legs                            # open + close, per leg
     if buyback_cost is None:
         return "hold", None, "no mark"
-    captured = credit - buyback_cost                            # per share
+    captured = credit - buyback_cost                            # per share (negative when losing)
     if captured >= take_frac * credit:
         pnl = round(captured * 100 - rt_comm, 2)
         return "take_profit", pnl, f"captured {captured/credit*100:.0f}% of credit"
+    if stop_mult is not None and credit > 0 and buyback_cost >= (1 + stop_mult) * credit:
+        pnl = round(captured * 100 - rt_comm, 2)               # captured < 0 here -> a realized loss
+        return "stop", pnl, f"stop {stop_mult:g}x credit (loss {(-captured)/credit:.1f}x)"
     if minutes_to_close is not None and minutes_to_close <= 1:
         pnl = round(captured * 100 - rt_comm, 2)
         return "eod", pnl, "expire/flatten at the close"

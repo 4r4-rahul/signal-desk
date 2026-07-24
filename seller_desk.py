@@ -37,6 +37,11 @@ ENTRY_AFTER_MIN = 30                                    # open ~10:00 ET (30 min
 # Scaled off the universe so this cannot silently break again the next time a ticker is added.
 FRESH_SEC = max(180, 60 * len(TICKERS))
 _FIRED = {}                                             # day -> set of (ticker, arm) already opened
+# STOP-LOSS: OFF until evidence justifies it. None = no stop (defined-risk wing + EOD flatten only, the
+# documented SME default). Set to e.g. 2.5 to close when the loss reaches 2.5x the credit collected.
+# Decide the number from seller_stop_lab (replays real trades against the ladder), not by guessing —
+# and note there are ZERO losing trades so far, so a stop would not yet have fired on anything.
+SELLER_STOP_MULT = None
 
 
 def _load_open():
@@ -217,8 +222,9 @@ def _manage_open(open_rows, now, day, session_min):
             m = _mark_vertical(chain, sp["right"], sp["short_strike"], sp["long_strike"])
             buyback = m["buyback"] if m else None
             close_legs = [m] if m else None
-        action, pnl_per_ct, reason = SE.manage(p["credit"], buyback, mins_to_close, p["legs"])
-        if action in ("take_profit", "eod"):
+        action, pnl_per_ct, reason = SE.manage(p["credit"], buyback, mins_to_close, p["legs"],
+                                               stop_mult=SELLER_STOP_MULT)
+        if action in ("take_profit", "eod", "stop"):
             _resolve(p, buyback, action, now.astimezone(timezone.utc).isoformat(), pnl_per_ct, close_legs)
         else:
             p["mark_buyback"], p["open_pnl"] = buyback, round((pnl_per_ct or 0) * p["qty"], 2)
