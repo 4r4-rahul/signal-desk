@@ -260,7 +260,10 @@ def option_quote(ticker, strike, right, expiry=None, ib=None):
 def _contract(ticker):
     from ib_async import Stock, Index
     t = ticker.upper()
-    if t in ("SPX", "VIX", "NDX", "RUT"):
+    # VIX TERM STRUCTURE: VIX9D/VIX3M/VIX1D are CBOE INDEXES, not stocks. Requesting them on SMART as
+    # Stock returned "Unknown contract", so the term-structure slope (backwardation = seller danger)
+    # silently stayed None in the regime log.
+    if t in ("SPX", "VIX", "NDX", "RUT", "VIX9D", "VIX3M", "VIX1D", "VVIX"):
         return Index(t, "CBOE", "USD")
     if t in ("SPY", "QQQ", "IWM", "DIA"):
         return Stock(t, "ARCA", "USD")

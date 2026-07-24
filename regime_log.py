@@ -103,6 +103,47 @@ def _note_iv(ticker, atm_iv, day):
 _EVENT_DAYS = set()          # e.g. {"2026-07-30"} for an FOMC — owner/ops can extend channels/_events.json
 
 
+def skew_25d(ticker):
+    """REAL skew from the ladder: IV of the ~25-delta PUT minus IV of the ~25-delta CALL.
+
+    The first version differenced ATM call vs ATM put at the SAME strike — which is ~0 by put-call
+    parity (identical strike+expiry => identical IV), so it measured nothing and logged 0.0 all day.
+    Genuine skew lives ACROSS strikes: the downside put is bid up relative to the upside call. The
+    ladder logger already streams strikes with per-strike delta+IV, so this is a free read."""
+    try:
+        import sqlite3
+        import ladder_logger as LL
+        con = sqlite3.connect("file:" + str(LL.LADDER_DB) + "?mode=ro", uri=True)
+    except Exception:
+        return None
+    try:
+        ts = con.execute("SELECT MAX(ts_utc) FROM ladder WHERE ticker=?", (ticker,)).fetchone()
+        if not ts or not ts[0]:
+            return None
+        rows = con.execute("SELECT right, delta, iv FROM ladder WHERE ticker=? AND ts_utc=? "
+                           "AND delta IS NOT NULL AND iv IS NOT NULL", (ticker, ts[0])).fetchall()
+        def near(right, target):
+            c = [r for r in rows if (r[0] or "").upper() == right]
+            return min(c, key=lambda r: abs(abs(r[1]) - target))[2] if c else None
+        p25, c25 = near("P", 0.25), near("C", 0.25)
+        return round(p25 - c25, 4) if (p25 is not None and c25 is not None) else None
+    except Exception:
+        return None
+    finally:
+        con.close()
+
+
+def _trend_ind(ib, ticker):
+    """Indicators that ACTUALLY carry ema135/ema315. regime_log's default bar pull returns ~81 bars —
+    far short of the ~945 EMA315 needs — so the flat/trend label silently stayed None, killing the very
+    feature the seller hypothesis turns on. chip's own tape pulls enough 1-min history, so reuse it."""
+    try:
+        import chip_desk as CD
+        return CD._tape(ib, ticker)
+    except Exception:
+        return None
+
+
 def _gap_from_close(bars):
     """Overnight gap %: today's first bar open vs the prior session's last close. One of the best cheap
     predictors of the trend days that hurt sellers. Fail-soft to None."""
@@ -183,11 +224,14 @@ def update(tickers=("SPY", "QQQ"), ib=None):
         # STABLE FULL-SESSION expected move (1/252yr) — one consistent daily figure the strike engine
         # consumes; the trade-time remaining-session EM is computed separately at entry.
         em = expected_move(spot, atm_iv, RTH_HOURS)
-        skew = round(atm_p - atm_c, 3) if (atm_p is not None and atm_c is not None) else None  # put-call IV
+        # REAL 25-delta skew across strikes (the same-strike ATM call-vs-put version was ~0 by parity)
+        skew = _safe(lambda: skew_25d(tk))
         # gap from prior close: first vs last of the session-split bars (fail-soft)
         gap = _safe(lambda: _gap_from_close(bars))
-        # flat/trend label from the EMA135/315 separation chip already trusts
-        e135, e315 = (ind or {}).get("ema135"), (ind or {}).get("ema315")
+        # flat/trend label from the EMA135/315 separation — from chip's tape, which actually HAS them
+        tind = _safe(lambda: _trend_ind(ib, tk)) or {}
+        e135, e315 = tind.get("ema135"), tind.get("ema315")
+        spot = spot or tind.get("price")
         sep = round(abs(e135 - e315) / spot * 100, 3) if (e135 and e315 and spot) else None
         label = ("flat" if (sep is not None and sep < FLAT_SEP_PCT)
                  else "trend" if sep is not None else None)
