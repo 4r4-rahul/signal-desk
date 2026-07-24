@@ -228,6 +228,19 @@ def _resolve_ticker(text, mstart, provider, strike):
     return None                                           # no ticker -> don't fabricate
 
 
+def _friday_of_week(offset_weeks):
+    """MM/DD of the Friday `offset_weeks` weeks ahead. Written in the same MM/DD shape the rest of this
+    parser emits, so it flows through strike/expiry resolution unchanged. Weekend-safe: on Sat/Sun the
+    'this week' Friday is already gone, so it rolls to the next one."""
+    from datetime import date, timedelta
+    d = date.today()
+    days_to_fri = (4 - d.weekday()) % 7          # Mon=0 .. Fri=4
+    if offset_weeks == 0 and d.weekday() > 4:    # weekend: "this week" already expired
+        offset_weeks = 1
+    fri = d + timedelta(days=days_to_fri + 7 * offset_weeks)
+    return f"{fri.month:02d}/{fri.day:02d}"
+
+
 def _parse_expiry(text):
     low = text.lower()
     if re.search(r'\bd0te\b|\b0\s*dte\b|today expiry|expir\w*\s+today|exp\w*\s+today', low):
@@ -235,6 +248,18 @@ def _parse_expiry(text):
     m = re.search(r'\b(\d)\s*dte\b', low)
     if m:
         return int(m.group(1)), f"{m.group(1)}DTE"
+    # RELATIVE EXPIRIES. Providers say "expiring next week" far more often than they write a date, and
+    # with no match here the desk fell through to the NEAREST expiry — pricing prince's "xom 160C
+    # expiring next week" as a 0DTE contract worth $0.01. A swing quoted as a same-day lotto is not a
+    # small error; it is the wrong instrument. Resolve to the FRIDAY of the intended week.
+    if re.search(r'\bnext week\b|\bnext fri(?:day)?\b', low):
+        return None, _friday_of_week(1)
+    if re.search(r'\bthis week\b|\bby fri(?:day)?\b|\bthis fri(?:day)?\b|\bweekl(?:y|ies)\b', low):
+        return None, _friday_of_week(0)
+    if re.search(r'\btomorrow\b', low):
+        return 1, "1DTE"
+    if re.search(r'\bin two weeks\b|\btwo weeks? out\b|\b2 weeks? out\b', low):
+        return None, _friday_of_week(2)
     m = re.search(r'\b(\d{1,2})\s*(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\b', low)
     if m:
         return None, f"{int(m.group(1))} {m.group(2)[:3].title()}"
@@ -712,7 +737,16 @@ def exit_plan(conviction):
 def plan_data(sig, risk_pct=None, conviction=None, q=None, ind=None, rv=None, now_min=None, force_contracts=None):
     p = sig['premium']
     if p is None:
-        return {"ok": False, "reason": "no premium in signal"}
+        # An UNPRICED WATCH names the contract but not a price ("watching xom 160C expiring next week").
+        # The contract is fully determined, so the live chain can supply what the message omitted — that
+        # is the whole point of watching it. Fall back to the live mid; without this the card renders
+        # with no levels at all and the operator has nothing to act on.
+        live = (q or {}).get("mid") or (q or {}).get("ask")
+        if sig.get("unpriced_watch") and live:
+            p = float(live)
+            sig = {**sig, "premium": p, "premium_src": "live-chain"}
+        else:
+            return {"ok": False, "reason": "no premium in signal"}
     if p < MIN_PREMIUM:
         return {"ok": False, "reason": f"premium ${p:.2f} below tradeable floor — slippage kills copy"}
     rp = risk_pct if risk_pct is not None else RISK_PCT
@@ -871,7 +905,18 @@ def analyze(text, seg, provider=None):
     if not sig or not sig.get("strike"):
         return None
     if sig.get("premium") is None and not _ENTRY_VERB.search(text or ""):
-        return None                                          # no price + no entry verb -> commentary, not a signal
+        # UNPRICED WATCH. The rule above ("no price + no entry verb -> commentary") also threw away
+        # every EXPLICIT watch that happened not to quote a price: prince's
+        #     "watching xom 160C expiring next week for a swing"
+        # names a complete, actionable contract and was silently dropped, which is why unpriced watches
+        # kept "never arriving" on the desk. Commentary and a watch are distinguishable: commentary
+        # ("SPY 750 call looking strong") does not use explicit watch language AND name a full contract.
+        # Require BOTH — watch phrasing and ticker+strike+right — and let the desk price it off the
+        # live chain, which is what it already does for held resolution.
+        if not (is_watch(text) and sig.get("ticker") and sig.get("strike") and sig.get("type")):
+            return None                                      # genuinely commentary, not a signal
+        sig["watch"] = True
+        sig["unpriced_watch"] = True                         # premium comes from the chain, not the message
     if provider:
         sig["provider"] = provider
     score, tier, reasons, ev = confidence(sig, seg)
