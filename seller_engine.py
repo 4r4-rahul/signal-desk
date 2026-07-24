@@ -53,13 +53,21 @@ def build_vertical(chain, right, target_delta=DEFAULT_TARGET_DELTA, width=DEFAUL
     long_strike = short["strike"] + width if right.upper() == "C" else short["strike"] - width
     long = _leg(chain, right, long_strike)
     if not long or long.get("bid") is None or long.get("ask") is None:
-        # snap to the nearest listed strike at least `width` OTM if the exact wing isn't listed
-        otm = [c for c in chain if (c.get("right") or "").upper() == right.upper()
-               and c.get("bid") is not None and c.get("ask") is not None
-               and ((c["strike"] >= long_strike) if right.upper() == "C" else (c["strike"] <= long_strike))]
-        if not otm:
+        # The exact wing may not be in the captured chain (a $5 wing beyond a 16-delta short can sit
+        # below the ladder's delta floor). Prefer a strike at/BEYOND the requested wing; if none exists,
+        # fall back to the FURTHEST available strike beyond the short — a NARROWER spread is still a
+        # valid defined-risk position, and real_width below records what we actually got. Returning None
+        # here is what made every condor unbuildable at the live open.
+        is_c = right.upper() == "C"
+        beyond = [c for c in chain if (c.get("right") or "").upper() == right.upper()
+                  and c.get("bid") is not None and c.get("ask") is not None
+                  and ((c["strike"] > short["strike"]) if is_c else (c["strike"] < short["strike"]))]
+        if not beyond:
             return None
-        long = min(otm, key=lambda c: abs(c["strike"] - long_strike))
+        at_or_past = [c for c in beyond
+                      if ((c["strike"] >= long_strike) if is_c else (c["strike"] <= long_strike))]
+        long = (min(at_or_past, key=lambda c: abs(c["strike"] - long_strike)) if at_or_past
+                else max(beyond, key=lambda c: abs(c["strike"] - short["strike"])))
     credit = round(short["bid"] - long["ask"], 2)                 # sell short bid, buy long ask
     real_width = abs(long["strike"] - short["strike"])
     defined_risk = round(real_width - credit, 2)                  # per share; *100 for the contract

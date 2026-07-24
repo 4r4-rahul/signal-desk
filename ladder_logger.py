@@ -31,8 +31,13 @@ LADDER_DB = _P.CHANNELS / "ladder.db"
 TICKERS = ("SPY", "QQQ")
 CLIENT_ID = 84                      # own line budget, distinct from monitor(80/81)/ustop/chip(82)
 SNAP_EVERY_S = 60                   # one ladder snapshot per minute per ticker
-DELTA_LO, DELTA_HI = 0.06, 0.42     # keep strikes whose |delta| is in this band (the seller's zone + wings)
-MAX_PER_SIDE = 10                   # bound strikes/side/ticker so the IBKR line budget can't blow out
+# DELTA BAND — must span the seller's SHORT strike *and its WING*, or no spread can be constructed.
+# Caught live at the open: with a 0.06 floor the SPY ladder stopped at 745C (0.065d), but a 16d short
+# sits at 743C and its $5 wing at 748C (~0.02d) was never logged -> build_vertical found no long leg and
+# EVERY condor/vertical came back unbuildable. The floor must reach past the wing, and the ceiling is
+# raised through ATM so marking and ATM-IV reads are covered too.
+DELTA_LO, DELTA_HI = 0.02, 0.55
+MAX_PER_SIDE = 14                   # wide enough for short+wing; still bounded for the IBKR line budget
 
 
 def _con():
