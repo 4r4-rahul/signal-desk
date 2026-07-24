@@ -96,8 +96,26 @@ def _mark_vertical(chain, right, short_strike, long_strike):
     return SE.spread_buyback(s.get("ask"), l.get("bid"))
 
 
-def _open_positions(equity, day, now_iso):
-    fired = _FIRED.setdefault(day, set())
+def _already_open_today(open_rows, day):
+    """(ticker, arm) pairs that ALREADY have a position today — from live open rows AND from today's
+    resolved positions in the book.
+
+    RESTART-PROOF, and it has to be: the old in-memory _FIRED set reset on every process restart, so
+    three restarts this morning made the desk re-open the same spreads three times (8 positions where
+    there should have been 4). chip_desk solves the same problem with _rebuild_book; this is that."""
+    seen = {(p.get("ticker"), p.get("arm")) for p in open_rows if p.get("day") == day}
+    try:
+        for p in SB._load():
+            if (p.get("day") or (p.get("closed") or "")[:10]) == day:
+                seen.add((p.get("ticker"), p.get("arm")))
+    except Exception:
+        pass
+    return seen
+
+
+def _open_positions(equity, day, now_iso, open_rows=()):
+    # derive from STATE, not an in-memory flag, so a restart can't duplicate the day's entries
+    fired = _FIRED.setdefault(day, set()) | _already_open_today(open_rows, day)
     opened = []
     for tk in TICKERS:
         chain, spot, ts = _latest_chain(tk)
@@ -181,7 +199,7 @@ def scan_loop():
             equity = SB.replay()["equity"]
             open_rows = _load_open()
             if smin >= ENTRY_AFTER_MIN:
-                open_rows += _open_positions(equity, day, now_iso)
+                open_rows += _open_positions(equity, day, now_iso, open_rows)
             open_rows = _manage_open(open_rows, now, day, smin)
             _save_open(open_rows)
             time.sleep(30)

@@ -55,6 +55,38 @@ def _con():
     return con
 
 
+def _open_position_legs(ticker):
+    """Strikes of any OPEN seller position on this ticker, as {(right, strike)}.
+
+    THESE MUST BE LOGGED EVERY SNAPSHOT, delta band or not. Caught live: a $5 wing sits near the band
+    edge (SPY 747C at 0.022d), so as spot drifted the wing fell under the floor and vanished mid-session
+    — which broke BOTH the live mark (no long leg => no buyback => position unmanageable, no 50% take)
+    AND backtest integrity (a position whose legs aren't continuously logged can't be replayed, which is
+    the whole reason this logger exists). Pinning open legs fixes both."""
+    try:
+        import json
+        rows = json.loads((_P.CHANNELS / "seller" / "open.json").read_text())
+    except Exception:
+        return set()
+    legs = set()
+    for p in rows:
+        if (p.get("ticker") or "").upper() != ticker.upper():
+            continue
+        sp = p.get("spread") or {}
+        if p.get("kind") == "condor":
+            for side, r in (("call", "C"), ("put", "P")):
+                v = sp.get(side) or {}
+                for k in ("short_strike", "long_strike"):
+                    if v.get(k) is not None:
+                        legs.add((r, float(v[k])))
+        else:
+            r = (sp.get("right") or "").upper()
+            for k in ("short_strike", "long_strike"):
+                if r and sp.get(k) is not None:
+                    legs.add((r, float(sp[k])))
+    return legs
+
+
 def _snap_ticker(MK, conn, ticker, day, now_iso, ohlc):
     """One minute's OTM ladder + underlying row for one ticker. Returns (ladder_rows, und_row)."""
     tk = ticker.upper()
@@ -89,6 +121,18 @@ def _snap_ticker(MK, conn, ticker, day, now_iso, ohlc):
                          q.get("bid"), q.get("ask"), q.get("mid"),
                          q.get("iv"), q.get("delta"), q.get("gamma"), q.get("theta"), q.get("vega")))
             kept += 1
+    # PIN THE OPEN POSITION'S LEGS — always, even if they've drifted outside the delta band.
+    got = {(r[6], r[5]) for r in rows}
+    for (right, k) in _open_position_legs(tk):
+        if (right, float(k)) in got:
+            continue
+        q = MK.option_quote(tk, str(int(k)) if abs(k - int(k)) < 1e-9 else f"{k:g}", right,
+                            expiry=exp, ib=conn)
+        if not q or q.get("mid") is None:
+            continue
+        rows.append((now_iso, day, tk, exp, spot, float(k), right,
+                     q.get("bid"), q.get("ask"), q.get("mid"),
+                     q.get("iv"), q.get("delta"), q.get("gamma"), q.get("theta"), q.get("vega")))
     o = ohlc.setdefault(tk, {"open": spot, "high": spot, "low": spot})
     o["high"] = max(o["high"], spot)
     o["low"] = min(o["low"], spot)
