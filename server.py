@@ -50,6 +50,25 @@ except Exception:
     BROKER = None
 
 
+_SELLER_CACHE = {"ts": 0.0, "data": None}
+
+
+def _seller_snap():
+    """The premium-seller books (arm1+arm2) + open positions + paired-vs-chip, cached ~20s. Fail-soft:
+    returns None until the seller desk has resolved a position (empty book -> the $50k flat start)."""
+    import time as _t
+    if _t.time() - _SELLER_CACHE["ts"] < 20 and _SELLER_CACHE["data"] is not None:
+        return _SELLER_CACHE["data"]
+    try:
+        import seller_book as SB, seller_desk as SD
+        data = {"book": SB.replay(), "arm1": SB.replay(arm="arm1"), "arm2": SB.replay(arm="arm2"),
+                "paired": SB.paired_vs_chip(), "open": SD._load_open()}
+    except Exception:
+        data = None
+    _SELLER_CACHE.update(ts=_t.time(), data=data)
+    return data
+
+
 def _broker_snap():
     """Cached tastytrade account (balance + positions) for the desk. Silent if not configured."""
     if not BROKER:
@@ -3110,6 +3129,7 @@ class H(http.server.BaseHTTPRequestHandler):
                                     "pending": PENDING, "signals": sigs, "stats": ST.performance(),
                                     "calibration": _sc_cal, "exit_quality": _sc_exit,
                                     "provider_edge": _provider_edge_cached(), "chip": _chip,
+                                    "seller": _seller_snap(),
                                     "broker": _broker_snap()})
         html = (ROOT / "dashboard.html").read_bytes()
         self._send(200, html, "text/html; charset=utf-8")
@@ -3206,4 +3226,13 @@ if __name__ == "__main__":
             print("🪜 ladder logger started (OTM ladder + underlying for the theta experiment).")
         except Exception as _e:
             print(f"   (ladder logger failed to start: {_e})")
+        try:
+            # The premium-SELLER books (long theta) — the mirror of chip. Opens arm1 (directional on
+            # chip's side) + arm2 (neutral condor) ~10:00 ET off the ladder, manages 50%-take/EOD.
+            # SHADOW paper, own store; reads the ladder logger's data so it needs no extra IBKR lines.
+            import seller_desk
+            threading.Thread(target=seller_desk.scan_loop, daemon=True).start()
+            print("💰 seller desk started (premium-seller books arm1+arm2 — theta mirror of chip).")
+        except Exception as _e:
+            print(f"   (seller desk failed to start: {_e})")
     http.server.HTTPServer(("127.0.0.1", PORT), H).serve_forever()
