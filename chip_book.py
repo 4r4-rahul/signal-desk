@@ -28,7 +28,15 @@ from datetime import datetime, timezone
 
 import deskpaths as _P
 
-START_EQUITY = 50_000.0      # owner-funded paper book
+# BUDGET RAISED 50k -> 250k when the universe went to 10 tickers (owner's call, 2026-07-24).
+# The binding reason is NOT risk appetite, it is EXECUTABILITY of the runner discipline: at $50k the
+# most expensive ticker (TSLA, ~$130 risk/contract) sized to just 3 contracts, and exec_plan degrades
+# 3 -> thirds and 1 -> all-out-at-T1 — i.e. the book could not actually express "half at T1 plus a
+# runner" on the very names it was added to trade. At $250k every ticker sizes >=19 contracts, so the
+# 1/2-1/4-1/4 shape is always executable and T2/T3 finally get TESTED rather than merely declared.
+# NOTE the concurrent-exposure math changed with the universe: 10 tickers x 1% = up to 10% of the book
+# at risk simultaneously (it was 2% with two tickers). Same per-trade discipline, 5x the breadth.
+START_EQUITY = 250_000.0     # owner-funded paper book
 RISK_PCT = 1.0               # % of CURRENT equity risked per position
 MAX_CONCURRENT = 4           # open positions at once — a real book has finite attention and margin
 RT_COST_PER_CT = 1.30        # $1.00 open + ~$0.30 fees; $0 to close

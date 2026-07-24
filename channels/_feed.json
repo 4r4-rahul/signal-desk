@@ -78,5 +78,25 @@
   "id": "f8",
   "_sig": "prince|up 48 on iwm puts everyone",
   "channel": "discord"
+ },
+ {
+  "id": "f9",
+  "_sig": "prince|cutting iwm puts everyone not risking th",
+  "provider": "prince",
+  "text": "Cutting IWM puts @everyone not risking the swing trade although I think it will drop",
+  "ts": "2026-07-23T19:52:19.752425+00:00",
+  "outcome": "managed",
+  "rank": 3,
+  "channel": "discord_799297438765809704_990683044874711131"
+ },
+ {
+  "id": "f10",
+  "_sig": "prince_small|we need to learn to be patient and let t",
+  "provider": "prince_small",
+  "text": "We need to learn to be patient and let the trade play out. Whole chat was in AAPL CALLS!! Almost 280% now @everyone",
+  "ts": "2026-07-24T14:12:13.224722+00:00",
+  "outcome": "managed",
+  "rank": 3,
+  "channel": "discord_799297438765809704_1143653301599088670"
  }
 ]

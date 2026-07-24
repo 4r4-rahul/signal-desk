@@ -293,6 +293,31 @@ def _shadow_scaleout(ticks, t1, t2, stop, t3=None, exit_model="ladder"):
             if pct <= slvl:
                 return round(float(min(pct, slvl)), 2)      # book the OBSERVED tick, never a windfall
         return round(float(ticks[-1]), 2)
+    if exit_model == "runner":
+        # RUNNER (chip, owner's call 2026-07-24): take HALF at t1 and move the stop UP TO t1, so the
+        # remaining half rides toward t2/t3 with its gain already locked. The point of setting the stop
+        # AT t1 (not breakeven) is that the runner then CANNOT do worse than t1 — worst case the whole
+        # position books t1, exactly what the old all-out-at-t1 did; best case it reaches t2/t3. It is a
+        # free option on the second half, which is precisely the "our winners should win more" agenda.
+        # Motivating evidence: prince_small's AAPL 325C stopped at -27% and then ran to +330% — the desk
+        # was cutting and going idle while the trade did all its work afterwards.
+        rem, realized, slvl, hit1, hit2 = 1.0, 0.0, -abs(stop), False, False
+        for pct in ticks:
+            if rem <= 0:
+                break
+            if not hit1 and pct >= t1:
+                realized += 0.50 * t1; rem -= 0.50; hit1 = True; slvl = t1     # 1/2 out, stop UP TO t1
+            elif hit1 and not hit2 and t2 and pct >= t2:
+                realized += 0.25 * t2; rem -= 0.25; hit2 = True; slvl = t2     # 1/4 out, trail to t2
+            elif hit2 and t3 and pct >= t3:
+                realized += rem * t3; rem = 0.0; break                         # runner books t3
+            if pct <= slvl:
+                # same honest-fill rule as the ladder: book the OBSERVED tick, never the level, so a gap
+                # through a profit-stop is not silently gifted back as a perfect fill.
+                realized += rem * min(pct, slvl); rem = 0.0; break
+        if rem > 0:
+            realized += rem * ticks[-1]        # time stop / EOD: the runner marks out at the last tick
+        return round(realized, 2)
     rem, realized, slvl, hit1, hit2 = 1.0, 0.0, -abs(stop), False, False
     for pct in ticks:
         if rem <= 0:
@@ -396,7 +421,7 @@ def friction_floor_r(ticker, premium, stop_pct, observed_spread_pct=None):
 # scale-out. Scoring both through one discipline was measuring chip against a plan it does not run.
 # Changing the discipline GLOBALLY would be worse: it would re-score every human's back-history against
 # a plan THEY never ran, and provider_edge -> size_mult -> real money reads those numbers.
-_EXIT_MODEL_BY_PROVIDER = {"chip": "single"}
+_EXIT_MODEL_BY_PROVIDER = {"chip": "runner"}   # was "single" (all-out at t1); owner moved to 1/2-at-t1 + runner
 _DEFAULT_EXIT_MODEL = "ladder"
 
 

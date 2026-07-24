@@ -19,7 +19,7 @@ from datetime import datetime
 
 import deskpaths as _P
 
-START_EQUITY = 50_000.0
+START_EQUITY = 250_000.0        # matched to chip's book so the paired comparison is like-for-like
 MEASUREMENT_START = "2026-07-23"          # same clean-window convention as chip_book
 STORE = _P.CHANNELS / "seller" / "positions.jsonl"
 

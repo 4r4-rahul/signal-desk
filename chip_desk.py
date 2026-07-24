@@ -29,7 +29,14 @@ import chip_strike as SK
 ET = ZoneInfo("America/New_York")
 
 # Phase 1 proves the loop on the two tightest-spread, cleanest-mechanics names. Phase 2 adds the rest.
-TICKERS = ["SPY", "QQQ"]
+# LIVE UNIVERSE. Index ETFs (tight spreads) + the mega-caps the owner asked for, plus TSLA/META/AMZN/
+# MSFT/IWM as add-ons. TSLA and NVDA earn their place specifically because the reach metric says chip's
+# median scalp peaks at HALF its T1 — higher-vol names are the ones that can actually REACH a target in
+# 20 minutes, so they test the reach problem rather than just diluting the sample.
+# EVERY TICKER IS MEASURED SEPARATELY, NEVER POOLED: a 3%-spread index ETF and a 10%-spread single name
+# are different processes, and averaging them would blend two distributions into one meaningless number.
+# NOTE the seller books stay on SPY/QQQ only — you do not sell 0DTE credit spreads into a 10% spread.
+TICKERS = ["SPY", "QQQ", "IWM", "NVDA", "AAPL", "GOOGL", "TSLA", "META", "AMZN", "MSFT"]
 
 # Per-ticker mechanics. *_pct are OPTION-premium %-moves (what _shadow_scaleout consumes), scaled to each
 # ticker's ATM leverage — index ETFs (tight) get the smallest targets, single names ride wider. These are
@@ -64,11 +71,22 @@ DEFAULT_MECHANICS = {
     # QQQ stop 28->32: sizing arithmetic, not edge — at a $250 risk cap a 32% stop on a ~$4.8 ATM still
     # buys 1 contract, and it gives the exit somewhere to live. The QQQ review's z=13.7 "stop 35 vs 28"
     # is NOT evidence for this: that row moved t1 22->28 at the same time and double-counts the t1 effect.
+    # T1 == STOP ON EVERY TICKER. The 1.0x ratio was measured on SPY/QQQ (three independent reads agree
+    # on the sign) but the single names were left on the OLD asymmetric ratio (NVDA 30/34, AAPL 24/30)
+    # simply because they were never live. Activating them on the ratio we already showed is worse would
+    # be knowingly shipping the inferior setting, so they are corrected here. It also keeps every ticker
+    # inside theta_lab's symmetric-band guard, so the buy-vs-sell replay stays unbiased across the book.
     "SPY":  {"stop_pct": 26, "t1_pct": 26, "t2_pct": 55, "t3_pct": 88,  "spread_max": 3,  "strike_inc": 1.0, "regime_bias": "trend",    "dte_pref": 1, "dte_max": 2},
     "QQQ":  {"stop_pct": 32, "t1_pct": 32, "t2_pct": 60, "t3_pct": 95,  "spread_max": 3,  "strike_inc": 1.0, "regime_bias": "trend",    "dte_pref": 1, "dte_max": 2},
-    "NVDA": {"stop_pct": 34, "t1_pct": 30, "t2_pct": 62, "t3_pct": 100, "spread_max": 10, "strike_inc": 2.5, "regime_bias": "momentum", "dte_pref": 1, "dte_max": 2},
-    "TSLA": {"stop_pct": 38, "t1_pct": 34, "t2_pct": 70, "t3_pct": 115, "spread_max": 12, "strike_inc": 5.0, "regime_bias": "range",    "dte_pref": 1, "dte_max": 3},
-    "AAPL": {"stop_pct": 30, "t1_pct": 24, "t2_pct": 50, "t3_pct": 80,  "spread_max": 8,  "strike_inc": 2.5, "regime_bias": "trend",    "dte_pref": 1, "dte_max": 2},
+    "IWM":  {"stop_pct": 28, "t1_pct": 28, "t2_pct": 58, "t3_pct": 90,  "spread_max": 4,  "strike_inc": 1.0, "regime_bias": "trend",    "dte_pref": 1, "dte_max": 2},
+    # single names: wider spreads, bigger premium swings -> wider stop/targets and a looser spread cap
+    "NVDA": {"stop_pct": 34, "t1_pct": 34, "t2_pct": 68, "t3_pct": 105, "spread_max": 10, "strike_inc": 2.5, "regime_bias": "momentum", "dte_pref": 1, "dte_max": 2},
+    "TSLA": {"stop_pct": 38, "t1_pct": 38, "t2_pct": 76, "t3_pct": 120, "spread_max": 12, "strike_inc": 5.0, "regime_bias": "range",    "dte_pref": 1, "dte_max": 3},
+    "AAPL": {"stop_pct": 30, "t1_pct": 30, "t2_pct": 60, "t3_pct": 95,  "spread_max": 8,  "strike_inc": 2.5, "regime_bias": "trend",    "dte_pref": 1, "dte_max": 2},
+    "GOOGL":{"stop_pct": 32, "t1_pct": 32, "t2_pct": 64, "t3_pct": 100, "spread_max": 8,  "strike_inc": 2.5, "regime_bias": "trend",    "dte_pref": 1, "dte_max": 2},
+    "META": {"stop_pct": 34, "t1_pct": 34, "t2_pct": 68, "t3_pct": 105, "spread_max": 10, "strike_inc": 5.0, "regime_bias": "momentum", "dte_pref": 1, "dte_max": 2},
+    "AMZN": {"stop_pct": 32, "t1_pct": 32, "t2_pct": 64, "t3_pct": 100, "spread_max": 8,  "strike_inc": 2.5, "regime_bias": "trend",    "dte_pref": 1, "dte_max": 2},
+    "MSFT": {"stop_pct": 30, "t1_pct": 30, "t2_pct": 60, "t3_pct": 95,  "spread_max": 8,  "strike_inc": 5.0, "regime_bias": "trend",    "dte_pref": 1, "dte_max": 2},
 }
 GEOM = "g2"                 # stamped on every emit so g1 (0DTE) and g2 (1DTE) samples never pool in edge stats
 

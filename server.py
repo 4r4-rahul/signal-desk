@@ -591,7 +591,11 @@ def _feed_note(channel, prov, text, outcome):
     _real_channel = isinstance(channel, str) and channel.startswith("discord_")
     sig = _feed_sig(prov, text)
     badge, rank = _FEED_OUTCOME.get(outcome, (outcome.lower()[:8], 2))
-    now = datetime.now(ET).isoformat()
+    # STORE UTC, DISPLAY ET. The live path wrote ET while the backfill wrote UTC, so one series carried
+    # two conventions. Both parse (each has an explicit offset) but a mixed-tz time series is a latent
+    # trap the moment anything compares or truncates them as strings. UTC is the desk's convention
+    # everywhere else (ts_utc); the client renders ET.
+    now = datetime.now(timezone.utc).isoformat()
     row = next((r for r in reversed(FEED) if r.get("_sig") == sig), None)
     if row is not None:                                   # already on the feed today -> upgrade outcome
         if rank >= row.get("rank", 0):

@@ -1154,32 +1154,59 @@ function renderSeller(s){
   const el=document.getElementById('sellerbook'); if(!el) return;
   if(!s||!s.book){ el.innerHTML=''; return; }
   const b=s.book, a1=s.arm1||{}, a2=s.arm2||{}, pr=s.paired||{}, opn=s.open||[];
+  const led=(b.positions||[]).slice().reverse();
   const money=v=>v==null?'—':(v>=0?'+$':'-$')+Math.abs(v).toLocaleString(undefined,{maximumFractionDigits:0});
   const col=v=>v==null?'var(--dim)':v>0?'#22c55e':v<0?'#ef4444':'var(--fg)';
-  const openRows=opn.map(p=>{
-    const sp=p.spread||{}, lbl=p.kind==='condor'
-      ? `${(sp.call||{}).short_strike}C/${(sp.put||{}).short_strike}P`
-      : `${sp.short_strike}${sp.right}`;
-    return `<div style="display:flex;gap:6px;font-size:10.5px;padding:2px 0;color:var(--sub)">
-      <span style="width:30px;color:${p.arm==='arm1'?'#c4b5fd':'#7dd3fc'}">${p.arm==='arm1'?'dir':'IC'}</span>
-      <b style="width:30px">${p.ticker}</b><span style="width:78px">${lbl}</span>
-      <span style="color:var(--dim)">×${p.qty} · cr $${p.credit}</span>
-      <span style="margin-left:auto;color:${col(p.open_pnl)}">${p.open_pnl!=null?money(p.open_pnl):'·'}</span></div>`;
+  const armTag=a=>a==='arm1'
+    ? '<span style="color:#c4b5fd;font-size:9.5px;font-weight:700">DIR</span>'
+    : '<span style="color:#7dd3fc;font-size:9.5px;font-weight:700">CONDOR</span>';
+  // OPEN POSITIONS as real cards: the structure, what was collected, what it'd cost to close now,
+  // and how far spot sits from the short strikes (the seller's actual risk gauge).
+  const cards=opn.map(p=>{
+    const sp=p.spread||{}, isC=p.kind==='condor';
+    const legs = isC
+      ? `<span style="color:#ef4444">${(sp.call||{}).short_strike}C</span>/<span style="color:#ef4444">${(sp.put||{}).short_strike}P</span>
+         <span style="color:var(--dim)">wings ${(sp.call||{}).long_strike}/${(sp.put||{}).long_strike}</span>`
+      : `<span style="color:#ef4444">${sp.short_strike}${sp.right}</span> <span style="color:var(--dim)">wing ${sp.long_strike}</span>`;
+    const pnl=p.open_pnl, mk=p.mark_buyback;
+    const cap = (mk!=null&&p.credit) ? Math.round((1-mk/p.credit)*100) : null;
+    return `<div style="background:rgba(125,211,252,.05);border:1px solid rgba(125,211,252,.2);border-radius:10px;padding:8px 9px;margin-top:7px">
+      <div style="display:flex;align-items:baseline;gap:6px;flex-wrap:wrap">
+        <b style="font-size:13px">${p.ticker}</b>${armTag(p.arm)}
+        <span style="font-size:11px">${legs}</span>
+        <span style="margin-left:auto;font-weight:700;color:${col(pnl)}">${money(pnl)}</span></div>
+      <div style="font-size:10.5px;color:var(--muted);margin-top:4px">
+        collected <b>$${p.credit}</b> × ${p.qty} · risk <b>$${p.defined_risk}</b>/ct
+        · now costs <b>${mk==null?'—':'$'+mk.toFixed(2)}</b>
+        ${cap!=null?`· captured <b style="color:${col(cap)}">${cap}%</b> of credit <span style="color:var(--dim)">(take at 50%)</span>`:''}</div>
+    </div>`;
+  }).join('');
+  // LEDGER of resolved seller trades — the mirror of chip's scalp log.
+  const ledRows=led.slice(0,12).map(p=>{
+    const t=fmtET(p.closed||p.opened||'');
+    const sp=p.spread||{};
+    return `<div style="display:flex;gap:6px;align-items:center;font-size:10.5px;padding:3px 0;border-top:1px solid var(--line)">
+      <span style="color:var(--dim);width:34px">${t}</span>
+      <b style="width:32px">${p.ticker}</b>${armTag(p.arm)}
+      <span style="color:var(--dim);width:52px">cr $${p.credit}</span>
+      <span style="margin-left:auto;color:${col(p.pnl)};font-weight:700;width:52px;text-align:right">${money(p.pnl)}</span>
+      <span style="color:var(--dim);font-size:9.5px;width:66px;text-align:right">${(p.mgmt_trigger||'').replace('_',' ')}</span></div>`;
   }).join('');
   el.innerHTML=`<div class="stats-h">💰 Seller Book <span style="margin-left:auto;font-weight:500;color:var(--muted)">long theta · shadow</span></div>
     <div style="display:flex;align-items:baseline;gap:8px;margin:4px 0 2px">
       <b style="font-size:19px;color:${col(b.pnl)}">$${b.equity.toLocaleString(undefined,{maximumFractionDigits:0})}</b>
       <span style="color:${col(b.pnl)};font-size:12px">${money(b.pnl)} (${b.return_pct>=0?'+':''}${b.return_pct}%)</span></div>
     <div style="font-size:11px;color:var(--muted);margin-bottom:3px">
-      ${b.n} pos · win ${b.win_rate==null?'—':b.win_rate+'%'} · dd ${b.drawdown_pct}%
-      &nbsp;·&nbsp; arm1(dir) <b style="color:${col(a1.pnl)}">${money(a1.pnl)}</b>
-      · arm2(IC) <b style="color:${col(a2.pnl)}">${money(a2.pnl)}</b></div>
-    <div style="font-size:10.5px;color:var(--muted);margin-bottom:4px">
+      ${b.n} closed · win ${b.win_rate==null?'—':b.win_rate+'%'} · dd ${b.drawdown_pct}%
+      &nbsp;·&nbsp; DIR <b style="color:${col(a1.pnl)}">${money(a1.pnl)}</b>
+      · CONDOR <b style="color:${col(a2.pnl)}">${money(a2.pnl)}</b></div>
+    <div style="font-size:10.5px;color:var(--muted);margin-bottom:2px">
       vs chip (paired): mean daily <b style="color:${col(pr.mean_daily_diff)}">${pr.mean_daily_diff==null?'—':money(pr.mean_daily_diff)}</b>
-      <span style="color:var(--dim)">over ${pr.days||0} shared day(s) — needs many for a verdict</span></div>
-    ${opn.length?`<div style="font-size:9.5px;color:var(--muted);margin:2px 0 1px">OPEN (${opn.length})</div>${openRows}`:''}
-    ${b.n===0&&opn.length===0?`<div style="font-size:10px;color:var(--dim)">no positions yet — opens ~10:00 ET off the ladder</div>`:''}
-    <div style="font-size:9px;color:var(--dim);margin-top:4px">win-small / rare-big-loss shape · 40 calm days under-sample the tail</div>`;
+      <span style="color:var(--dim)">over ${pr.days||0} shared day(s)</span></div>
+    ${opn.length?`<div style="font-size:9.5px;color:var(--muted);margin-top:6px">OPEN (${opn.length})</div>${cards}`:
+      `<div style="font-size:10px;color:var(--dim);margin-top:4px">no open positions — opens ~10:00 ET off the ladder</div>`}
+    ${ledRows?`<div style="font-size:9.5px;color:var(--muted);margin:9px 0 1px">LEDGER · ${b.n} closed</div>${ledRows}`:''}
+    <div style="font-size:9px;color:var(--dim);margin-top:5px">win-small / rare-big-loss · 40 calm days under-sample the tail</div>`;
 }
 function renderChipLedger(sigs, book){
   // Standalone CHIP-ONLY scalp results log (kept separate from real tastytrade trades until go-live).
