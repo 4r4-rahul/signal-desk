@@ -622,6 +622,7 @@ function checkDarkChannels(d){
     const prov=v.provider||k;
     if(prov==='chip'||!v.last_beat) continue;
     if(!v.provider) continue;                       // unmapped channel -> not a watched provider
+    if(v.live_session===false) continue;            // restored from disk, no heartbeat YET -> not dark
     const age=(now-Date.parse(v.last_beat))/1000;
     if(age>6*3600) continue;                        // dead for hours = RETIRED, not newly dark; no wolf
     if(age>DARK_AFTER_S) dark.push({prov, mins:Math.round(age/60)});
@@ -806,7 +807,7 @@ function ibkrRowHTML(ibkr,nowIso){
 // reload clears the per-channel Watch toggle, so reloading alone does NOT restore the relay). Say that
 // once, plainly, instead of making the operator infer it from four red dots.
 function extensionOutageHTML(src, nowIso){
-  const provs=Object.values(src||{}).filter(v=>v.provider&&v.provider!=='chip'&&v.last_beat);
+  const provs=Object.values(src||{}).filter(v=>v.provider&&v.provider!=='chip'&&v.last_beat&&v.live_session!==false);
   if(!provs.length) return '';
   const fresh=provs.filter(v=>(Date.parse(nowIso)-Date.parse(v.last_beat))/1000<180);
   if(fresh.length) return '';                       // at least one channel alive -> per-channel problem
@@ -847,11 +848,15 @@ function renderSources(src,nowIso,ibkr){
   // operator to "reload tab" for it is advice they cannot act on. It gets its own state and is excluded
   // from the watched-provider count, the dark alarm and the extension-outage banner.
   const isLocal=k=>(src[k].provider||k)==='chip';
-  const stateOf=k=>isLocal(k)?'local'
-    :(darkAge(k)>180?'dark':(!isLive(k)?'stale':(!isHealthy(k)?'blind':(isMute(k)?'mute':'live'))));
+  // A row restored from disk after a desk restart carries an OLD last_beat until its first real
+  // heartbeat (~20s). Judging staleness off that produced a DARK flash + outage alarm on every single
+  // restart — a false alarm the operator then had to chase. 'waiting' says so honestly instead.
+  const isWaiting=k=>src[k].live_session===false;
+  const stateOf=k=>isLocal(k)?'local':(isWaiting(k)?'waiting'
+    :(darkAge(k)>180?'dark':(!isLive(k)?'stale':(!isHealthy(k)?'blind':(isMute(k)?'mute':'live')))));
   const liveN=keys.filter(k=>stateOf(k)==='live').length;
   const watched=keys.filter(k=>!isLocal(k)).length;   // chip is not an extension-watched channel   // truly RECEIVING, not just tab-open
-  const RANK={live:5,local:4,mute:3,blind:2,stale:1,dark:0}, DOT={live:'#22c55e',local:'#a78bfa',mute:'#f97316',blind:'#f59e0b',stale:'#6b7280',dark:'#ef4444'};
+  const RANK={live:6,local:5,waiting:4,mute:3,blind:2,stale:1,dark:0}, DOT={live:'#22c55e',local:'#a78bfa',waiting:'#64748b',mute:'#f97316',blind:'#f59e0b',stale:'#6b7280',dark:'#ef4444'};
   keys.sort((a,b)=>(RANK[stateOf(b)]-RANK[stateOf(a)])||((src[b].count||0)-(src[a].count||0)));
   el.innerHTML=extensionOutageHTML(src,nowIso)+`<div class="rail-h">📡 Data feeds <span class="rail-n">${liveN}/${watched} providers</span></div>`+ib+keys.map(k=>{
     const s=src[k], stt=stateOf(k);
@@ -861,11 +866,13 @@ function renderSources(src,nowIso,ibkr){
     const key=s.provider||k;
     const tip={live:'live — receiving & reading Discord (click to mute)',
                local:'local engine — chip runs server-side, not in a browser tab. Nothing to reload; it beats when it emits a scalp.',
+               waiting:'reconnecting — the desk restarted; waiting for this channel\\'s first heartbeat (~20s). Not an outage.',
                dark:'🔴 NO HEARTBEAT — the browser has throttled this tab. Messages are NOT reaching the desk. RELOAD IT.',
                mute:'⚠ READING but NOT RELAYING — the tab sees Discord yet posts nothing to the desk. RELOAD this channel tab.',
                blind:'⚠ tab is open but NOT reading Discord — scrape broke, reload the channel',
                stale:'stale — window not sending (minimized/closed?)'}[stt];
     const tag={live:'',local:'<small style="color:#a78bfa">local engine</small>',
+              waiting:'<small style="color:var(--dim)">reconnecting…</small>',
               dark:'<small style="color:#ef4444;font-weight:800">DARK — reload tab</small>',
               mute:'<small style="color:#f97316;font-weight:700">not relaying — reload tab</small>',
               blind:'<small style="color:var(--amber)">not reading</small>',

@@ -144,6 +144,7 @@ def touch_source(key, provider=None, desc=None, display=None, healthy=None, seen
     now = datetime.now(ET)
     s = SOURCES.setdefault(key, {"name": display or key, "count": 0, "first": now.isoformat()})
     s["last_beat"] = now.isoformat()
+    s["live_session"] = True          # PROVEN alive in THIS process — see _load_sources()
     if display:
         s["name"] = display
     if provider:
@@ -659,9 +660,21 @@ SOURCES_STORE = _P.CHANNELS / "_sources.json"
 
 
 def _load_sources():
+    """Restore the feed panel across restarts — but mark every restored row as NOT-yet-proven-live.
+
+    The stored last_beat is whenever the process last saved, which after a restart can be minutes or
+    hours old. The UI judged staleness off that timestamp alone, so for the ~20s until the next real
+    heartbeat arrived EVERY channel rendered DARK and fired the outage alarm — a false 'channel down'
+    on every single restart. `live_session` is cleared here and set by touch_source on the first genuine
+    heartbeat, so the UI can tell 'restored from disk, waiting' apart from 'was live, now silent'."""
     try:
         d = json.loads(SOURCES_STORE.read_text())
-        return d if isinstance(d, dict) else {}
+        if not isinstance(d, dict):
+            return {}
+        for v in d.values():
+            if isinstance(v, dict):
+                v["live_session"] = False
+        return d
     except Exception:
         return {}
 
