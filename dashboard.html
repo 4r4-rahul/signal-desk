@@ -563,8 +563,18 @@ function soundNotice(){ chipMark(ROOT, {dur:120, gain:0.17, third:true}); }
 // HELD   — home register, rising, TWICE with the major third. A question waiting in your watch:
 //          actionable and positive (something to add), but asked twice because it needs YOUR answer.
 function soundHeld(){   chipSeq(ROOT, 2, 0.34, {dur:110, gain:0.15, third:true}); }
-// NEW    — one octave up, once, quiet. Something arrived.
-function soundNew(){    chipMark(ROOT*2, {dur:80, gain:0.11}); }
+// NEW PROVIDER SIGNAL — the ONLY three-note ascent on the desk, and deliberately the most distinctive
+// thing it can say. Every other tier is one or two notes; this is a full rising triad (root - major
+// third - fifth) in the home register, so it is unmistakable even with your eyes elsewhere.
+// It used to be the QUIETEST sound (a thin 80ms blip an octave up) because chip fired it constantly and
+// it had to avoid fatigue. Now chip is silent and this fires only for HUMAN callouts — a handful a day,
+// the rarest and most important event on the desk — so the old tuning was exactly backwards.
+function soundNew(){
+  const g=0.20, d=115;
+  beep(ROOT,        d,     g, 0);          // root
+  beep(ROOT*1.26,   d,     g, 0.105);      // major third
+  beep(ROOT*FIFTH,  d*1.7, g, 0.21);       // fifth, held — the "landed" note
+}
 // CHIP   — two octaves up, softest. Shadow-only, so it must never sound like real money.
 // (soundChip removed: chip is automated and now silent by design — there is no tier for it.)
 function toggleSound(){ _soundOn=!_soundOn; localStorage.setItem('deskSound',_soundOn?'1':'0');
@@ -598,7 +608,7 @@ function checkSounds(S,d){
   //   POS    an event on money you ALREADY HOLD             (rising urgent triple)
   //   ALARM  a card was corrected or is phantom             (falling minor third, twice)
   //   NOTICE a card is actionable right now (TAKE)          (rising pair)
-  //   NEW    a signal simply arrived, any status            (single soft blip)
+  //   NEW    a HUMAN provider signal arrived                 (rising 3-note triad — unique)
   //   CHIP   chip fired — shadow-only, so deliberately quietest
   // Highest tier wins per refresh and each key fires once, so a burst is one sound, not a machine-gun.
   // CHIP IS STRUCTURALLY SILENT. One predicate, applied at EVERY tier, rather than trusting each call
@@ -663,7 +673,7 @@ function audioDiag(){    // so a SILENT test is diagnosable instead of a mystery
 }
 function testSounds(){   // hear every tier on demand — the only way to confirm audio works on this machine
   const seq=[['RISK',soundRisk],['POSITION',soundPos],['CORRECTED',soundAlarm],
-             ['TAKE',soundNotice],['HELD — NEEDS YOU',soundHeld],['NEW SIGNAL',soundNew]];
+             ['TAKE',soundNotice],['HELD — NEEDS YOU',soundHeld],['NEW PROVIDER SIGNAL',soundNew]];
   _ctx(); let i=0;
   (function nxt(){ if(i>=seq.length) return;
     const [nm,fn]=seq[i++]; const el=document.getElementById('sndtest');
