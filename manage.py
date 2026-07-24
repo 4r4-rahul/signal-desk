@@ -154,7 +154,15 @@ def classify(text):
         typ = "PROFIT_UPDATE"
     elif re.search(r"\b(?:in|got in|i(?:'| a)?m in)\s*(?:@|at)\s*\$?\d"
                    r"|\b(?:filled|entered|took it)\s*(?:@|at)?\s*\$?\d"
-                   r"|(?:@|\bat)\s*\$?\d.{0,12}\bfill(?:ed)?\b", low) and price is not None:
+                   r"|(?:@|\bat)\s*\$?\d.{0,12}\bfill(?:ed)?\b"
+                   # "IN <ticker> CALLS AT 0.82" — the fill form that sits words apart. The old pattern
+                   # demanded "in" be IMMEDIATELY followed by the price, so prince_small's real fill
+                   # "In $AAPL calls at 0.82" scored NOISE, _apply_entry_fill never ran, the WATCH was
+                   # never upgraded, and the position tracked at the 1.18 watch limit instead of the 0.82
+                   # they actually paid — while the trade ran to +330%. Anchored on calls/puts so a
+                   # WATCH ("watching ... 1.18 limit entry") cannot be mistaken for a fill.
+                   r"|\bin\b[^.]{0,30}?\b(?:calls?|puts?)\b[^.]{0,18}?(?:@|\bat\b)\s*\$?\d"
+                   r"|\bbought\b[^.]{0,20}?(?:@|\bat\b)\s*\$?\d", low) and price is not None:
         typ = "ENTRY_FILL"                              # firm fill confirmation ("IN AT 0.93", "filled 0.93")
     elif has("added", "adding", "re-enter", "re enter", "back in", "avg", "in full"):
         typ = "PROFIT_UPDATE"                            # averaging/add — log as a status note
