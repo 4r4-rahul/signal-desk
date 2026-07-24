@@ -240,7 +240,7 @@ ACTIVITY_LOG = _P.CHANNELS / "chip" / "activity.jsonl"   # append-only; the ring
 ACTIVITY_KEEP = 600         # in-memory window served to the UI (was 15 — you could not see your own day)
 
 
-def _activity(msg, ticker=None, kind=None):
+def _activity(msg, ticker=None, kind=None, sid=None):
     """Record one chip event. The in-memory ring is a display cache; the JSONL is the record.
 
     This used to keep the last FIFTEEN entries and nothing else — no file, no history. A restart
@@ -251,7 +251,7 @@ def _activity(msg, ticker=None, kind=None):
     """
     now = _now_et()
     row = {"t": now.strftime("%H:%M:%S"), "iso": now.isoformat(), "day": now.strftime("%Y-%m-%d"),
-           "msg": msg, "ticker": ticker, "kind": kind}
+           "msg": msg, "ticker": ticker, "kind": kind, "sid": sid}   # sid links to the full trade record
     ACTIVITY.append(row)
     del ACTIVITY[:-ACTIVITY_KEEP]
     try:
@@ -1002,7 +1002,7 @@ def _emit(conn, tkr, dec, mech, book, now, chip_read=None, bookkey=None, role="p
         book[bk] = {"sid": entry["id"], "opened": time.time(), "cp": dec["cp"]}
         _LAST_EMIT[bk] = now.timestamp()
         line = f"{tkr} {strike_s}{dec['cp']} @ {entry_px}  ({dec['reason']}, tape {dec.get('score')}, {role})"
-        _activity("📈 SCALP " + line, ticker=tkr, kind="SCALP")
+        _activity("📈 SCALP " + line, ticker=tkr, kind="SCALP", sid=entry["id"])
         print(f"🤖 chip {line} → {entry['id']}", flush=True)
         return None
     return ("wait", "trigger hit but ingest declined the card")

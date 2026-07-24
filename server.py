@@ -3073,8 +3073,12 @@ class H(http.server.BaseHTTPRequestHandler):
             date = (parse_qs(urlparse(self.path).query).get("date") or [""])[0]
             try:
                 if self.path.startswith("/api/chip_day"):
-                    import chip_desk as CD
-                    return self._send(200, {"date": date, "activity": CD.activity_for_day(date)})
+                    import chip_desk as CD, chip_book as CB
+                    # full resolved-trade records for that day too, so each scalp can expand into its
+                    # entry/exit/pnl/R even for a past date (not just today's live window).
+                    trades = [t for t in (CB.replay().get("trades") or []) if (t.get("day") or "") == date]
+                    return self._send(200, {"date": date, "activity": CD.activity_for_day(date),
+                                            "trades": trades})
                 import seller_book as SB2
                 return self._send(200, {"date": date, "positions": SB2.positions_for_day(date)})
             except Exception as e:

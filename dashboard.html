@@ -516,9 +516,38 @@ async function pickDay(which, date){
   try{
     const r=await fetch(`/api/${which}_day?date=${encodeURIComponent(date)}`);
     const j=await r.json();
-    _dayData[which] = which==='chip' ? (j.activity||[]) : (j.positions||[]);
-  }catch(e){ _dayData[which]=[]; }
+    // chip carries both the scalp events AND the day's resolved trade records (for click-to-expand)
+    _dayData[which] = which==='chip' ? {activity:j.activity||[], trades:j.trades||[]} : (j.positions||[]);
+  }catch(e){ _dayData[which]=which==='chip'?{activity:[],trades:[]}:[]; }
   refresh();
+}
+// CLICK-TO-EXPAND for chip scalp-log entries — the same UX the seller ledger has. A scalp's `sid` links
+// to its full resolved-trade record (entry/exit/pnl/R/hold/peak/exit-plan), matched from chip.book.trades
+// live or the fetched day's trades. Expanded state in a Set, re-applied each render like the seller book.
+const _chipOpenDetail = new Set();
+function toggleChipTrade(sid){
+  if(_chipOpenDetail.has(sid)) _chipOpenDetail.delete(sid); else _chipOpenDetail.add(sid);
+  if(window._lastChip) renderChipLive(window._lastChip, window._lastChipEdge);
+}
+function chipTradeDetail(t){
+  if(!t) return `<div onclick="event.stopPropagation()" style="margin:3px 0 4px 14px;padding:6px 8px;background:rgba(0,0,0,.18);border-radius:6px;font-size:10px;color:var(--dim)">full trade record not loaded for this scalp (still open, or outside the window) — pick its date to load it</div>`;
+  const col=v=>v==null?'var(--dim)':v>0?'#22c55e':v<0?'#ef4444':'var(--fg)';
+  const money=v=>v==null?'—':(v>=0?'+$':'-$')+Math.abs(v).toLocaleString(undefined,{maximumFractionDigits:0});
+  const px=v=>v==null?'—':'$'+(+v).toFixed(2);
+  const exit=(t.entry!=null&&t.return_pct!=null)?t.entry*(1+t.return_pct/100):null;
+  const r=(l,v)=>(v==null||v==='')?'':`<tr><td style="color:var(--dim);padding:1px 12px 1px 0;white-space:nowrap">${l}</td><td class="mono">${v}</td></tr>`;
+  return `<div onclick="event.stopPropagation()" style="margin:3px 0 5px 14px;padding:8px 9px;background:rgba(0,0,0,.18);border-radius:7px;font-size:10.5px">
+    <div style="font-size:11px;margin-bottom:4px"><b>${esc(t.leg||t.ticker||'')}</b> ${t.expiry?`<span style="color:var(--dim)">exp ${esc(String(t.expiry))}</span>`:''} ${t.qty?`<span style="color:var(--dim)">× ${t.qty}</span>`:''}</div>
+    <table style="border-collapse:collapse"><tbody>
+      ${r('entry', px(t.entry))}
+      ${r('exit', exit!=null?px(exit)+' &nbsp;('+(t.return_pct>=0?'+':'')+t.return_pct+'%)':(t.return_pct!=null?(t.return_pct>=0?'+':'')+t.return_pct+'%':''))}
+      ${r('result', t.result?`<span style="color:${t.result==='WIN'?'#22c55e':t.result==='LOSS'?'#ef4444':'var(--fg)'}">${esc(t.result)}</span>`:'')}
+      ${r('P&L', `<span style="color:${col(t.pnl)};font-weight:700">${money(t.pnl)}</span>${t.r!=null?' &nbsp;'+(t.r>=0?'+':'')+t.r+'R':''}`)}
+      ${r('entry time', fmtETsec(t.opened))}
+      ${r('exit time', t.closed?fmtETsec(t.closed)+(t.hold_min!=null?' · held '+t.hold_min+'m':''):'still open')}
+      ${r('peak / trough', (t.peak_pct!=null?'+'+t.peak_pct+'%':'—')+' / '+(t.trough_pct!=null?t.trough_pct+'%':'—'))}
+      ${r('exit plan', t.exec_shape?esc(t.exec_shape)+(t.exec_plan?' — '+esc(t.exec_plan):''):'')}
+    </tbody></table></div>`;
 }
 // The collapsible date control: a compact <select> of available dates. Rendered inline in each log header.
 function dayPicker(which, days){
@@ -1303,10 +1332,14 @@ function renderChipLive(chip,edge){
   // SCALP LOG. Was `a.slice(-4)` against a 15-entry in-memory ring — on a 10-ticker day that showed
   // you a keyhole onto your own session and lost the rest at every restart. The server now persists
   // and serves the full day, so show the full day: scrollable, sortable, counted.
+  window._lastChip=chip; window._lastChipEdge=edge;      // cache so a trade-detail toggle re-renders instantly
   let act='';
-  // Live payload = today; a picked past date = the full fetched day.
-  const a = _dayPick.chip ? (_dayData.chip||[]) : ((chip&&chip.activity)||[]);
+  // Live payload = today; a picked past date = the full fetched day (events + resolved trades).
+  const a = _dayPick.chip ? ((_dayData.chip||{}).activity||[]) : ((chip&&chip.activity)||[]);
   const days=(chip&&chip.activity_days)||[];
+  // Resolved-trade records, keyed by signal_id, so each scalp can expand into its full record.
+  const trades = _dayPick.chip ? ((_dayData.chip||{}).trades||[]) : (((chip||{}).book||{}).trades||[]);
+  const tmap={}; trades.forEach(t=>{ if(t.signal_id) tmap[t.signal_id]=t; });
   if(a.length || days.length){
     const rowsA=a.slice();
     if(scalpSort==='ticker') rowsA.sort((x,y)=>(x.ticker||'~').localeCompare(y.ticker||'~')||String(y.t).localeCompare(String(x.t)));
@@ -1318,7 +1351,12 @@ function renderChipLive(chip,edge){
         ${dayPicker('chip', days)}
         <span style="margin-left:auto">sort ${btn('time','time')}${btn('ticker','ticker')}</span></div>
       <div style="max-height:230px;overflow-y:auto">`
-      + (rowsA.length ? rowsA.map(e=>`<div style="margin-top:2px"><span style="color:var(--dim)">${esc(e.t||'')}</span> ${esc(e.msg||'')}</div>`).join('')
+      + (rowsA.length ? rowsA.map(e=>{
+          const has=!!e.sid, open=has&&_chipOpenDetail.has(e.sid);
+          const head=`<div ${has?`onclick="toggleChipTrade('${e.sid}')" style="cursor:pointer" title="click for full trade record"`:''}>`
+            + `<span style="color:var(--dim)">${has?(open?'▾ ':'▸ '):''}${esc(e.t||'')}</span> ${esc(e.msg||'')}</div>`;
+          return `<div style="margin-top:2px">${head}${open?chipTradeDetail(tmap[e.sid]):''}</div>`;
+        }).join('')
                       : `<div style="color:var(--dim)">no scalps on ${esc(_dayPick.chip||'today')}</div>`)
       + `</div></div>`;
   }
