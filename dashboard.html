@@ -316,6 +316,7 @@
   .rail .src{width:100%;box-sizing:border-box;background:transparent;border:none;border-radius:9px;padding:7px 8px;
     align-items:flex-start;transition:background .12s}
   .rail .src:hover{background:rgba(255,255,255,.035)}
+  @keyframes toastin{from{transform:translateY(14px);opacity:0}to{transform:translateY(0);opacity:1}}
   .held{margin-top:12px;padding:12px;background:linear-gradient(180deg,var(--panel),var(--panel2));
     border:1px solid var(--line);border-radius:14px}
   .held.warn{border-color:rgba(245,158,11,.42)}
@@ -572,6 +573,25 @@ function toggleSound(){ _soundOn=!_soundOn; localStorage.setItem('deskSound',_so
 // fire once per card, remembered across reloads so a refresh doesn't re-alarm you
 const _heard=new Set(JSON.parse(localStorage.getItem('deskHeard')||'[]'));
 function _remember(k){ _heard.add(k); try{ localStorage.setItem('deskHeard',JSON.stringify([..._heard].slice(-400))); }catch(e){} }
+// PROVIDER TOAST — a VISIBLE alert for human provider messages. Sound alone is not enough: browsers
+// suspend the AudioContext without a recent user gesture, so beep() silently does nothing on a
+// dashboard that has been left open — which is exactly how prince_small's WMT callout landed unheard.
+// This cannot be suppressed by autoplay policy.
+function providerToast(txt, prov){
+  let host=document.getElementById('provtoast');
+  if(!host){ host=document.createElement('div'); host.id='provtoast';
+    host.style.cssText='position:fixed;right:18px;bottom:18px;z-index:9999;display:flex;flex-direction:column;gap:8px;max-width:380px';
+    document.body.appendChild(host); }
+  const el=document.createElement('div');
+  el.style.cssText='background:linear-gradient(180deg,#132033,#0e1725);border:1px solid rgba(56,189,248,.5);'
+    +'border-left:4px solid #38bdf8;border-radius:12px;padding:10px 13px;box-shadow:0 8px 28px rgba(0,0,0,.55);'
+    +'color:#e8eefc;font-size:12.5px;line-height:1.45;cursor:pointer;animation:toastin .35s ease';
+  el.innerHTML=`<div style="font-weight:700;color:#7dd3fc;font-size:11px;letter-spacing:.4px">📨 ${esc(prov||'provider')}</div>
+                <div style="margin-top:3px">${esc((txt||'').slice(0,190))}</div>`;
+  el.onclick=()=>el.remove();
+  host.appendChild(el);
+  setTimeout(()=>{ el.style.transition='opacity .5s'; el.style.opacity='0'; setTimeout(()=>el.remove(),600); }, 15000);
+}
 function checkSounds(S,d){
   // FIVE tiers, strictly ordered — the sound alone must tell you what happened with your eyes elsewhere:
   //   RISK   day-stop / drawdown halt / provider disabled   (low slow triple — cannot be mistaken)
@@ -615,7 +635,7 @@ function checkSounds(S,d){
     if(_heard.has(k)) continue;
     _remember(k);
     const recent=(nowMs-(Date.parse(f.ts)||0))<120000;
-    if(recent && f.provider!=='chip') fresh=true;                      // chip is SILENT in the feed too
+    if(recent && f.provider!=='chip'){ fresh=true; providerToast(f.text, f.provider); }   // chip stays SILENT
   }
   if(risk) soundRisk();
   else if(pos) soundPos();
@@ -721,9 +741,19 @@ function renderSources(src,nowIso,ibkr){
   // extensions -> treat as healthy so nothing regresses). green = heartbeat AND reading; amber = tab open
   // but blind (scrape broke — the "green dot lying" case); gray = no heartbeat (tab minimized/closed).
   const isHealthy=k=>src[k].healthy!==false;
-  const stateOf=k=>!isLive(k)?'stale':(isHealthy(k)?'live':'blind');
+  // READING BUT NOT RELAYING — the failure that hid itself. A window can heartbeat healthy (the
+  // extension found Discord's message list, `seen` climbing) and still POST nothing to the desk, so the
+  // dot stayed green while prince/jmt/optionking went 23-66h without relaying a single message and
+  // prince_small relayed 8m ago. Green-means-fine was a lie. If a channel is live+healthy but its last
+  // RELAY is far older than the freshest channel's, it is mute: the tab needs reloading.
+  const relayTimes=keys.map(k=>Date.parse(src[k].last_signal_iso||0)).filter(t=>t>0);
+  const freshestRelay=relayTimes.length?Math.max(...relayTimes):0;
+  const MUTE_LAG_MS=6*3600*1000;                 // >6h behind the freshest live channel = not relaying
+  const isMute=k=>{const t=Date.parse(src[k].last_signal_iso||0);
+    return freshestRelay>0 && (!t || (freshestRelay-t)>MUTE_LAG_MS);};
+  const stateOf=k=>!isLive(k)?'stale':(!isHealthy(k)?'blind':(isMute(k)?'mute':'live'));
   const liveN=keys.filter(k=>stateOf(k)==='live').length;   // truly RECEIVING, not just tab-open
-  const RANK={live:2,blind:1,stale:0}, DOT={live:'#22c55e',blind:'#f59e0b',stale:'#6b7280'};
+  const RANK={live:3,mute:2,blind:1,stale:0}, DOT={live:'#22c55e',mute:'#f97316',blind:'#f59e0b',stale:'#6b7280'};
   keys.sort((a,b)=>(RANK[stateOf(b)]-RANK[stateOf(a)])||((src[b].count||0)-(src[a].count||0)));
   el.innerHTML=`<div class="rail-h">📡 Data feeds <span class="rail-n">${liveN}/${keys.length} providers</span></div>`+ib+keys.map(k=>{
     const s=src[k], stt=stateOf(k);
@@ -732,9 +762,11 @@ function renderSources(src,nowIso,ibkr){
     const last=s.last_signal?`${ago(s.last_signal_iso,nowIso)} · ${s.last_signal}`:'no signal yet';
     const key=s.provider||k;
     const tip={live:'live — receiving & reading Discord (click to mute)',
+               mute:'⚠ READING but NOT RELAYING — the tab sees Discord yet posts nothing to the desk. RELOAD this channel tab.',
                blind:'⚠ tab is open but NOT reading Discord — scrape broke, reload the channel',
                stale:'stale — window not sending (minimized/closed?)'}[stt];
-    const tag={live:'',blind:'<small style="color:var(--amber)">not reading</small>',
+    const tag={live:'',mute:'<small style="color:#f97316;font-weight:700">not relaying — reload tab</small>',
+              blind:'<small style="color:var(--amber)">not reading</small>',
                stale:'<small style="color:var(--amber)">stale</small>'}[stt];
     return `<div class="src ${muted.has(key)?'off':''}" onclick="toggleSrc('${key}')" title="${tip}">
       <span class="d" style="background:${DOT[stt]};margin-top:5px;flex-shrink:0"></span>
@@ -1060,6 +1092,20 @@ function chipStateBadge(st){
     veto:['🚫','#ef4444','STAND DOWN']};
   return m[st]||['·','var(--muted)',(st||'—').toUpperCase()];
 }
+// COLLAPSIBLE RAIL SECTIONS. chip's two panels (live scan + scalp log) dominated the right rail and
+// pushed everything else off-screen — and they are MACHINE output you only occasionally need to inspect.
+// Collapsed by default, state remembered, and the one-line summary stays visible when shut so you never
+// lose the number, only the noise.
+function chipFold(key, def){ const v=localStorage.getItem('fold:'+key); return v==null?def:(v==='1'); }
+function toggleFold(key){ const cur=chipFold(key,true); localStorage.setItem('fold:'+key, cur?'0':'1'); refresh(); }
+function foldHead(key, icon, title, summary, defOpen){
+  const open=chipFold(key, defOpen);
+  return {open, html:`<div class="stats-h" style="cursor:pointer;user-select:none" onclick="toggleFold('${key}')"
+      title="${open?'collapse':'expand'}">
+      <span style="display:inline-block;width:11px;transition:transform .18s;transform:rotate(${open?90:0}deg);color:var(--muted)">\u25B8</span>
+      ${icon} ${title}
+      <span style="margin-left:auto;font-weight:500;color:var(--muted);font-size:11px">${summary}</span></div>`};
+}
 function renderChipLive(chip,edge){
   const el=document.getElementById('chiplive'); if(!el) return;
   const ce=(edge||{}).chip;
@@ -1098,7 +1144,8 @@ function renderChipLive(chip,edge){
   const a=(chip&&chip.activity)||[];
   if(a.length) act=`<div style="margin-top:7px;padding-top:6px;border-top:1px solid var(--line);font-size:10.5px;color:var(--muted)">`+
     a.slice(-4).reverse().map(e=>`<div style="margin-top:2px"><span style="color:var(--dim)">${e.t}</span> ${e.msg}</div>`).join('')+`</div>`;
-  el.innerHTML=`<div class="stats-h">🤖 Chip — Live <span style="margin-left:auto;font-weight:500">${sess}</span></div>${score}${rows}${act}`;
+  const f=foldHead('chiplive','🤖','Chip — Live',sess,false);
+  el.innerHTML=f.html + (f.open ? `${score}${rows}${act}` : `<div style="font-size:10.5px;color:var(--dim);padding:2px 2px 4px">${(chip&&chip.tickers||[]).length} tickers scanning · tap to expand</div>`);
 }
 // ── TRADE LIFECYCLE CHECKLIST ────────────────────────────────────────────────────────────────────
 // Three stages, because a trade is three decisions with different failure modes: is it tradeable,
@@ -1291,7 +1338,12 @@ function renderChipLedger(sigs, book){
       <span style="margin-left:auto;font-size:9px;letter-spacing:.3px">${role}·${grade}</span>
       <span style="color:var(--dim);font-size:10px">›</span></div>`;
   }).join('');
-  el.innerHTML=`<div class="stats-h">🤖 Chip Scalp Log <span style="margin-left:auto;font-weight:500;color:var(--muted)">${done.length} closed</span></div>
+  // Collapsed by default: the BOOK (equity) stays visible even when shut — that is the number you
+  // actually watch; the 24-row scalp list and the diagnostics fold away.
+  const bk=(book&&book.equity!=null)?`$${Math.round(book.equity).toLocaleString()} ${book.pnl>=0?'+':''}${Math.round(book.pnl)}`:'';
+  const fs=foldHead('chiplog','🤖','Chip Scalp Log',`${done.length} closed · ${bk}`,false);
+  if(!fs.open){ el.innerHTML=fs.html+chipBookHTML(book); return; }
+  el.innerHTML=fs.html+`
     <div style="display:flex;gap:14px;font-size:11px;margin:5px 0 2px">
       <span>live <b style="color:${rc(L.avg)}">${fmtR(L.avg)}</b> <span style="color:var(--dim)">n${L.n}</span></span>
       <span>explore <b style="color:${rc(E.avg)}">${fmtR(E.avg)}</b> <span style="color:var(--dim)">n${E.n}</span></span></div>
