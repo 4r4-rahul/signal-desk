@@ -500,7 +500,9 @@
 <script>
 const TIER={HIGH:['#22c55e','rgba(34,197,94,.15)'],MEDIUM:['#f59e0b','rgba(245,158,11,.15)'],
   LOW:['#fb923c','rgba(251,146,60,.15)'],SKIP:['#ef4444','rgba(239,68,68,.15)']};
-const typed={};        // preserve in-progress input by signal id
+const typed={};        // preserve in-progress input, keyed by full element id
+let scalpSort=localStorage.getItem('scalpSort')||'time';   // chip scalp log ordering: 'time' | 'ticker'
+function setScalpSort(k){ scalpSort=k; localStorage.setItem('scalpSort',k); refresh(); }
 const muted=new Set(); // providers toggled off in the filter
 let chipOnly=0;        // "🤖 Chip chips" solo filter — show ONLY chip's self-generated signals
 try{chipOnly=JSON.parse(localStorage.getItem('chipOnly'))||0}catch(e){}
@@ -936,6 +938,30 @@ function feedAgo(iso,now){
     if(s<60)return Math.round(s)+'s'; if(s<3600)return Math.round(s/60)+'m';
     if(s<86400)return Math.round(s/3600)+'h'; return Math.round(s/86400)+'d'; }catch(e){return '';}
 }
+// WALL-CLOCK, not just "55m ago". A relative age cannot be cross-checked against the provider's own
+// channel — to confirm the desk saw what Discord shows you need the actual time it landed. Age stays
+// alongside it because it is the faster read for "is this stale".
+function feedClock(iso){
+  try{ const d=new Date(iso); if(isNaN(d)) return '';
+    return d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false})
+         + (d.toDateString()!==new Date().toDateString()
+            ? ' ' + d.toLocaleDateString([], {month:'short',day:'numeric'}) : '');
+  }catch(e){return '';}
+}
+// A book that stops moving looks exactly like a quiet day. It is not. Any failure inside the outcome
+// sync now shows up here instead of being inferred days later from a P&L that never changed.
+function renderSyncErrors(errs){
+  let el=document.getElementById('syncerr');
+  if(!el){ const h=document.querySelector('.wrap')||document.body;
+    el=document.createElement('div'); el.id='syncerr'; h.insertBefore(el,h.firstChild); }
+  if(!errs||!errs.length){ el.style.display='none'; el.innerHTML=''; return; }
+  el.style.display='';
+  el.innerHTML=`<div style="background:rgba(239,68,68,.10);border:1px solid var(--red);border-radius:7px;
+    padding:7px 10px;margin-bottom:8px;font-size:11.5px">
+    <b style="color:var(--red)">⚠ Book sync failing — P&L may be stale</b>
+    <div class="mono" style="color:var(--muted);margin-top:3px;font-size:10.5px">
+      ${errs.map(e=>esc(String(e))).join('<br>')}</div></div>`;
+}
 const _feedSeen=new Set();
 function renderFeed(feed,nowIso){
   const el=document.getElementById('provfeed'); if(!el) return;
@@ -950,7 +976,7 @@ function renderFeed(feed,nowIso){
       return `<div class="feedrow ${isNew?'fresh':''}">
         <span class="feeddot fd-${oc}"></span>
         <div class=feedmain>
-          <div class=feedtop><b>${esc(r.provider||'?')}</b>${badge}<span class=tm>${feedAgo(r.ts,nowIso)}</span></div>
+          <div class=feedtop><b>${esc(r.provider||'?')}</b>${badge}<span class=tm title="${esc(r.ts||'')}">${feedClock(r.ts)}<span class=tmago> · ${feedAgo(r.ts,nowIso)}</span></span></div>
           <div class=feedtext>${esc(r.text||'')}</div>
         </div></div>`;
     }).join('')+`</div>`;
@@ -1249,10 +1275,24 @@ function renderChipLive(chip,edge){
       <div style="font-size:11.5px;margin-top:3px">${t.reason||''}</div></div>`;
   });
   if(!rows) rows=`<div style="font-size:11.5px;color:var(--muted);padding:6px 0">Idle — chip wakes at the 9:30 open.</div>`;
+  // SCALP LOG. Was `a.slice(-4)` against a 15-entry in-memory ring — on a 10-ticker day that showed
+  // you a keyhole onto your own session and lost the rest at every restart. The server now persists
+  // and serves the full day, so show the full day: scrollable, sortable, counted.
   let act='';
   const a=(chip&&chip.activity)||[];
-  if(a.length) act=`<div style="margin-top:7px;padding-top:6px;border-top:1px solid var(--line);font-size:10.5px;color:var(--muted)">`+
-    a.slice(-4).reverse().map(e=>`<div style="margin-top:2px"><span style="color:var(--dim)">${e.t}</span> ${e.msg}</div>`).join('')+`</div>`;
+  if(a.length){
+    const rowsA=a.slice();
+    if(scalpSort==='ticker') rowsA.sort((x,y)=>(x.ticker||'~').localeCompare(y.ticker||'~')||String(y.t).localeCompare(String(x.t)));
+    else rowsA.reverse();                                   // newest first
+    const btn=(k,l)=>`<span onclick="setScalpSort('${k}')" style="cursor:pointer;padding:0 4px;border-radius:3px;${scalpSort===k?'background:var(--line);color:var(--fg)':'color:var(--dim)'}">${l}</span>`;
+    act=`<div style="margin-top:7px;padding-top:6px;border-top:1px solid var(--line);font-size:10.5px;color:var(--muted)">
+      <div style="display:flex;gap:6px;align-items:baseline;margin-bottom:3px">
+        <b style="color:var(--fg)">Scalp log</b><span style="color:var(--dim)">${a.length}</span>
+        <span style="margin-left:auto">sort ${btn('time','time')}${btn('ticker','ticker')}</span></div>
+      <div style="max-height:230px;overflow-y:auto">`
+      + rowsA.map(e=>`<div style="margin-top:2px"><span style="color:var(--dim)">${esc(e.t||'')}</span> ${esc(e.msg||'')}</div>`).join('')
+      + `</div></div>`;
+  }
   const f=foldHead('chiplive','🤖','Chip — Live',sess,false);
   el.innerHTML=f.html + (f.open ? `${score}${rows}${act}` : `<div style="font-size:10.5px;color:var(--dim);padding:2px 2px 4px">${(chip&&chip.tickers||[]).length} tickers scanning · tap to expand</div>`);
 }
@@ -2192,7 +2232,7 @@ function actionsHTML(s){
     const lvl=s.sig.premium!=null?`@ $${s.sig.premium}`:'';
     return `<div class="actions"><span class="statustag WATCHING">👀 WATCHING ${lvl}</span>
       <span class="watchnote">provider eyeing — not filled yet</span>
-      <input class="px mono" id="px-${s.id}" placeholder="fill" value="${typed[s.id]??''}" style="width:60px">
+      <input class="px mono" id="px-${s.id}" placeholder="fill" value="${typed['px-'+s.id]??''}" style="width:60px">
       <button class="take" onclick="act('${s.id}','enter')" title="mark as entered at this fill price">Mark entered</button>
       <button class="skip" onclick="act('${s.id}','skip')">Dismiss</button></div>`;
   }
@@ -2208,7 +2248,7 @@ function actionsHTML(s){
       <button class="skip" onclick="act('${s.id}','skip')">Skip</button> ${logForm(s)}</div>`;
     if(s.paper){
       if(s.manual_override) return `<div class="actions"><span class="statustag" style="background:rgba(245,158,11,.15);color:var(--amber)">👁 PAPER · your call</span>
-        <input class="px mono" id="px-${s.id}" placeholder="fill" value="${typed[s.id]??(s.plan.ok?s.plan.entry:(s.sig.premium||''))}">
+        <input class="px mono" id="px-${s.id}" placeholder="fill" value="${typed['px-'+s.id]??(s.plan.ok?s.plan.entry:(s.sig.premium||''))}">
         <input class="px mono" id="qty-${s.id}" placeholder="qty" value="${(s.grade&&s.grade.suggest_lots)||1}" style="width:52px" title="contracts YOU actually took (grade-suggested default)">
         <button class="take" onclick="act('${s.id}','take')" title="discretionary — logs your real size & fill">Take</button>
         ${ttBtn(s)}<button class="skip" onclick="act('${s.id}','skip')">Dismiss</button></div>`;
@@ -2219,14 +2259,14 @@ function actionsHTML(s){
     const _j=jmtContracts(s);                                  // JMT: default qty to the max(3,3%) count
     const dq=_j?_j.n:(s.plan.ok?s.plan.contracts:1);
     return `<div class="actions">
-      <input class="px mono" id="px-${s.id}" placeholder="fill" value="${typed[s.id]??q}">
+      <input class="px mono" id="px-${s.id}" placeholder="fill" value="${typed['px-'+s.id]??q}">
       <input class="px mono" id="qty-${s.id}" placeholder="qty" value="${dq}" style="width:52px" title="contracts YOU actually took">
       <button class="take" onclick="act('${s.id}','take')">Take</button>
       ${ttBtn(s)}<button class="skip" onclick="act('${s.id}','skip')">Skip</button> ${logForm(s)}</div>`;
   }
   if(s.status==='TAKEN'){
     return `<div class="actions"><span class="statustag TAKEN">TAKEN</span>
-      <input class="px mono" id="px-${s.id}" placeholder="exit" value="${typed[s.id]??''}">
+      <input class="px mono" id="px-${s.id}" placeholder="exit" value="${typed['px-'+s.id]??''}">
       <button class="close" onclick="act('${s.id}','close')">Close</button>
       <button class="skip" onclick="act('${s.id}','skip')">Cut</button></div>`;
   }
@@ -2621,10 +2661,27 @@ async function act(id,action,extra){
   const r=await fetch('/api/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   const j=await r.json().catch(()=>({}));
   if(j&&j.blocked){alert('🛑 Blocked by discipline: '+(j.reasons||[]).join(' · '));}
-  delete typed[id]; refresh();
+  delete typed['px-'+id]; delete typed['qty-'+id]; refresh();
 }
 
+// TYPING HOLDS THE REPAINT. Every refresh rewrites the board's innerHTML, which destroys the element
+// you are typing into — you lose focus and the caret mid-keystroke, and entering a fill by hand becomes
+// impossible. Preserving the VALUE was not enough; the field has to survive as the same DOM node. So
+// while a text input is focused the poll still runs but the repaint is deferred, and a blur triggers
+// the catch-up. Bounded: after HOLD_MAX_MS we repaint anyway, so a field left focused all afternoon
+// cannot silently freeze the desk.
+const HOLD_MAX_MS=90000; let _holdSince=0;
+function _typingHold(){
+  const a=document.activeElement;
+  if(!a || !/^(INPUT|TEXTAREA)$/.test(a.tagName) || a.type==='checkbox' || a.type==='button') { _holdSince=0; return false; }
+  if(!_holdSince) _holdSince=Date.now();
+  if(Date.now()-_holdSince>HOLD_MAX_MS) return false;      // safety valve
+  return true;
+}
+document.addEventListener('focusout',()=>{ _holdSince=0; setTimeout(()=>{ if(!_typingHold()) refresh(); },0); });
+
 async function refresh(){
+  if(_typingHold()) return;                                 // you are mid-entry — do not yank the DOM
   try{
     const r=await fetch('/api/signals'); const d=await r.json();
     document.getElementById('dot').style.background='var(--green)';
@@ -2665,6 +2722,7 @@ async function refresh(){
     renderSources(d.sources,d.now,d.ibkr);
     renderHeld(d.held);
     renderFeed(d.feed,d.now);
+    renderSyncErrors(d.sync_errors);
     window.DAY_OVERRIDE=d.day_override;
     renderChipsTray(d.discipline,d.account);
     renderQualityPack(S.filter(x=>!muted.has(x.provider)));
@@ -2697,7 +2755,10 @@ async function refresh(){
     const counts=Object.fromEntries(Object.entries(groups).map(([k,v])=>[k,v.length]));
     renderSortbar(counts,chipCount);
     // capture in-progress typing before re-render
-    document.querySelectorAll('input.px').forEach(i=>{const id=i.id.slice(3);if(i.value)typed[id]=i.value;});
+    // Keyed by FULL element id. `id.slice(3)` collapsed px-/le-/lx-/lq- for the same signal onto one
+    // key, so an entry price and an exit price overwrote each other; and it mangled the 4-char prefixes
+    // (mqty-123 -> "ty-123") into keys that matched nothing at all.
+    document.querySelectorAll('input.px').forEach(i=>{ if(i.value) typed[i.id]=i.value; });
     const feed=document.getElementById('feed');
     const ORDER=SECS.map(([k])=>k);   // display order = the section table's order (humans first, chip last)
     const shown=S.filter(s=>secOn[secOf(s)]);

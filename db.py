@@ -681,13 +681,24 @@ def _shadow_outcome(e):
 def _entry_from_closed(r):
     """Reconstruct a signal-feature row from a closed trade's own origin — so an outcome/event whose
     original card was never archived still has a parent signal (no orphans)."""
-    o = r.get("origin") or {}
+    # `origin` is normally the structured card this trade came from, but three manual backfills wrote a
+    # human note there instead ("manual backfill 2026-07-22 — real fills the owner could not log..."),
+    # and o.get() on a str raised straight through sync_outcomes' blanket except. One bad row silently
+    # cost the book EVERY shadow outcome for a whole day. Coerce, keep the note, carry on.
+    o = r.get("origin")
+    if not isinstance(o, dict):
+        o = {"note": o} if o else {}
     sig = o.get("sig") or {"ticker": r.get("ticker"), "strike": r.get("strike"), "type": r.get("type"),
                            "premium": r.get("avg_entry"), "expiry": r.get("expiry")}
     return {"id": r.get("journal_id") or r.get("id"), "ts_utc": o.get("ts_utc") or r.get("opened_utc"),
             "provider": r.get("provider"), "sig": sig, "score": o.get("score"), "tier_key": o.get("tier"),
             "conviction": o.get("conviction"), "size_mult": o.get("size_mult"), "plan": o.get("plan"),
             "opt": r.get("entry_greeks"), "verified": o.get("verified"), "raw": o.get("raw"), "cosign": o.get("cosign")}
+
+
+# Recent sync failures, newest last. Bounded. Surfaced on /api/signals so a broken sync is VISIBLE
+# instead of showing up days later as a book that mysteriously stopped moving.
+SYNC_ERRORS = []
 
 
 def sync_outcomes(signals=None):
@@ -699,26 +710,38 @@ def sync_outcomes(signals=None):
             for ln in Path(f).read_text().splitlines():
                 if not ln.strip():
                     continue
-                r = json.loads(ln)
+                try:
+                    r = json.loads(ln)
+                except Exception as ex:
+                    SYNC_ERRORS.append(f"{Path(f).parent.name}: unreadable line — {ex}")
+                    continue
                 sid = r.get("journal_id") or r.get("id")
                 if not sid:
                     continue
-                if not con.execute("SELECT 1 FROM signals WHERE signal_id=?", (sid,)).fetchone():
-                    _upsert(con, "signals", _signal_row(_entry_from_closed(r)))   # stub the parent signal
-                rz = r.get("realized")
-                res = "WIN" if (rz or 0) > 0 else ("LOSS" if (rz or 0) < 0 else "SCRATCH")
-                _upsert(con, "outcomes", {
-                    "signal_id": sid, "kind": "REALIZED", "result": res,
-                    "realized_usd": _f(rz), "r_multiple": _f(r.get("R_multiple")),
-                    "return_pct": _f(r.get("return_pct")), "exit_vs_peak_pct": _f(r.get("exit_vs_peak_pct")),
-                    "prov_pct_out": _f(r.get("provider_pct_out_final")), "your_pct_out": _f(r.get("your_pct_out_final")),
-                    "entry_px": _f(r.get("avg_entry")), "exit_px": _f(r.get("avg_exit")),
-                    "peak_pct": _f(r.get("peak_pct")), "hold_secs": r.get("hold_secs"),
-                    "opened_utc": r.get("opened_utc"), "closed_utc": r.get("closed_utc")})
-                _ingest_events(con, r)                # every trim / cut / provider exit as its own row
+                # PER-RECORD ISOLATION. One malformed trade used to abort this whole loop, and because
+                # the shadow loop runs after it, the blanket except below meant a single bad row silently
+                # deleted a full day of chip's book. Contain the blast radius to the row that caused it.
+                try:
+                    if not con.execute("SELECT 1 FROM signals WHERE signal_id=?", (sid,)).fetchone():
+                        _upsert(con, "signals", _signal_row(_entry_from_closed(r)))   # stub the parent signal
+                    rz = r.get("realized")
+                    res = "WIN" if (rz or 0) > 0 else ("LOSS" if (rz or 0) < 0 else "SCRATCH")
+                    _upsert(con, "outcomes", {
+                        "signal_id": sid, "kind": "REALIZED", "result": res,
+                        "realized_usd": _f(rz), "r_multiple": _f(r.get("R_multiple")),
+                        "return_pct": _f(r.get("return_pct")), "exit_vs_peak_pct": _f(r.get("exit_vs_peak_pct")),
+                        "prov_pct_out": _f(r.get("provider_pct_out_final")), "your_pct_out": _f(r.get("your_pct_out_final")),
+                        "entry_px": _f(r.get("avg_entry")), "exit_px": _f(r.get("avg_exit")),
+                        "peak_pct": _f(r.get("peak_pct")), "hold_secs": r.get("hold_secs"),
+                        "opened_utc": r.get("opened_utc"), "closed_utc": r.get("closed_utc")})
+                    _ingest_events(con, r)            # every trim / cut / provider exit as its own row
+                except Exception as ex:
+                    SYNC_ERRORS.append(f"{Path(f).parent.name}/{sid}: {type(ex).__name__}: {ex}")
         for e in (signals or []):
             row = _shadow_outcome(e)
-            if row:
+            if not row:
+                continue
+            try:
                 # STUB THE PARENT SIGNAL if missing — exactly what the closed-trades loop above does.
                 # Without it a shadow outcome is ORPHANED: it lands in `outcomes` but every query that
                 # JOINs `signals` (the book, the R scorer, provider_edge) drops it. That is why 42 of
@@ -730,11 +753,17 @@ def sync_outcomes(signals=None):
                 cur = con.execute("SELECT kind FROM outcomes WHERE signal_id=?", (row["signal_id"],)).fetchone()
                 if not cur or cur[0] == "SHADOW":
                     _upsert(con, "outcomes", row)
+            except Exception as ex:
+                SYNC_ERRORS.append(f"shadow/{row.get('signal_id')}: {type(ex).__name__}: {ex}")
         _resync_shadow_r(con)                 # score shadow return%/R from the scale-out replay (live + backfill)
         prune_path(con)                       # rolling retention on the unbounded path table (once/hour)
         con.commit(); con.close()
-    except Exception:
-        pass
+    except Exception as ex:
+        # STILL non-fatal — the monitor loop must not die on a sync — but no longer INVISIBLE. A silent
+        # `pass` here is what let the book sit frozen for a whole session with nothing to show for it.
+        SYNC_ERRORS.append(f"sync_outcomes aborted: {type(ex).__name__}: {ex}")
+    del SYNC_ERRORS[:-40]
+    return list(SYNC_ERRORS)
 
 
 # ---------------- backfill / export / summary ----------------

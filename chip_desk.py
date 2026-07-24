@@ -236,9 +236,40 @@ def _srv():
     return s
 
 
-def _activity(msg):
-    ACTIVITY.append({"t": _now_et().strftime("%H:%M:%S"), "msg": msg})
-    del ACTIVITY[:-15]      # keep the last 15 only
+ACTIVITY_LOG = _P.CHANNELS / "chip" / "activity.jsonl"   # append-only; the ring buffer is only a cache
+ACTIVITY_KEEP = 600         # in-memory window served to the UI (was 15 — you could not see your own day)
+
+
+def _activity(msg, ticker=None, kind=None):
+    """Record one chip event. The in-memory ring is a display cache; the JSONL is the record.
+
+    This used to keep the last FIFTEEN entries and nothing else — no file, no history. A restart
+    erased the log, and on a 10-ticker day chip emits more than 15 events before lunch, so the scalp
+    log could never show you your own session. It also quietly broke the standing rule that nothing on
+    this desk gets deleted. Now every event is appended to disk and the served window is large enough
+    to hold a full day, with ticker/kind fields so the UI can sort and filter instead of just scroll.
+    """
+    now = _now_et()
+    row = {"t": now.strftime("%H:%M:%S"), "iso": now.isoformat(), "day": now.strftime("%Y-%m-%d"),
+           "msg": msg, "ticker": ticker, "kind": kind}
+    ACTIVITY.append(row)
+    del ACTIVITY[:-ACTIVITY_KEEP]
+    try:
+        ACTIVITY_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with ACTIVITY_LOG.open("a") as f:
+            f.write(json.dumps(row) + "\n")
+    except Exception:
+        pass        # a log write must never take the scalp loop down; the ring still has it
+
+
+def _load_activity():
+    """Rehydrate today's log after a restart, so the UI does not come back blank."""
+    try:
+        today = _now_et().strftime("%Y-%m-%d")
+        rows = [json.loads(ln) for ln in ACTIVITY_LOG.read_text().splitlines() if ln.strip()]
+        ACTIVITY[:] = [r for r in rows if r.get("day") == today][-ACTIVITY_KEEP:]
+    except Exception:
+        pass
 
 
 def snapshot():
@@ -249,7 +280,7 @@ def snapshot():
             "watching": list(TICKERS),
             "session": SCAN["session"],
             "last_scan": SCAN["ts"] or None,
-            "activity": ACTIVITY[-15:]}
+            "activity": ACTIVITY[-ACTIVITY_KEEP:]}
 
 
 # ─────────────────────────── session / time ───────────────────────────
@@ -951,7 +982,7 @@ def _emit(conn, tkr, dec, mech, book, now, chip_read=None, bookkey=None, role="p
         book[bk] = {"sid": entry["id"], "opened": time.time(), "cp": dec["cp"]}
         _LAST_EMIT[bk] = now.timestamp()
         line = f"{tkr} {strike_s}{dec['cp']} @ {entry_px}  ({dec['reason']}, tape {dec.get('score')}, {role})"
-        _activity("📈 SCALP " + line)
+        _activity("📈 SCALP " + line, ticker=tkr, kind="SCALP")
         print(f"🤖 chip {line} → {entry['id']}", flush=True)
         return None
     return ("wait", "trigger hit but ingest declined the card")
@@ -1031,6 +1062,7 @@ def scan_loop():
     conn = None
     book = {}
     print("🤖 chip desk: scan loop started (shadow-only provider 'chip').", flush=True)
+    _load_activity()             # bring back today's scalp log so a restart does not blank the UI
     _rebuild_book(book)          # adopt scalps that were still open across a restart
     while True:
         try:

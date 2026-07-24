@@ -3163,6 +3163,10 @@ class H(http.server.BaseHTTPRequestHandler):
                                     "calibration": _sc_cal, "exit_quality": _sc_exit,
                                     "provider_edge": _provider_edge_cached(), "chip": _chip,
                                     "seller": _seller_snap(),
+                                    # A frozen book must announce itself. sync_outcomes swallowed a
+                                    # malformed record for a whole session and the only symptom was a
+                                    # P&L that stopped moving — which reads as "quiet day", not "broken".
+                                    "sync_errors": getattr(DB, "SYNC_ERRORS", [])[-6:],
                                     "broker": _broker_snap()})
         html = (ROOT / "dashboard.html").read_bytes()
         self._send(200, html, "text/html; charset=utf-8")
