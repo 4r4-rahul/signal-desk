@@ -279,6 +279,7 @@ SHADOW_TICK_BATCH = 40   # live shadows ticked per heavy lap, ROTATING so every 
 UNPRICED_MAX_TICKS = 6      # heavy laps with no quote before a shadow is retired UNPRICED
 BASIS_SANITY_X = 8.0        # mark/basis ratio above which the BASIS is wrong, not the trade
 _SHADOW_RR = [0]         # rotation offset (list so the monitor loop can mutate it)
+_REGIME_LAST = [0.0]     # last daily-regime-log refresh (list so the monitor loop can mutate it)
 
 
 def trim_signals():
@@ -1662,6 +1663,12 @@ def monitor_loop():
                 save_signals()
             if DB and _heavy:
                 DB.sync_outcomes(SIGNALS)             # capture shadow resolutions + realized closes
+            if _heavy and (time.time() - _REGIME_LAST[0]) > 600:   # DAILY regime log — refresh ~10-min,
+                _REGIME_LAST[0] = time.time()                       # idempotent per day, the join key for
+                try:                                                # every seller/buyer stratified analysis
+                    import regime_log as _RL
+                    _RL.update(ib=conn)
+                except Exception: pass
             if _heavy and HELD:                       # resolve held items on the WARM connection — the
                 try: _resolve_held(conn)              # HTTP thread never blocks on IBKR for this
                 except Exception: pass
