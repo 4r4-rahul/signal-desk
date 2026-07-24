@@ -83,15 +83,17 @@ def iv_rank(ticker, atm_iv, hist=None):
 
 
 def _note_iv(ticker, atm_iv, day):
-    """Append today's ATM IV to the rolling history (once per ticker per day) so the rank builds up."""
+    """Record today's ATM IV to the rolling history, ONCE per day, PINNED to the FIRST reading of the
+    session. The decision-relevant IV for a 0DTE seller is at the open/entry, not the last-write-of-day
+    near the close (0DTE IV crushes into the bell). So we keep the first non-null reading and never
+    overwrite it — otherwise the whole IV-rank history would be built on near-close IV (SME SHOULD-FIX)."""
     if atm_iv is None:
         return
     hist = _load(IV_HIST_STORE, {})
     row = hist.setdefault(ticker.upper(), [])
     if row and row[-1].get("day") == day:
-        row[-1]["atm_iv"] = atm_iv                    # idempotent within the day
-    else:
-        row.append({"day": day, "atm_iv": atm_iv})
+        return                                        # already pinned today's open IV — do NOT overwrite
+    row.append({"day": day, "atm_iv": atm_iv})
     hist[ticker.upper()] = row[-(TRADING_DAYS + 20):]  # bounded
     _save(IV_HIST_STORE, hist)
 
@@ -99,6 +101,20 @@ def _note_iv(ticker, atm_iv, day):
 # ---- EVENT CALENDAR. Static known-event dates (extend as needed). OPEX = 3rd Friday. -------------
 # Sellers die on event days; this only has to be good enough to STRATIFY them out, not to be complete.
 _EVENT_DAYS = set()          # e.g. {"2026-07-30"} for an FOMC — owner/ops can extend channels/_events.json
+
+
+def _gap_from_close(bars):
+    """Overnight gap %: today's first bar open vs the prior session's last close. One of the best cheap
+    predictors of the trend days that hurt sellers. Fail-soft to None."""
+    if not bars or len(bars) < 2:
+        return None
+    today = bars[-1].date.date()
+    today_bars = [b for b in bars if getattr(b, "date", None) and b.date.date() == today]
+    prev_bars = [b for b in bars if getattr(b, "date", None) and b.date.date() < today]
+    if not today_bars or not prev_bars:
+        return None
+    prev_close, today_open = prev_bars[-1].close, today_bars[0].open
+    return round((today_open - prev_close) / prev_close * 100, 3) if prev_close else None
 
 
 def _event_flag(day):
@@ -110,13 +126,17 @@ def _event_flag(day):
         pass
     if day in _EVENT_DAYS:
         return "event"
-    # OPEX: third Friday of the month
     try:
         d = datetime.strptime(day, "%Y-%m-%d")
-        if d.weekday() == 4 and 15 <= d.day <= 21:
+        if d.weekday() == 4 and 1 <= d.day <= 7:      # NFP: first Friday of the month (computable)
+            return "NFP"
+        if d.weekday() == 4 and 15 <= d.day <= 21:    # OPEX: third Friday
             return "OPEX"
     except Exception:
         pass
+    # FOMC / CPI / PPI are NOT formulaic — they must be maintained in channels/_events.json for the
+    # study window (e.g. {"2026-07-30":"FOMC"}). Until populated, those days are UNFLAGGED — a known
+    # gap the SME called out; the override mechanism above is the fix, the content is ops to supply.
     return None
 
 
@@ -145,26 +165,36 @@ def update(tickers=("SPY", "QQQ"), ib=None):
         rv = _safe(lambda: MK.realized_vol(bars)) if bars else None
         ind = _safe(lambda: MK.indicators(bars)) if bars else None
         spot = (ind or {}).get("price")
-        # ATM IV via the near-ATM option (round spot to the strike increment)
-        atm_iv = None
+        # ATM IV = AVERAGE of the nearest call and put (an index surface has call!=put ATM IV; pricing
+        # "what a seller sells" off one side ignores skew). Log both, and the 25-ish-delta skew.
+        atm_iv = atm_c = atm_p = None
         if spot:
             k = str(int(round(spot)))
-            q = _safe(lambda: MK.option_quote(tk, k, "C", ib=ib))
-            atm_iv = (q or {}).get("iv")
+            qc = _safe(lambda: MK.option_quote(tk, k, "C", ib=ib)) or {}
+            qp = _safe(lambda: MK.option_quote(tk, k, "P", ib=ib)) or {}
+            atm_c, atm_p = qc.get("iv"), qp.get("iv")
+            ivs = [x for x in (atm_c, atm_p) if x is not None]
+            atm_iv = round(sum(ivs) / len(ivs), 3) if ivs else None
         _note_iv(tk, atm_iv, day)
         ivr, ivp = iv_rank(tk, atm_iv)
         # VRP = IV - RV, BOTH annualized decimals (market.realized_vol returns std*sqrt(78*252), a
         # fraction on the same scale as modelGreeks.impliedVol). No /100 — that was a scale bug.
         vrp = round(atm_iv - rv, 4) if (atm_iv is not None and rv is not None) else None
-        em = expected_move(spot, atm_iv, hours_to_close or RTH_HOURS)
+        # STABLE FULL-SESSION expected move (1/252yr) — one consistent daily figure the strike engine
+        # consumes; the trade-time remaining-session EM is computed separately at entry.
+        em = expected_move(spot, atm_iv, RTH_HOURS)
+        skew = round(atm_p - atm_c, 3) if (atm_p is not None and atm_c is not None) else None  # put-call IV
+        # gap from prior close: first vs last of the session-split bars (fail-soft)
+        gap = _safe(lambda: _gap_from_close(bars))
         # flat/trend label from the EMA135/315 separation chip already trusts
         e135, e315 = (ind or {}).get("ema135"), (ind or {}).get("ema315")
         sep = round(abs(e135 - e315) / spot * 100, 3) if (e135 and e315 and spot) else None
         label = ("flat" if (sep is not None and sep < FLAT_SEP_PCT)
                  else "trend" if sep is not None else None)
         row["tickers"][tk] = {
-            "spot": spot, "atm_iv": atm_iv, "rv": (round(rv, 4) if rv is not None else None),
-            "vrp": vrp, "iv_rank": ivr, "iv_pct": ivp, "exp_move": em,
+            "spot": spot, "atm_iv": atm_iv, "atm_iv_call": atm_c, "atm_iv_put": atm_p, "skew": skew,
+            "rv": (round(rv, 4) if rv is not None else None),
+            "vrp": vrp, "iv_rank": ivr, "iv_pct": ivp, "exp_move": em, "gap_pct": gap,
             "ema_sep_pct": sep, "label": label,
         }
     log[day] = row

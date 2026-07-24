@@ -76,10 +76,16 @@ def arm0(con=None):
     if own:
         con = sqlite3.connect("file:" + str(DB.DB_PATH) + "?mode=ro", uri=True)
     try:
+        # SYMMETRIC-BAND GUARD (SME): the shared exit tick uses chip's long-side t1/stop bands. When
+        # t1==stop (SPY 26/26, QQQ 32/32) the ±band window is symmetric and the buy/sell comparison is
+        # unbiased. If chip ever expands to asymmetric-band tickers (NVDA/TSLA t1<stop), the up-move is
+        # truncated sooner than the down-move, which would flatter the seller — so restrict to the
+        # symmetric names until the exit is re-keyed to per-side bands.
         scalps = con.execute(
             "SELECT o.signal_id, s.t1_pct, s.stop_pct, o.opened_utc, o.closed_utc "
             "FROM outcomes o JOIN signals s ON s.signal_id = o.signal_id "
-            "WHERE s.provider='chip' AND o.kind='SHADOW' "
+            "WHERE s.provider='chip' AND o.kind='SHADOW' AND s.ticker IN ('SPY','QQQ') "
+            "AND ABS(COALESCE(s.t1_pct,0) - COALESCE(s.stop_pct,0)) < 1e-6 "
             "ORDER BY COALESCE(o.opened_utc, o.signal_id)").fetchall()
         per_trade, by_day = [], defaultdict(lambda: {"buyer": 0.0, "seller": 0.0, "n": 0})
         for sid, t1, stop, opened, closed in scalps:
@@ -90,7 +96,9 @@ def arm0(con=None):
             if r is None:
                 continue
             buyer, seller = r
-            day = _et_day(closed or opened) or "?"
+            day = _et_day(closed or opened)
+            if day is None:                            # no timestamp -> can't day-block it, drop it
+                continue                               # (SME: a "?" bucket pollutes the day-block)
             per_trade.append({"sid": sid, "day": day, "buyer": buyer, "seller": seller,
                               "diff": round(seller - buyer, 2)})
             by_day[day]["buyer"] += buyer
