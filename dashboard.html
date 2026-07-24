@@ -487,6 +487,7 @@
   <aside class="rrail">
     <div id="chiplive" class="stats"></div>
     <div id="chipledger" class="stats"></div>
+    <div id="sellerbook" class="stats"></div>
     <div id="daypnl" class="stats"></div>
     <div id="drawdown" class="stats"></div>
     <div id="calibration" class="stats"></div>
@@ -1145,6 +1146,40 @@ function fmtET(iso){
   if(!iso) return '';
   try{ return new Date(iso).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',hour12:false,timeZone:'America/New_York'}); }
   catch(e){ return (iso||'').slice(11,16); }
+}
+// THE THETA MIRROR — the premium-seller books (long theta) beside chip (the buyer). Two arms:
+// arm1 = directional credit spread on chip's side (isolates the theta sign), arm2 = neutral condor.
+// The headline is PAIRED: seller minus buyer per shared day, because pairing cancels the regime noise.
+function renderSeller(s){
+  const el=document.getElementById('sellerbook'); if(!el) return;
+  if(!s||!s.book){ el.innerHTML=''; return; }
+  const b=s.book, a1=s.arm1||{}, a2=s.arm2||{}, pr=s.paired||{}, opn=s.open||[];
+  const money=v=>v==null?'—':(v>=0?'+$':'-$')+Math.abs(v).toLocaleString(undefined,{maximumFractionDigits:0});
+  const col=v=>v==null?'var(--dim)':v>0?'#22c55e':v<0?'#ef4444':'var(--fg)';
+  const openRows=opn.map(p=>{
+    const sp=p.spread||{}, lbl=p.kind==='condor'
+      ? `${(sp.call||{}).short_strike}C/${(sp.put||{}).short_strike}P`
+      : `${sp.short_strike}${sp.right}`;
+    return `<div style="display:flex;gap:6px;font-size:10.5px;padding:2px 0;color:var(--sub)">
+      <span style="width:30px;color:${p.arm==='arm1'?'#c4b5fd':'#7dd3fc'}">${p.arm==='arm1'?'dir':'IC'}</span>
+      <b style="width:30px">${p.ticker}</b><span style="width:78px">${lbl}</span>
+      <span style="color:var(--dim)">×${p.qty} · cr $${p.credit}</span>
+      <span style="margin-left:auto;color:${col(p.open_pnl)}">${p.open_pnl!=null?money(p.open_pnl):'·'}</span></div>`;
+  }).join('');
+  el.innerHTML=`<div class="stats-h">💰 Seller Book <span style="margin-left:auto;font-weight:500;color:var(--muted)">long theta · shadow</span></div>
+    <div style="display:flex;align-items:baseline;gap:8px;margin:4px 0 2px">
+      <b style="font-size:19px;color:${col(b.pnl)}">$${b.equity.toLocaleString(undefined,{maximumFractionDigits:0})}</b>
+      <span style="color:${col(b.pnl)};font-size:12px">${money(b.pnl)} (${b.return_pct>=0?'+':''}${b.return_pct}%)</span></div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:3px">
+      ${b.n} pos · win ${b.win_rate==null?'—':b.win_rate+'%'} · dd ${b.drawdown_pct}%
+      &nbsp;·&nbsp; arm1(dir) <b style="color:${col(a1.pnl)}">${money(a1.pnl)}</b>
+      · arm2(IC) <b style="color:${col(a2.pnl)}">${money(a2.pnl)}</b></div>
+    <div style="font-size:10.5px;color:var(--muted);margin-bottom:4px">
+      vs chip (paired): mean daily <b style="color:${col(pr.mean_daily_diff)}">${pr.mean_daily_diff==null?'—':money(pr.mean_daily_diff)}</b>
+      <span style="color:var(--dim)">over ${pr.days||0} shared day(s) — needs many for a verdict</span></div>
+    ${opn.length?`<div style="font-size:9.5px;color:var(--muted);margin:2px 0 1px">OPEN (${opn.length})</div>${openRows}`:''}
+    ${b.n===0&&opn.length===0?`<div style="font-size:10px;color:var(--dim)">no positions yet — opens ~10:00 ET off the ladder</div>`:''}
+    <div style="font-size:9px;color:var(--dim);margin-top:4px">win-small / rare-big-loss shape · 40 calm days under-sample the tail</div>`;
 }
 function renderChipLedger(sigs, book){
   // Standalone CHIP-ONLY scalp results log (kept separate from real tastytrade trades until go-live).
@@ -2424,6 +2459,7 @@ async function refresh(){
     renderDrawdown(d.stats&&d.stats.drawdown,d.account);
     renderChipLive(d.chip,d.provider_edge);
     renderChipLedger(d.signals, (d.chip||{}).book);
+    renderSeller(d.seller);
     renderCalibration(d.calibration);
     renderExitQuality(d.exit_quality);
     renderProviderEdge(d.provider_edge);
