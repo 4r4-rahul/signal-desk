@@ -98,6 +98,9 @@ def build_vertical(chain, right, target_delta=DEFAULT_TARGET_DELTA, width=DEFAUL
             "credit_to_width": round(credit / real_width, 3),
             "exit_friction": exit_friction,
             "friction_ratio": round(exit_friction / credit, 3) if credit > 0 else None,
+            # PER-LEG ENTRY FILLS, so the record shows the actual two prices, not just the net credit:
+            # sold the short at its BID, bought the wing at its ASK. credit = short_bid - long_ask.
+            "short_bid": short["bid"], "long_ask": long["ask"],
             "legs": 2}
 
 

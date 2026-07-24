@@ -1371,6 +1371,39 @@ function _holdStr(a,b){
   try{ const ms=Date.parse(b)-Date.parse(a); if(isNaN(ms)||ms<0) return '';
     const m=Math.round(ms/60000); return m<60?m+'m':(m/60).toFixed(1)+'h'; }catch(e){return '';}
 }
+// PER-LEG fills: every contract, what we did to it, and the price BOTH at entry and at close. This is
+// the "which contract, bought/sold at what price" view — a credit spread is 2 legs, a condor is 4.
+function _legRows(p){
+  const sp=p.spread||{}, isC=p.kind==='condor', cl=p.close_legs||[];
+  const px=v=>v==null?'<span style="color:var(--dim)">—</span>':'$'+(+v).toFixed(2);
+  const rows=[];
+  if(isC){
+    const c=sp.call||{}, pu=sp.put||{};
+    const clc=cl.find(x=>x&&(x.right||'').toUpperCase()==='C')||{};
+    const clp=cl.find(x=>x&&(x.right||'').toUpperCase()==='P')||{};
+    if(c.short_strike!=null){ rows.push(['SELL',c.short_strike+'C',c.short_bid,clc.short_ask]);
+                              rows.push(['BUY', c.long_strike +'C',c.long_ask, clc.long_bid]); }
+    if(pu.short_strike!=null){ rows.push(['SELL',pu.short_strike+'P',pu.short_bid,clp.short_ask]);
+                               rows.push(['BUY', pu.long_strike +'P',pu.long_ask, clp.long_bid]); }
+  } else if(sp.short_strike!=null){
+    const c0=cl[0]||{};
+    rows.push(['SELL',sp.short_strike+sp.right,sp.short_bid,c0.short_ask]);
+    rows.push(['BUY', sp.long_strike +sp.right,sp.long_ask, c0.long_bid]);
+  }
+  if(!rows.length) return '';
+  const body=rows.map(([act,con,en,cx])=>{
+    const acol=act==='SELL'?'#22c55e':'#ef4444';
+    return `<tr>
+      <td style="color:${acol};font-weight:700;padding-right:9px">${act}</td>
+      <td class="mono" style="padding-right:12px"><b>${con}</b></td>
+      <td class="mono" style="text-align:right;padding-right:12px">${px(en)}</td>
+      <td class="mono" style="text-align:right">${px(cx)}</td></tr>`;
+  }).join('');
+  return `<table style="border-collapse:collapse;font-size:10.5px;margin-bottom:6px">
+    <tbody><tr style="color:var(--dim);font-size:9px"><td></td><td></td>
+      <td style="text-align:right;padding-right:12px">ENTRY</td><td style="text-align:right">CLOSE</td></tr>
+    ${body}</tbody></table>`;
+}
 // The FULL trade — structure, what was collected, the risk it defines, the greeks it was sized off,
 // the friction that decided whether we'd trade the name at all, and how it ended.
 function sellerDetail(p){
@@ -1389,8 +1422,13 @@ function sellerDetail(p){
     : `<div>sell <b style="color:#ef4444">${sp.short_strike}${sp.right}</b> / buy ${sp.long_strike}${sp.right} <span style="color:var(--dim)">· width $${sp.width}</span></div>`;
   const fr = isC ? null : sp.friction_ratio;
   const r=(l,v)=>(v==null||v==='')?'':`<tr><td style="color:var(--dim);padding:1px 12px 1px 0;white-space:nowrap">${l}</td><td class="mono">${v}</td></tr>`;
+  const legTable=_legRows(p);
+  const netLine = (p.credit!=null)
+    ? `<div style="font-size:10px;color:var(--muted);margin-bottom:5px">net: collected <b style="color:#22c55e">$${p.credit}</b>/ct in${p.buyback!=null?` · closed for <b style="color:#ef4444">$${p.buyback}</b>/ct · kept <b style="color:${col((p.credit-p.buyback))}">$${(p.credit-p.buyback).toFixed(2)}</b>/ct before commission`:` · still open`}</div>`
+    : '';
   return `<div onclick="event.stopPropagation()" style="margin-top:7px;padding:8px 9px;background:rgba(0,0,0,.18);border-radius:7px;font-size:10.5px;cursor:default">
-    <div style="font-size:11px;margin-bottom:5px;line-height:1.5">${struct}</div>
+    ${legTable || `<div style="font-size:11px;margin-bottom:5px;line-height:1.5">${struct}</div>`}
+    ${netLine}
     <table style="border-collapse:collapse"><tbody>
       ${r('strategy', p.arm==='arm1'?'directional — sell ONE side, same direction as chip':'condor — sell BOTH sides, neutral')}
       ${r('size', q+' contract'+(q>1?'s':''))}

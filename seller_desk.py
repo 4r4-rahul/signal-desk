@@ -98,12 +98,16 @@ def _chip_side(ticker):
 
 
 def _mark_vertical(chain, right, short_strike, long_strike):
-    """Current BUYBACK cost of a vertical from the chain: buy back short (ask), sell long (bid)."""
+    """Current BUYBACK of a vertical from the chain: buy back short (its ask), sell long (its bid).
+    Returns {buyback, short_ask, long_bid, ...} — per-leg close prices, not just the net, so the resolved
+    record can show 'bought the short back at X, sold the wing at Y', mirroring the entry legs."""
     s = next((c for c in chain if (c["right"] or "").upper() == right and abs(c["strike"] - short_strike) < 1e-6), None)
     l = next((c for c in chain if (c["right"] or "").upper() == right and abs(c["strike"] - long_strike) < 1e-6), None)
     if not s or not l:
         return None
-    return SE.spread_buyback(s.get("ask"), l.get("bid"))
+    return {"buyback": SE.spread_buyback(s.get("ask"), l.get("bid")),
+            "right": right, "short_strike": short_strike, "long_strike": long_strike,
+            "short_ask": s.get("ask"), "long_bid": l.get("bid")}
 
 
 def _already_open_today(open_rows, day):
@@ -202,21 +206,25 @@ def _manage_open(open_rows, now, day, session_min):
             still.append(p); continue
         sp = p["spread"]
         if p["kind"] == "condor":
-            cb_c = _mark_vertical(chain, "C", sp["call"]["short_strike"], sp["call"]["long_strike"])
-            cb_p = _mark_vertical(chain, "P", sp["put"]["short_strike"], sp["put"]["long_strike"])
-            buyback = (cb_c + cb_p) if (cb_c is not None and cb_p is not None) else None
+            m_c = _mark_vertical(chain, "C", sp["call"]["short_strike"], sp["call"]["long_strike"])
+            m_p = _mark_vertical(chain, "P", sp["put"]["short_strike"], sp["put"]["long_strike"])
+            both = m_c and m_p and m_c["buyback"] is not None and m_p["buyback"] is not None
+            buyback = (m_c["buyback"] + m_p["buyback"]) if both else None
+            close_legs = [m_c, m_p] if (m_c and m_p) else None
         else:
-            buyback = _mark_vertical(chain, sp["right"], sp["short_strike"], sp["long_strike"])
+            m = _mark_vertical(chain, sp["right"], sp["short_strike"], sp["long_strike"])
+            buyback = m["buyback"] if m else None
+            close_legs = [m] if m else None
         action, pnl_per_ct, reason = SE.manage(p["credit"], buyback, mins_to_close, p["legs"])
         if action in ("take_profit", "eod"):
-            _resolve(p, buyback, action, now.astimezone(timezone.utc).isoformat(), pnl_per_ct)
+            _resolve(p, buyback, action, now.astimezone(timezone.utc).isoformat(), pnl_per_ct, close_legs)
         else:
             p["mark_buyback"], p["open_pnl"] = buyback, round((pnl_per_ct or 0) * p["qty"], 2)
             still.append(p)
     return still
 
 
-def _resolve(p, buyback, trigger, now_iso, pnl_per_ct=None):
+def _resolve(p, buyback, trigger, now_iso, pnl_per_ct=None, close_legs=None):
     if pnl_per_ct is None:
         rt = SE.COMM_PER_LEG * 2 * p["legs"]
         pnl_per_ct = round(((p["credit"] - (buyback if buyback is not None else 0)) * 100) - rt, 2)
@@ -226,6 +234,10 @@ def _resolve(p, buyback, trigger, now_iso, pnl_per_ct=None):
                # but never WHICH spread produced it — the click-to-expand detail (strikes, wings, short
                # delta/IV, the friction that gated it) had nothing to render for a closed trade.
                "spread": p.get("spread"), "legs": p.get("legs"),
+               # PER-LEG CLOSE FILLS to sit beside the entry legs in the spread: what we paid to buy the
+               # short back and what we sold the wing for. With these the record is complete end to end —
+               # every leg, both prices.
+               "close_legs": close_legs,
                "closed": now_iso, "buyback": buyback, "mgmt_trigger": trigger,
                "pnl": round(pnl_per_ct * p["qty"], 2)})
 
