@@ -294,6 +294,9 @@ def load_signals():
 
 SIGNALS_CAP = 350   # in-memory ceiling — mirrors the 250 disk window with headroom for kept-alive cards
 CHIP_LOG_KEEP = 24  # keep the last N completed chip scalps as the persistent per-provider trade-log
+# PAYLOAD BUDGETS — humans and chip are allocated SEPARATELY so neither can crowd the other off the board.
+HUMAN_WINDOW = 90   # provider cards always reach the UI, however loud chip gets
+CHIP_WINDOW = 60    # chip's own allowance (its full trade-log is surfaced separately via _chiphist)
 SHADOW_TICK_BATCH = 40   # live shadows ticked per heavy lap, ROTATING so every one is covered (see below)
 UNPRICED_MAX_TICKS = 6      # heavy laps with no quote before a shadow is retired UNPRICED
 BASIS_SANITY_X = 8.0        # mark/basis ratio above which the BASIS is wrong, not the trade
@@ -3064,13 +3067,22 @@ class H(http.server.BaseHTTPRequestHandler):
             _allpos = M.load()                          # read the positions ledger ONCE per poll (was 3×)
             # ONE card per trade: attach each position (open OR closed) to its signal by journal_id
             posmap = {p["journal_id"]: withlive(p) for p in _allpos if p.get("journal_id")}
-            _window = SIGNALS[-60:]
-            _armed = [s for s in SIGNALS if (s.get("reentry") or {}).get("armed") and s not in _window]
+            # SEPARATE ALLOCATIONS: humans and chip each get their OWN window, never a shared one.
+            # The old flat SIGNALS[-60:] was sized when chip ran two tickers at ~6-13 scalps/day. At TEN
+            # tickers chip took 55 of the 60 slots (92%) and the providers' handful fell off the end — the
+            # desk still HAD prince's QQQ 687C, it just never reached the browser, which reads as "0 cards
+            # from providers". A machine must never be able to evict the humans from the operator's board.
+            # Two budgets means neither side can starve the other, whatever chip's ticker count becomes.
+            _humans = [s for s in SIGNALS if s.get("provider") != "chip"][-HUMAN_WINDOW:]
+            _window = [s for s in SIGNALS if s.get("provider") == "chip"][-CHIP_WINDOW:]
+            _armed = [s for s in SIGNALS if (s.get("reentry") or {}).get("armed")
+                      and s not in _window and s not in _humans]
             # surface the last ~24 COMPLETED chip scalps as the persistent trade-log, even past the 60-window
             _chiphist = [s for s in SIGNALS if s.get("provider") == "chip"
-                         and (s.get("shadow") or {}).get("state") == "ended" and s not in _window][-CHIP_LOG_KEEP:]
+                         and (s.get("shadow") or {}).get("state") == "ended"
+                         and s not in _window][-CHIP_LOG_KEEP:]
             sigs = []
-            for s in reversed(_window + _armed + _chiphist):
+            for s in reversed(_window + _humans + _armed + _chiphist):
                 s2 = dict(s)
                 if s["id"] in posmap:
                     s2["pos"] = posmap[s["id"]]
