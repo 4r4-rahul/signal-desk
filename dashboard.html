@@ -1138,6 +1138,14 @@ function chipBookHTML(b){
     <div class="sub mono" style="color:var(--dim)">${b.n} trades · ${b.wins}W/${b.losses}L · win ${b.win_rate}% · avg win ${b.avg_win==null?'—':'$'+b.avg_win} · avg loss ${b.avg_loss==null?'—':'$'+b.avg_loss} · PF ${b.profit_factor==null?'—':b.profit_factor} · exp ${b.expectancy_usd==null?'—':'$'+b.expectancy_usd}/trade${b.n_refused?' · '+b.n_refused+' refused on size':''}</div>
     <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:6px">${tbl('by day',b.by_day)}${tbl('by week',b.by_week)}${tbl('by month',b.by_month)}</div>`;
 }
+// The scalp-log time was the raw UTC HH:MM off the ISO string, so a scalp that closed 12:32 ET read
+// "16:32" and the last one of the day read "20:02" — 8pm, hours after the close, which is meaningless
+// for a day-session scalper. Render in MARKET time (ET) regardless of where the viewer sits.
+function fmtET(iso){
+  if(!iso) return '';
+  try{ return new Date(iso).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',hour12:false,timeZone:'America/New_York'}); }
+  catch(e){ return (iso||'').slice(11,16); }
+}
 function renderChipLedger(sigs, book){
   // Standalone CHIP-ONLY scalp results log (kept separate from real tastytrade trades until go-live).
   const el=document.getElementById('chipledger'); if(!el) return;
@@ -1190,7 +1198,7 @@ function renderChipLedger(sigs, book){
   const rows=done.slice(0,24).map(s=>{
     const cl=s.chip_lifecycle,m=s.chip||{},g=s.sig||{}, isC=(cl.cp||g.type)==='C';
     const dcol=isC?'#22c55e':'#ef4444', res=cl.result==='WIN'?'✅':cl.result==='LOSS'?'🔴':'●';
-    const t=(cl.closed||cl.opened||'').slice(11,16);
+    const t=fmtET(cl.closed||cl.opened);
     const role=m.direction_role==='counter'?'<span style="color:var(--dim)">ctr</span>':'<span style="color:#c4b5fd">pri</span>';
     const grade=m.live_grade==='explore'?'<span style="color:var(--amber)">exp</span>':m.live_grade==='live'?'<span style="color:#22c55e">live</span>':'';
     // A row is a verdict with no explanation. Clicking opens the full story in its own window: what was
