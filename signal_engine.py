@@ -151,6 +151,15 @@ AMBIG_TK = {"NOW", "ARM", "COIN", "HOOD", "BULL", "COST", "APP", "GRAB", "HIVE",
             "ET", "AM", "PM"}   # ET/AM/PM: real tickers but overwhelmingly timezone/time abbrevs in prose
 
 
+# Ordinary English words that sit within one edit of a real symbol. The typo-tolerant matcher must
+# never turn prose into an instrument (GET->GEO, HAS->HAS/BAS, ONE->ONE...). Position-gating is the main
+# defence; this is the belt to its braces.
+_ENGLISH_NEAR_TK = {"GET", "GOT", "SET", "NET", "BET", "LET", "PUT", "OUT", "OFF", "OWN", "ONE", "TWO",
+                    "TEN", "NEW", "OLD", "BIG", "TOP", "LOW", "HIGH", "NEXT", "LAST", "GOOD", "BEST",
+                    "HOLD", "SOLD", "SELL", "BUYS", "BOUGHT", "STRIKE", "CALLS", "PUTS", "MINS", "EACH",
+                    "GONNA", "ABOUT", "AFTER", "OVER", "INTO", "FROM", "WITH", "THIS", "THAT", "HERE"}
+
+
 def _find_ticker(text):
     """Find the real ticker anywhere in the message (handles $C / multi-line 'ticker then strike')."""
     for t in re.findall(r'\$([A-Za-z]{1,5})', text):      # $-prefixed first (catches single-letter $C)
@@ -192,9 +201,18 @@ def _resolve_ticker(text, mstart, provider, strike):
             return u
         if len(tok) == 1 and tok in ("C", "F"):
             return u
-    for tok in reversed(re.findall(r'\b[A-Za-z]{3,6}\b', pre)):   # 2b) typo-tolerant ticker (msttr -> MSTR)
+    # 2b) TYPO-TOLERANT ticker (msttr -> MSTR). POSITION-GATED, unlike before.
+    # This rule used to scan EVERY word in the message, so any ordinary word within one edit of a symbol
+    # minted a phantom ticker. Live case: prince wrote "im gonna GET a higher strike. I bought $688c" and
+    # GET -> GEO (one character) carded a GEO 688C — a stock that trades near $25, from a message that
+    # never contains "geo". A real ticker sits IMMEDIATELY before its strike, so only the nearest couple
+    # of tokens may be typo-matched; prose further back can no longer invent an instrument. Common English
+    # words are refused outright as a second guard.
+    for _j, tok in enumerate(reversed(re.findall(r'\b[A-Za-z]{3,6}\b', pre))):
+        if _j > 1:                                        # ticker position only (msttr 130c still works)
+            break
         u = tok.upper()
-        if u in _SKIP_TK or u in KNOWN_TK:
+        if u in _SKIP_TK or u in KNOWN_TK or u in _ENGLISH_NEAR_TK:
             continue
         cand = _closest_known(u)
         if cand:

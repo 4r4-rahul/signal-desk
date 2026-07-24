@@ -296,7 +296,10 @@ SIGNALS_CAP = 350   # in-memory ceiling — mirrors the 250 disk window with hea
 CHIP_LOG_KEEP = 24  # keep the last N completed chip scalps as the persistent per-provider trade-log
 # PAYLOAD BUDGETS — humans and chip are allocated SEPARATELY so neither can crowd the other off the board.
 HUMAN_WINDOW = 90   # provider cards always reach the UI, however loud chip gets
-CHIP_WINDOW = 60    # chip's own allowance (its full trade-log is surfaced separately via _chiphist)
+CHIP_WINDOW = None  # UNLIMITED (owner's call): chip sends every card it has. Safe because SIGNALS is
+                    # itself trimmed on save, so "all chip cards" is bounded by the store, not unbounded.
+                    # The separate budgets are what matter — chip can be as loud as it likes without
+                    # ever costing the humans a slot.
 SHADOW_TICK_BATCH = 40   # live shadows ticked per heavy lap, ROTATING so every one is covered (see below)
 UNPRICED_MAX_TICKS = 6      # heavy laps with no quote before a shadow is retired UNPRICED
 BASIS_SANITY_X = 8.0        # mark/basis ratio above which the BASIS is wrong, not the trade
@@ -3074,7 +3077,8 @@ class H(http.server.BaseHTTPRequestHandler):
             # from providers". A machine must never be able to evict the humans from the operator's board.
             # Two budgets means neither side can starve the other, whatever chip's ticker count becomes.
             _humans = [s for s in SIGNALS if s.get("provider") != "chip"][-HUMAN_WINDOW:]
-            _window = [s for s in SIGNALS if s.get("provider") == "chip"][-CHIP_WINDOW:]
+            _chip_all = [s for s in SIGNALS if s.get("provider") == "chip"]
+            _window = _chip_all if CHIP_WINDOW is None else _chip_all[-CHIP_WINDOW:]
             _armed = [s for s in SIGNALS if (s.get("reentry") or {}).get("armed")
                       and s not in _window and s not in _humans]
             # surface the last ~24 COMPLETED chip scalps as the persistent trade-log, even past the 60-window
