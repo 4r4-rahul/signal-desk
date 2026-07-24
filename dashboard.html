@@ -621,7 +621,9 @@ function checkDarkChannels(d){
   for(const [k,v] of Object.entries((d&&d.sources)||{})){
     const prov=v.provider||k;
     if(prov==='chip'||!v.last_beat) continue;
+    if(!v.provider) continue;                       // unmapped channel -> not a watched provider
     const age=(now-Date.parse(v.last_beat))/1000;
+    if(age>6*3600) continue;                        // dead for hours = RETIRED, not newly dark; no wolf
     if(age>DARK_AFTER_S) dark.push({prov, mins:Math.round(age/60)});
   }
   if(!rth) return dark;
@@ -799,6 +801,26 @@ function ibkrRowHTML(ibkr,nowIso){
       <small style="color:${on?'var(--muted)':'var(--red)'}">${label}${ago!=null?` · quote ${ago}s ago`:''}</small>
     </div></div>`;
 }
+// EXTENSION-LEVEL outage. Four individual DARK badges describe the symptom; if EVERY provider channel
+// is silent at once the cause is upstream — the extension is not posting to the desk at all (a tab
+// reload clears the per-channel Watch toggle, so reloading alone does NOT restore the relay). Say that
+// once, plainly, instead of making the operator infer it from four red dots.
+function extensionOutageHTML(src, nowIso){
+  const provs=Object.values(src||{}).filter(v=>v.provider&&v.provider!=='chip'&&v.last_beat);
+  if(!provs.length) return '';
+  const fresh=provs.filter(v=>(Date.parse(nowIso)-Date.parse(v.last_beat))/1000<180);
+  if(fresh.length) return '';                       // at least one channel alive -> per-channel problem
+  const newest=Math.max(...provs.map(v=>Date.parse(v.last_beat)));
+  const mins=Math.round((Date.parse(nowIso)-newest)/60000);
+  return `<div style="background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.55);border-radius:11px;
+      padding:9px 11px;margin-bottom:9px">
+      <div style="color:#fca5a5;font-weight:800;font-size:11.5px;letter-spacing:.3px">🔴 EXTENSION NOT RELAYING</div>
+      <div style="color:var(--sub);font-size:11px;line-height:1.5;margin-top:4px">
+        No heartbeat from <b>any</b> provider channel for <b>${mins}m</b> — every message posted since then is lost
+        (there is no backfill). The desk is fine; chip is still ingesting.<br>
+        <b>Reloading the tab is not enough</b> — the extension's <b>👀 Watch</b> toggle is per-channel and clears on
+        reload. Re-arm Watch on each provider tab.</div></div>`;
+}
 function renderSources(src,nowIso,ibkr){
   const el=document.getElementById('sources');
   const ib=ibkrRowHTML(ibkr,nowIso);
@@ -824,7 +846,7 @@ function renderSources(src,nowIso,ibkr){
   const liveN=keys.filter(k=>stateOf(k)==='live').length;   // truly RECEIVING, not just tab-open
   const RANK={live:4,mute:3,blind:2,stale:1,dark:0}, DOT={live:'#22c55e',mute:'#f97316',blind:'#f59e0b',stale:'#6b7280',dark:'#ef4444'};
   keys.sort((a,b)=>(RANK[stateOf(b)]-RANK[stateOf(a)])||((src[b].count||0)-(src[a].count||0)));
-  el.innerHTML=`<div class="rail-h">📡 Data feeds <span class="rail-n">${liveN}/${keys.length} providers</span></div>`+ib+keys.map(k=>{
+  el.innerHTML=extensionOutageHTML(src,nowIso)+`<div class="rail-h">📡 Data feeds <span class="rail-n">${liveN}/${keys.length} providers</span></div>`+ib+keys.map(k=>{
     const s=src[k], stt=stateOf(k);
     const hrs=Math.max((Date.parse(nowIso)-Date.parse(s.first||nowIso))/3.6e6,0.05);
     const rate=s.count?(s.count/hrs).toFixed(1):'0';
