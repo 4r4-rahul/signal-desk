@@ -1354,6 +1354,13 @@ function fmtET(iso){
   try{ return new Date(iso).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',hour12:false,timeZone:'America/New_York'}); }
   catch(e){ return (iso||'').slice(11,16); }
 }
+// HH:MM:SS ET — the precise entry/exit stamps for a trade's full detail (fmtET drops seconds to keep the
+// compact ledger rows narrow; the expanded record wants the exact fill times).
+function fmtETsec(iso){
+  if(!iso) return '';
+  try{ return new Date(iso).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false,timeZone:'America/New_York'})+' ET'; }
+  catch(e){ return (iso||'').slice(11,19); }
+}
 // THE THETA MIRROR — the premium-seller books (long theta) beside chip (the buyer). Two arms:
 // arm1 = directional credit spread on chip's side (isolates the theta sign), arm2 = neutral condor.
 // The headline is PAIRED: seller minus buyer per shared day, because pairing cancels the regime noise.
@@ -1452,8 +1459,8 @@ function sellerDetail(p){
       ${r('short IV', sp.short_iv!=null?(sp.short_iv*100).toFixed(1)+'%':'')}
       ${r('exit friction', sp.exit_friction!=null?'$'+sp.exit_friction+'/ct'+(fr!=null?' · '+(fr*100).toFixed(0)+'% of credit':''):'')}
       ${r('spot at entry', p.entry_spot!=null?'$'+p.entry_spot:'')}
-      ${r('opened', fmtET(p.opened))}
-      ${r('closed', p.closed?fmtET(p.closed)+' · held '+_holdStr(p.opened,p.closed):'still OPEN')}
+      ${r('entry time', fmtETsec(p.opened))}
+      ${r('exit time', p.closed?fmtETsec(p.closed)+' · held '+_holdStr(p.opened,p.closed):'still OPEN')}
       ${r('bought back at', p.buyback!=null?'$'+p.buyback:(p.mark_buyback!=null?'$'+(+p.mark_buyback).toFixed(2)+' (live mark)':''))}
       ${r('why it closed', (p.mgmt_trigger||'').replace(/_/g,' '))}
       ${p.pnl!=null?`<tr><td style="color:var(--dim);padding:4px 12px 1px 0">realized P&L</td><td class="mono" style="color:${col(p.pnl)};font-weight:700">${money(p.pnl)}${ror!=null?' &nbsp;('+(ror>=0?'+':'')+ror+'% of risk)':''}</td></tr>`:''}
