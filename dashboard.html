@@ -600,9 +600,10 @@ function checkSounds(S,d){
   }
   for(const s of (S||[])){
     if(!s || !s.id) continue;
+    if(s.provider==='chip') continue;                       // chip: no alarm/notice tiers either
     const bad=s.corrected||s.phantom_strike||s.misparse||s.verified===false;
     if(bad && !_heard.has('c:'+s.id)){ _remember('c:'+s.id); alarm=true; }
-    if(!_heard.has('n:'+s.id)){ _remember('n:'+s.id); if(s.provider==='chip') chip=true; else fresh=true; }
+    if(!_heard.has('n:'+s.id)){ _remember('n:'+s.id); if(s.provider!=='chip') fresh=true; }   // chip is SILENT
     if((s.live&&s.live.entry&&s.live.entry.action)==='TAKE' && !_heard.has('t:'+s.id)){ _remember('t:'+s.id); notice=true; }
   }
   // A PROVIDER SPOKE. Every message in the live feed gets a soft blip the first time we see it — but
@@ -614,7 +615,7 @@ function checkSounds(S,d){
     if(_heard.has(k)) continue;
     _remember(k);
     const recent=(nowMs-(Date.parse(f.ts)||0))<120000;
-    if(recent){ if(f.provider==='chip') chip=true; else fresh=true; }
+    if(recent && f.provider!=='chip') fresh=true;                      // chip is SILENT in the feed too
   }
   if(risk) soundRisk();
   else if(pos) soundPos();
@@ -622,7 +623,9 @@ function checkSounds(S,d){
   else if(notice) soundNotice();
   else if(held) soundHeld();
   else if(fresh) soundNew();
-  else if(chip) soundChip();
+  // chip NEVER sounds: entries, live&taken, watching and exits are all machine output. Only humans ping.
+  // With 10 tickers chip emits ~200 cards/day against ~2-5 human signals; sounding it trains you to
+  // ignore the alert entirely, which is worse than no alert.
 }
 function audioDiag(){    // so a SILENT test is diagnosable instead of a mystery
   const c=_ctx();
@@ -641,11 +644,15 @@ function testSounds(){   // hear every tier on demand — the only way to confir
   })();
 }
 function secOf(s){
-  if(s._chipwatch) return 'watch';                 // chip scan candidate → 👀 Watching
-  if(s.provider==='chip'&&s.chip_lifecycle){       // chip scalps bucket by lifecycle phase (not human status)
+  // CHIP LIVES IN ITS OWN SECTIONS. It is a machine: ~200 cards/day across 10 tickers against a
+  // handful of human signals, so mixing them means every provider callout is buried 50-deep in
+  // chip scalps. Separating them is what makes the human board readable again.
+  if(s._chipwatch) return 'chipwatch';             // chip scan candidate → its own watch lane
+  if(s.provider==='chip'&&s.chip_lifecycle){
     const ph=s.chip_lifecycle.phase;
-    return (ph==='STOPPED'||ph==='TRAILED_OUT'||ph==='RESOLVED')?'closed':'live';
+    return (ph==='STOPPED'||ph==='TRAILED_OUT'||ph==='RESOLVED')?'chipclosed':'chiplive';
   }
+  if(s.provider==='chip') return 'chiplive';
   const st=s.pos&&s.pos.state;
   if(s.reentry&&s.reentry.armed)return 'watch';   // an ACTIVE re-entry watch belongs up in Watching, not buried in Closed
   if(st==='OPEN'||st==='PARTIALLY_TRIMMED'||st==='RUNNER')return 'live';
@@ -659,8 +666,12 @@ function secOf(s){
   // 0DTEs kept showing under 🔔 New signals even after the server had retired them.
   if(s.status==='EXPIRED')return 'skip';
   return 'new';}
+// HUMAN PROVIDER sections first, then CHIP's own — deliberately separated. chip emits ~200 cards/day
+// across 10 tickers against a handful of human callouts; interleaving them made every provider signal
+// unfindable, which is what "I'm not seeing provider messages" actually was.
 const SECS=[['live','📈 Live & taken'],['new','🔔 New signals'],['watch','👀 Watching'],
-  ['closed','✅ Closed'],['skip','🗑 Dismissed']];
+  ['closed','✅ Closed'],['skip','🗑 Dismissed'],
+  ['chiplive','🤖 Chip — live'],['chipwatch','🤖 Chip — watching'],['chipclosed','🤖 Chip — closed']];
 const SECLBL=Object.fromEntries(SECS);
 let secOn;
 try{secOn=JSON.parse(localStorage.getItem('secOn'))}catch(e){}
