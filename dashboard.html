@@ -1409,7 +1409,7 @@ function renderSeller(s){
       · CONDOR <b style="color:${col(a2.pnl)}">${money(a2.pnl)}</b></div>
     <div style="font-size:10.5px;color:var(--muted);margin-bottom:2px">
       vs chip (paired): mean daily <b style="color:${col(pr.mean_daily_diff)}">${pr.mean_daily_diff==null?'—':money(pr.mean_daily_diff)}</b>
-      <span style="color:var(--dim)">over ${pr.days||0} shared day(s)</span></div>
+      <span style="color:var(--dim)">over ${pr.days||0} day(s) · ${pr.cells||0} (day·ticker) cells${pr.unpaired&&(pr.unpaired.seller_only||pr.unpaired.buyer_only)?` · ${pr.unpaired.seller_only+pr.unpaired.buyer_only} excluded (one side only)`:''}</span></div>
     ${opn.length?`<div style="font-size:9.5px;color:var(--muted);margin-top:6px">OPEN (${opn.length})</div>${cards}`:
       `<div style="font-size:10px;color:var(--dim);margin-top:4px">no open positions — opens ~10:00 ET off the ladder</div>`}
     ${ledRows?`<div style="font-size:9.5px;color:var(--muted);margin:9px 0 1px">LEDGER · ${b.n} closed</div>${ledRows}`:''}

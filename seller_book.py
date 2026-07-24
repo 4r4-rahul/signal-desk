@@ -99,24 +99,70 @@ def replay(arm=None):
 
 
 def paired_vs_chip():
-    """The SME's headline metric: daily (seller - buyer), day-blocked. Pairing on the shared tape cancels
-    the regime variance, which is the only way 40 days has power. Returns the per-day diff series + mean."""
-    seller = replay()["daily"]
+    """The theta experiment's headline metric: seller P&L minus buyer P&L, on IDENTICAL bets.
+
+    PAIRED PER (day, ticker), not per day — and that granularity is the whole validity of the number.
+    The two desks do not trade the same universe on a given day: chip (the buyer) trades every ticker,
+    but the seller REFUSES the wide-spread names on the day's quote (NVDA, AMZN, META, MSFT were skipped
+    on the first live day). Diffing whole-book daily totals therefore compared a 10-ticker buyer against
+    a ~6-ticker seller, so the seller scored well partly by never trading the losers — a rigged
+    scoreboard, not evidence about theta. Here a cell counts ONLY if BOTH sides traded that ticker that
+    day; a ticker one side skipped is dropped from that day's comparison. The result answers the actual
+    question: on the same underlying, on the same day, did selling premium beat buying it?
+
+    Reported at two levels: per (day,ticker) CELL, and rolled up to a per-day paired total (the sum of
+    that day's shared-ticker diffs). The day remains the bootstrap block for significance; the per-cell
+    pairing is what removes the universe-mismatch bias inside each block.
+    """
     try:
         import chip_book as CB
-        chip_daily = defaultdict(float)
-        for r in CB.replay().get("trades", []):
-            chip_daily[(r.get("day") or "")[:10]] += float(r.get("pnl") or 0)
+        chip_trades = CB.replay().get("trades", [])
     except Exception:
-        chip_daily = {}
-    days = sorted(set(seller) | set(chip_daily))
-    diffs = [{"day": d, "seller": round(seller.get(d, 0.0), 2), "buyer": round(chip_daily.get(d, 0.0), 2),
-              "diff": round(seller.get(d, 0.0) - chip_daily.get(d, 0.0), 2)} for d in days]
-    n = len(diffs)
-    mean_diff = round(sum(x["diff"] for x in diffs) / n, 2) if n else None
-    return {"days": n, "mean_daily_diff": mean_diff, "series": diffs,
-            "note": "seller - buyer per shared day; day is the block. Needs many independent days for a "
-                    "confident sign; a handful is directional only."}
+        chip_trades = []
+
+    def _by_cell(rows, day_of, pnl_of, tk_of):
+        agg = defaultdict(float)
+        for r in rows:
+            d, tk = day_of(r), tk_of(r)
+            if d and tk:
+                agg[(d, tk)] += float(pnl_of(r) or 0)
+        return agg
+
+    seller_cell = _by_cell(replay()["positions"],
+                           lambda p: (p.get("closed") or p.get("day") or "")[:10],
+                           lambda p: p.get("pnl"), lambda p: p.get("ticker"))
+    buyer_cell = _by_cell(chip_trades,
+                          lambda t: (t.get("closed") or t.get("day") or "")[:10],
+                          lambda t: t.get("pnl"), lambda t: t.get("ticker"))
+
+    # SHARED cells only: both sides traded that ticker that day.
+    shared = sorted(set(seller_cell) & set(buyer_cell))
+    cells = [{"day": d, "ticker": tk,
+              "seller": round(seller_cell[(d, tk)], 2), "buyer": round(buyer_cell[(d, tk)], 2),
+              "diff": round(seller_cell[(d, tk)] - buyer_cell[(d, tk)], 2)} for d, tk in shared]
+
+    # What each side traded that the OTHER did not — surfaced, not silently dropped, so the operator can
+    # see how much of each book is EXCLUDED from the comparison and whether the pairing is starving.
+    seller_only = sorted(set(seller_cell) - set(buyer_cell))
+    buyer_only = sorted(set(buyer_cell) - set(seller_cell))
+
+    # Roll shared cells up to a paired daily total; the day is still the block for significance.
+    day_agg = defaultdict(lambda: {"seller": 0.0, "buyer": 0.0, "diff": 0.0, "tickers": 0})
+    for c in cells:
+        a = day_agg[c["day"]]
+        a["seller"] += c["seller"]; a["buyer"] += c["buyer"]; a["diff"] += c["diff"]; a["tickers"] += 1
+    series = [{"day": d, "seller": round(v["seller"], 2), "buyer": round(v["buyer"], 2),
+               "diff": round(v["diff"], 2), "tickers": v["tickers"]} for d, v in sorted(day_agg.items())]
+
+    n_days = len(series)
+    mean_daily_diff = round(sum(x["diff"] for x in series) / n_days, 2) if n_days else None
+    mean_cell_diff = round(sum(c["diff"] for c in cells) / len(cells), 2) if cells else None
+    return {"days": n_days, "cells": len(cells), "mean_daily_diff": mean_daily_diff,
+            "mean_cell_diff": mean_cell_diff, "series": series, "cell_series": cells[-60:],
+            "unpaired": {"seller_only": len(seller_only), "buyer_only": len(buyer_only)},
+            "note": "seller - buyer, PAIRED per (day,ticker): only cells BOTH sides traded count, so the "
+                    "seller refusing a wide name no longer flatters the diff. Day is the block; needs "
+                    "many independent days for a confident sign, a handful is directional only."}
 
 
 if __name__ == "__main__":
