@@ -3197,4 +3197,13 @@ if __name__ == "__main__":
             print("🤖 chip desk started (self-generating SHADOW provider 'chip' — SPY/QQQ).")
         except Exception as _e:
             print(f"   (chip desk failed to start: {_e})")
+        try:
+            # THE UNRECOVERABLE PIECE (SME blocker): log the OTM strike ladder every minute all session,
+            # so the forward premium-SELLER books can be backtested. Every unlogged session is gone
+            # forever. Own IBKR connection + own SQLite (channels/ladder.db) so it can't starve the desk.
+            import ladder_logger
+            threading.Thread(target=ladder_logger.scan_loop, daemon=True).start()
+            print("🪜 ladder logger started (OTM ladder + underlying for the theta experiment).")
+        except Exception as _e:
+            print(f"   (ladder logger failed to start: {_e})")
     http.server.HTTPServer(("127.0.0.1", PORT), H).serve_forever()
