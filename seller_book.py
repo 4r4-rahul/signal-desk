@@ -56,6 +56,18 @@ def _period(day, kind):
     return day
 
 
+def days():
+    """Every date the seller has resolved trades for, newest first — for the UI date picker."""
+    ds = {(p.get("closed") or p.get("day") or "")[:10] for p in _load()}
+    return sorted((d for d in ds if d), reverse=True)
+
+
+def positions_for_day(date):
+    """EVERY resolved seller trade on one date (not the last-40 window), each with its full record —
+    structure, per-leg fills, expiry, times, P&L. Backs the date picker."""
+    return [p for p in _load() if (p.get("closed") or p.get("day") or "")[:10] == date]
+
+
 def _seller_cells(rows):
     """Uncapped {'day|ticker': pnl} over ALL resolved seller positions."""
     agg = defaultdict(float)

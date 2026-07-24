@@ -503,6 +503,31 @@ const TIER={HIGH:['#22c55e','rgba(34,197,94,.15)'],MEDIUM:['#f59e0b','rgba(245,1
 const typed={};        // preserve in-progress input, keyed by full element id
 let scalpSort=localStorage.getItem('scalpSort')||'time';   // chip scalp log ordering: 'time' | 'ticker'
 function setScalpSort(k){ scalpSort=k; localStorage.setItem('scalpSort',k); refresh(); }
+
+// DATE PICKER for the scalp log and the seller book. Selecting a past date fetches that day's FULL set
+// of trades on demand (endpoints /api/chip_day, /api/seller_day) — the live payload only carries today,
+// so history does not bloat every 2.5s poll. The picked date + fetched rows live in JS globals so the
+// refresh cycle re-renders the chosen day instead of snapping back to live. '' = live (today).
+const _dayPick = {chip:'', seller:''};          // selected date per log, '' = live
+const _dayData = {chip:null, seller:null};      // cached rows for the selected date
+async function pickDay(which, date){
+  _dayPick[which]=date;
+  if(!date){ _dayData[which]=null; refresh(); return; }
+  try{
+    const r=await fetch(`/api/${which}_day?date=${encodeURIComponent(date)}`);
+    const j=await r.json();
+    _dayData[which] = which==='chip' ? (j.activity||[]) : (j.positions||[]);
+  }catch(e){ _dayData[which]=[]; }
+  refresh();
+}
+// The collapsible date control: a compact <select> of available dates. Rendered inline in each log header.
+function dayPicker(which, days){
+  const opts = ['<option value="">Live (today)</option>']
+    .concat((days||[]).map(d=>`<option value="${d}"${_dayPick[which]===d?' selected':''}>${d}</option>`))
+    .join('');
+  return `<select onchange="pickDay('${which}', this.value)" title="pick a date to see that day's full trades"
+    style="font-size:10px;background:var(--panel,#1a1a1a);color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:1px 3px">${opts}</select>`;
+}
 const muted=new Set(); // providers toggled off in the filter
 let chipOnly=0;        // "🤖 Chip chips" solo filter — show ONLY chip's self-generated signals
 try{chipOnly=JSON.parse(localStorage.getItem('chipOnly'))||0}catch(e){}
@@ -1279,18 +1304,22 @@ function renderChipLive(chip,edge){
   // you a keyhole onto your own session and lost the rest at every restart. The server now persists
   // and serves the full day, so show the full day: scrollable, sortable, counted.
   let act='';
-  const a=(chip&&chip.activity)||[];
-  if(a.length){
+  // Live payload = today; a picked past date = the full fetched day.
+  const a = _dayPick.chip ? (_dayData.chip||[]) : ((chip&&chip.activity)||[]);
+  const days=(chip&&chip.activity_days)||[];
+  if(a.length || days.length){
     const rowsA=a.slice();
     if(scalpSort==='ticker') rowsA.sort((x,y)=>(x.ticker||'~').localeCompare(y.ticker||'~')||String(y.t).localeCompare(String(x.t)));
     else rowsA.reverse();                                   // newest first
     const btn=(k,l)=>`<span onclick="setScalpSort('${k}')" style="cursor:pointer;padding:0 4px;border-radius:3px;${scalpSort===k?'background:var(--line);color:var(--fg)':'color:var(--dim)'}">${l}</span>`;
     act=`<div style="margin-top:7px;padding-top:6px;border-top:1px solid var(--line);font-size:10.5px;color:var(--muted)">
-      <div style="display:flex;gap:6px;align-items:baseline;margin-bottom:3px">
-        <b style="color:var(--fg)">Scalp log</b><span style="color:var(--dim)">${a.length}</span>
+      <div style="display:flex;gap:6px;align-items:baseline;margin-bottom:3px;flex-wrap:wrap">
+        <b style="color:var(--fg)">Scalp log</b><span style="color:var(--dim)">${a.length}${_dayPick.chip?' · '+_dayPick.chip:''}</span>
+        ${dayPicker('chip', days)}
         <span style="margin-left:auto">sort ${btn('time','time')}${btn('ticker','ticker')}</span></div>
       <div style="max-height:230px;overflow-y:auto">`
-      + rowsA.map(e=>`<div style="margin-top:2px"><span style="color:var(--dim)">${esc(e.t||'')}</span> ${esc(e.msg||'')}</div>`).join('')
+      + (rowsA.length ? rowsA.map(e=>`<div style="margin-top:2px"><span style="color:var(--dim)">${esc(e.t||'')}</span> ${esc(e.msg||'')}</div>`).join('')
+                      : `<div style="color:var(--dim)">no scalps on ${esc(_dayPick.chip||'today')}</div>`)
       + `</div></div>`;
   }
   const f=foldHead('chiplive','🤖','Chip — Live',sess,false);
@@ -1464,6 +1493,7 @@ function sellerDetail(p){
       ${r('bought back at', p.buyback!=null?'$'+p.buyback:(p.mark_buyback!=null?'$'+(+p.mark_buyback).toFixed(2)+' (live mark)':''))}
       ${r('why it closed', (p.mgmt_trigger||'').replace(/_/g,' '))}
       ${p.pnl!=null?`<tr><td style="color:var(--dim);padding:4px 12px 1px 0">realized P&L</td><td class="mono" style="color:${col(p.pnl)};font-weight:700">${money(p.pnl)}${ror!=null?' &nbsp;('+(ror>=0?'+':'')+ror+'% of risk)':''}</td></tr>`:''}
+      ${p.pnl==null&&p.open_pnl!=null?`<tr><td style="color:var(--dim);padding:4px 12px 1px 0">open P&L (live)</td><td class="mono" style="color:${col(p.open_pnl)};font-weight:700">${money(p.open_pnl)} <span style="color:var(--dim);font-weight:400">mark-to-market, not yet closed</span></td></tr>`:''}
     </tbody></table>
     <div style="color:var(--dim);font-size:9px;margin-top:5px">click the row again to collapse</div>
   </div>`;
@@ -1473,7 +1503,10 @@ function renderSeller(s){
   if(!s||!s.book){ el.innerHTML=''; return; }
   window._lastSeller=s;      // cache so toggleSeller can re-render without a refetch
   const b=s.book, a1=s.arm1||{}, a2=s.arm2||{}, pr=s.paired||{}, opn=s.open||[];
-  const led=(b.positions||[]).slice().reverse();
+  const sdays=s.days||[];
+  // Ledger source: a picked date shows that day's FULL set (fetched); live shows the recent window.
+  const led = _dayPick.seller ? (_dayData.seller||[]).slice().reverse() : (b.positions||[]).slice().reverse();
+  const ledCap = _dayPick.seller ? 999 : 12;                // a selected day shows ALL of it, not just 12
   const money=v=>v==null?'—':(v>=0?'+$':'-$')+Math.abs(v).toLocaleString(undefined,{maximumFractionDigits:0});
   const col=v=>v==null?'var(--dim)':v>0?'#22c55e':v<0?'#ef4444':'var(--fg)';
   const armTag=a=>a==='arm1'
@@ -1505,7 +1538,7 @@ function renderSeller(s){
     </div>`;
   }).join('');
   // LEDGER of resolved seller trades — the mirror of chip's scalp log.
-  const ledRows=led.slice(0,12).map(p=>{
+  const ledRows=led.slice(0,ledCap).map(p=>{
     const t=fmtET(p.closed||p.opened||'');
     const k=_skey(p), open=_sellerOpenDetail.has(k);
     return `<div style="border-top:1px solid var(--line)">
@@ -1518,7 +1551,13 @@ function renderSeller(s){
         <span style="color:var(--dim);font-size:9.5px;width:66px;text-align:right">${(p.mgmt_trigger||'').replace('_',' ')}</span></div>
       ${open?sellerDetail(p):''}</div>`;
   }).join('');
-  el.innerHTML=`<div class="stats-h">💰 Seller Book <span style="margin-left:auto;font-weight:500;color:var(--muted)">long theta · shadow</span></div>
+  // COLLAPSIBLE, like the chip scalp log — one-line summary stays visible when shut.
+  const fld=foldHead('sellerbook','💰','Seller Book',
+    `${money(b.pnl)} · ${b.n} closed · win ${b.win_rate==null?'—':b.win_rate+'%'}`, false);
+  const ledTitle = _dayPick.seller
+    ? `${_dayPick.seller} · ${led.length} trade${led.length===1?'':'s'}`
+    : `recent ${Math.min(led.length,ledCap)} of ${b.n}`;
+  const body=`
     <div style="display:flex;align-items:baseline;gap:8px;margin:4px 0 2px">
       <b style="font-size:19px;color:${col(b.pnl)}">$${b.equity.toLocaleString(undefined,{maximumFractionDigits:0})}</b>
       <span style="color:${col(b.pnl)};font-size:12px">${money(b.pnl)} (${b.return_pct>=0?'+':''}${b.return_pct}%)</span></div>
@@ -1531,8 +1570,13 @@ function renderSeller(s){
       <span style="color:var(--dim)">over ${pr.days||0} day(s) · ${pr.cells||0} (day·ticker) cells${pr.unpaired&&(pr.unpaired.seller_only||pr.unpaired.buyer_only)?` · ${pr.unpaired.seller_only+pr.unpaired.buyer_only} excluded (one side only)`:''}</span></div>
     ${opn.length?`<div style="font-size:9.5px;color:var(--muted);margin-top:6px">OPEN (${opn.length})</div>${cards}`:
       `<div style="font-size:10px;color:var(--dim);margin-top:4px">no open positions — opens ~10:00 ET off the ladder</div>`}
-    ${ledRows?`<div style="font-size:9.5px;color:var(--muted);margin:9px 0 1px">LEDGER · ${b.n} closed</div>${ledRows}`:''}
+    <div style="display:flex;gap:6px;align-items:baseline;margin:9px 0 1px;flex-wrap:wrap">
+      <span style="font-size:9.5px;color:var(--muted)">LEDGER · ${ledTitle}</span>
+      ${dayPicker('seller', sdays)}</div>
+    ${ledRows || `<div style="font-size:10px;color:var(--dim)">no trades on ${esc(_dayPick.seller||'this window')}</div>`}
     <div style="font-size:9px;color:var(--dim);margin-top:5px">win-small / rare-big-loss · 40 calm days under-sample the tail</div>`;
+  el.innerHTML = fld.html + (fld.open ? body
+    : `<div style="font-size:10.5px;color:var(--dim);padding:2px 2px 4px">${b.n} closed · ${money(b.pnl)} · tap to expand</div>`);
 }
 function renderChipLedger(sigs, book){
   // Standalone CHIP-ONLY scalp results log (kept separate from real tastytrade trades until go-live).

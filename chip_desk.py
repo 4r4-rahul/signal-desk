@@ -272,6 +272,25 @@ def _load_activity():
         pass
 
 
+def activity_days():
+    """Every date the scalp log has events for, newest first — populates the UI date picker."""
+    try:
+        days = {json.loads(ln).get("day") for ln in ACTIVITY_LOG.read_text().splitlines() if ln.strip()}
+        return sorted((d for d in days if d), reverse=True)
+    except Exception:
+        return []
+
+
+def activity_for_day(date):
+    """EVERY scalp-log event for one date (not the live 600-window). Backs the date picker: pick a day,
+    see all of it, however many there were."""
+    try:
+        return [json.loads(ln) for ln in ACTIVITY_LOG.read_text().splitlines()
+                if ln.strip() and json.loads(ln).get("day") == date]
+    except Exception:
+        return []
+
+
 def snapshot():
     """Everything the observer UI needs: per-ticker-per-DIRECTION status + a recent-activity log. Bounded
     (≤ 2×len(TICKERS)). Keys are 'TKR|C' / 'TKR|P' so both scalp directions surface independently."""
@@ -280,7 +299,8 @@ def snapshot():
             "watching": list(TICKERS),
             "session": SCAN["session"],
             "last_scan": SCAN["ts"] or None,
-            "activity": ACTIVITY[-ACTIVITY_KEEP:]}
+            "activity": ACTIVITY[-ACTIVITY_KEEP:],
+            "activity_days": activity_days()}
 
 
 # ─────────────────────────── session / time ───────────────────────────

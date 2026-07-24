@@ -66,7 +66,8 @@ def _seller_snap():
                 # WHY a ticker was skipped. The seller now runs the whole universe and refuses names on
                 # the day's actual quote, so "no NVDA position" must be distinguishable from "NVDA was
                 # never considered" — that ambiguity is exactly what the SPY/QQQ hard-coding created.
-                "universe": list(SD.TICKERS), "refusals": SD.REFUSALS[-12:]}
+                "universe": list(SD.TICKERS), "refusals": SD.REFUSALS[-12:],
+                "days": SB.days()}       # dates with resolved trades -> the UI date picker
     except Exception:
         data = None
     _SELLER_CACHE.update(ts=_t.time(), data=data)
@@ -3065,6 +3066,19 @@ class H(http.server.BaseHTTPRequestHandler):
         if self.path.startswith("/api/route_status"):   # ROUTER (R5): observability, read-only
             return self._send(200, {"route": ROUTE.status() if ROUTE else {"enabled": False},
                                     "parse": LLM.status() if LLM else {"enabled": False}})
+        if self.path.startswith("/api/chip_day") or self.path.startswith("/api/seller_day"):
+            # ALL trades for ONE date, on demand — the date picker. Kept off the main payload so it stays
+            # small; the full history lives on disk (activity.jsonl / positions.jsonl) and is read here.
+            from urllib.parse import urlparse, parse_qs
+            date = (parse_qs(urlparse(self.path).query).get("date") or [""])[0]
+            try:
+                if self.path.startswith("/api/chip_day"):
+                    import chip_desk as CD
+                    return self._send(200, {"date": date, "activity": CD.activity_for_day(date)})
+                import seller_book as SB2
+                return self._send(200, {"date": date, "positions": SB2.positions_for_day(date)})
+            except Exception as e:
+                return self._send(200, {"date": date, "error": str(e), "activity": [], "positions": []})
         if self.path.startswith("/trade"):          # full story of ONE trade, opens in its own window
             try:
                 from urllib.parse import urlparse, parse_qs
