@@ -696,6 +696,11 @@ const SECLBL=Object.fromEntries(SECS);
 let secOn;
 try{secOn=JSON.parse(localStorage.getItem('secOn'))}catch(e){}
 if(!secOn) secOn={live:1,new:1,watch:1,closed:1,skip:0};   // hide dismissed by default
+// SELF-HEALING against the section table. Any key in SECS that the stored prefs predate gets a default
+// rather than silently reading `undefined` (falsy => invisible section with no way to discover it).
+// chip's sections default OFF: the human board stays clean, and the toggle chips in the sort bar make
+// them one click away. Adding a section in SECS can no longer strand it.
+SECS.forEach(([k])=>{ if(secOn[k]===undefined) secOn[k]=k.startsWith('chip')?0:(k==='skip'?0:1); });
 function saveSec(){try{localStorage.setItem('secOn',JSON.stringify(secOn))}catch(e){}}
 function toggleSec(k){secOn[k]=secOn[k]?0:1;saveSec();refresh();}
 function setAllSec(v){SECS.forEach(([k])=>secOn[k]=v);saveSec();refresh();}
@@ -2579,14 +2584,18 @@ async function refresh(){
     if(chipOnly) S=S.filter(x=>x.provider==='chip');  // "🤖 Chip chips" solo view
     S.sort((a,b)=>(Date.parse(b.iso||0)-Date.parse(a.iso||0)));   // newest first (section order set below)
     // group into sections + counts, then render the top filter bar every refresh
-    const groups={live:[],new:[],watch:[],closed:[],skip:[]};
-    S.forEach(s=>groups[secOf(s)].push(s));
+    // DERIVED FROM SECS, never hardcoded. This was a hardcoded {live,new,watch,closed,skip} literal, so
+    // the moment secOf() started returning the new chip sections, groups['chiplive'] was undefined and
+    // the whole refresh threw on .push — taking the ENTIRE dashboard render down with it. Deriving the
+    // buckets (and ORDER below) from the one section table makes adding a section impossible to desync.
+    const groups=Object.fromEntries(SECS.map(([k])=>[k,[]]));
+    S.forEach(s=>{ const k=secOf(s); (groups[k] || (groups[k]=[])).push(s); });
     const counts=Object.fromEntries(Object.entries(groups).map(([k,v])=>[k,v.length]));
     renderSortbar(counts,chipCount);
     // capture in-progress typing before re-render
     document.querySelectorAll('input.px').forEach(i=>{const id=i.id.slice(3);if(i.value)typed[id]=i.value;});
     const feed=document.getElementById('feed');
-    const ORDER=['live','new','watch','closed','skip'];   // display order of sections
+    const ORDER=SECS.map(([k])=>k);   // display order = the section table's order (humans first, chip last)
     const shown=S.filter(s=>secOn[secOf(s)]);
     if(!shown.length){
       const sigE='EMPTY|'+JSON.stringify(secOn)+'|'+S.length;
