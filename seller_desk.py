@@ -92,15 +92,31 @@ def _latest_chain(ticker):
         con.close()
 
 
-def _last_spot(ticker):
-    """Most recent ladder spot for a ticker, NO freshness gate — for settling an expired 0DTE after the
-    market has closed and the chain has gone cold."""
+def _expiry_day(p):
+    """The position's expiry as YYYY-MM-DD. An expired option settles at ITS expiry-day close, so this is
+    the day whose spot we must settle against — not 'today'. Falls back to the trade day (0DTE)."""
+    e = str(p.get("expiry") or "")
+    if len(e) >= 8:
+        return f"{e[:4]}-{e[4:6]}-{e[6:8]}"
+    return p.get("day")
+
+
+def _last_spot(ticker, on_day=None):
+    """Ladder spot for a ticker. With on_day (YYYY-MM-DD) it returns that DAY'S last spot — which is the
+    correct settlement price for an option that expired that day, and is robust to the desk being DOWN
+    across the close: settling a Friday 0DTE on Monday must use Friday's close, not Monday's spot. No
+    freshness gate; the chain is cold by the time this is needed."""
     try:
         import ladder_logger as LL
         con = sqlite3.connect("file:" + str(LL.LADDER_DB) + "?mode=ro", uri=True)
     except Exception:
         return None
     try:
+        if on_day:
+            r = con.execute("SELECT spot FROM ladder WHERE ticker=? AND day=? ORDER BY ts_utc DESC LIMIT 1",
+                            (ticker, on_day)).fetchone()
+            if r:
+                return r[0]
         r = con.execute("SELECT spot FROM ladder WHERE ticker=? ORDER BY ts_utc DESC LIMIT 1",
                         (ticker,)).fetchone()
         return r[0] if r else None
@@ -141,7 +157,7 @@ def _settle_all_orphans(open_rows, now):
     and what recovers positions orphaned by a worthless-wing None-quote or a restart across the close."""
     now_iso = now.astimezone(timezone.utc).isoformat()
     for p in open_rows:
-        spot = _last_spot(p["ticker"])
+        spot = _last_spot(p["ticker"], _expiry_day(p))       # the EXPIRY DAY'S close, not today's spot
         bb = _intrinsic_buyback(spot, p)
         _resolve(p, bb, "expiry_settle", now_iso, close_legs=[{"settle": "intrinsic", "spot": spot}])
     return []
@@ -267,8 +283,9 @@ def _manage_open(open_rows, now, day, session_min):
         # PRIOR-DAY ORPHAN — a 0DTE that never settled. Book it at INTRINSIC vs the last spot, not the
         # old "stale_eod, buyback=None" which kept full credit and turned breached losers into wins.
         if p.get("day") != day:
-            _resolve(p, _intrinsic_buyback(_last_spot(p["ticker"]), p), "expiry_settle_late", now_iso,
-                     close_legs=[{"settle": "intrinsic"}])
+            spot = _last_spot(p["ticker"], _expiry_day(p))    # settle at the expiry day's close
+            _resolve(p, _intrinsic_buyback(spot, p), "expiry_settle_late", now_iso,
+                     close_legs=[{"settle": "intrinsic", "spot": spot}])
             continue
         chain, spot, ts, _exp = _latest_chain(p["ticker"])
         sp = p["spread"]
