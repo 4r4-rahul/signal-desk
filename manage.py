@@ -162,7 +162,12 @@ def classify(text):
                    # they actually paid — while the trade ran to +330%. Anchored on calls/puts so a
                    # WATCH ("watching ... 1.18 limit entry") cannot be mistaken for a fill.
                    r"|\bin\b[^.]{0,30}?\b(?:calls?|puts?)\b[^.]{0,18}?(?:@|\bat\b)\s*\$?\d"
-                   r"|\bbought\b[^.]{0,20}?(?:@|\bat\b)\s*\$?\d", low) and price is not None:
+                   r"|\bbought\b[^.]{0,20}?(?:@|\bat\b)\s*\$?\d"
+                   # "Filled ON WMT CALLS @0.70" — same words-apart shape as the "in ... calls at" case
+                   # above. The bare `filled ... @price` pattern demanded the price right after "filled",
+                   # so prince_small's literal "Filled on WMT calls @0.70" scored NOISE and the WMT watch
+                   # was never upgraded (3 days of it). "filled" + a price within a few words IS a fill.
+                   r"|\bfilled\b[^.]{0,25}?(?:@|\bat\b)\s*\$?\d", low) and price is not None:
         typ = "ENTRY_FILL"                              # firm fill confirmation ("IN AT 0.93", "filled 0.93")
     elif has("added", "adding", "re-enter", "re enter", "back in", "avg", "in full"):
         typ = "PROFIT_UPDATE"                            # averaging/add — log as a status note
