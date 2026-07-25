@@ -504,6 +504,8 @@ const TIER={HIGH:['#22c55e','rgba(34,197,94,.15)'],MEDIUM:['#f59e0b','rgba(245,1
 const typed={};        // preserve in-progress input, keyed by full element id
 let scalpSort=localStorage.getItem('scalpSort')||'time';   // chip scalp log ordering: 'time' | 'ticker'
 function setScalpSort(k){ scalpSort=k; localStorage.setItem('scalpSort',k); refresh(); }
+let _scalpExpand=localStorage.getItem('scalpExpand')==='1';  // false=short scroll box, true=show every row
+function toggleScalpExpand(){ _scalpExpand=!_scalpExpand; localStorage.setItem('scalpExpand',_scalpExpand?'1':'0'); refresh(); }
 
 // DATE PICKER for the scalp log and the seller book. Selecting a past date fetches that day's FULL set
 // of trades on demand (endpoints /api/chip_day, /api/seller_day) — the live payload only carries today,
@@ -1346,12 +1348,16 @@ function renderChipLive(chip,edge){
     if(scalpSort==='ticker') rowsA.sort((x,y)=>(x.ticker||'~').localeCompare(y.ticker||'~')||String(y.t).localeCompare(String(x.t)));
     else rowsA.reverse();                                   // newest first
     const btn=(k,l)=>`<span onclick="setScalpSort('${k}')" style="cursor:pointer;padding:0 4px;border-radius:3px;${scalpSort===k?'background:var(--line);color:var(--fg)':'color:var(--dim)'}">${l}</span>`;
+    // Height: compact scrolls inside a short box (~30 rows); expanded drops the cap so ALL rows show and
+    // the page scrolls — because "I see 30, where's the rest?" means the inner scroll wasn't discoverable.
+    const boxCss = _scalpExpand ? '' : 'max-height:230px;overflow-y:auto';
+    const expBtn = `<span onclick="toggleScalpExpand()" style="cursor:pointer;color:var(--dim);padding:0 4px;border:1px solid var(--line);border-radius:3px" title="${_scalpExpand?'collapse to a scroll box':'show all rows'}">${_scalpExpand?'⤡ compact':'⤢ show all'}</span>`;
     act=`<div style="margin-top:7px;padding-top:6px;border-top:1px solid var(--line);font-size:10.5px;color:var(--muted)">
       <div style="display:flex;gap:6px;align-items:baseline;margin-bottom:3px;flex-wrap:wrap">
-        <b style="color:var(--fg)">Scalp log</b><span style="color:var(--dim)">${a.length}${_dayPick.chip?' · '+_dayPick.chip:''}</span>
-        ${dayPicker('chip', days)}
+        <b style="color:var(--fg)">Scalp log</b><span style="color:var(--dim)">${a.length} entr${a.length===1?'y':'ies'}${_dayPick.chip?' · '+_dayPick.chip:''}${_scalpExpand?'':' · scroll ↓'}</span>
+        ${dayPicker('chip', days)}${expBtn}
         <span style="margin-left:auto">sort ${btn('time','time')}${btn('ticker','ticker')}</span></div>
-      <div style="max-height:230px;overflow-y:auto">`
+      <div style="${boxCss}">`
       + (rowsA.length ? rowsA.map(e=>{
           const has=!!e.sid, open=has&&_chipOpenDetail.has(e.sid);
           const head=`<div ${has?`onclick="toggleChipTrade('${e.sid}')" style="cursor:pointer" title="click for full trade record"`:''}>`
