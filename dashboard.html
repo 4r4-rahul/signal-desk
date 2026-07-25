@@ -506,6 +506,8 @@ let scalpSort=localStorage.getItem('scalpSort')||'time';   // chip scalp log ord
 function setScalpSort(k){ scalpSort=k; localStorage.setItem('scalpSort',k); refresh(); }
 let _scalpExpand=localStorage.getItem('scalpExpand')==='1';  // false=short scroll box, true=show every row
 function toggleScalpExpand(){ _scalpExpand=!_scalpExpand; localStorage.setItem('scalpExpand',_scalpExpand?'1':'0'); refresh(); }
+let _chipLogDate='';   // Chip Scalp Log date filter: '' = recent 24 across all days, else a specific day
+function setChipLogDate(d){ _chipLogDate=d; refresh(); }
 
 // DATE PICKER for the scalp log and the seller book. Selecting a past date fetches that day's FULL set
 // of trades on demand (endpoints /api/chip_day, /api/seller_day) — the live payload only carries today,
@@ -1769,7 +1771,11 @@ function renderChipLedger(sigs, book){
         by regime · <b>flat</b> ${fmtR(avgR(flat))} <span style="color:var(--dim)">n${flat.length}</span>
         · <b>trend</b> ${fmtR(avgR(trend))} <span style="color:var(--dim)">n${trend.length}</span>
         <span style="color:var(--dim)" title="flat = |EMA135−EMA315| < ${FLAT_SEP}% of price at entry">(|EMA sep|<${FLAT_SEP}%)</span></div>`;
-  const rows=done.slice(0,24).map(s=>{
+  // DATE PICKER for the scalp log: distinct days present, newest first. Pick one to see ALL of that
+  // day's trades (not just the recent 24 across all days). '' = recent 24, every day.
+  const logDays=[...new Set(done.map(s=>(s.chip_lifecycle.closed||s.chip_lifecycle.opened||'').slice(0,10)).filter(Boolean))].sort().reverse();
+  const shown = _chipLogDate ? done.filter(s=>(s.chip_lifecycle.closed||s.chip_lifecycle.opened||'').slice(0,10)===_chipLogDate) : done.slice(0,24);
+  const rows=shown.map(s=>{
     const cl=s.chip_lifecycle,m=s.chip||{},g=s.sig||{}, isC=(cl.cp||g.type)==='C';
     const dcol=isC?'#22c55e':'#ef4444', res=cl.result==='WIN'?'✅':cl.result==='LOSS'?'🔴':'●';
     const t=fmtET(cl.closed||cl.opened);
@@ -1805,7 +1811,17 @@ function renderChipLedger(sigs, book){
     ${regHTML}
     <div style="font-size:9px;color:var(--dim);margin-bottom:4px">shadow-only · separate from tastytrade until go-live</div>
     ${chipBookHTML(book)}
-    <div style="height:6px"></div>${rows}`;
+    <div style="display:flex;gap:6px;align-items:center;margin:9px 0 2px;flex-wrap:wrap;font-size:10px;color:var(--muted)">
+      <b style="color:var(--fg)">trades</b>
+      <span style="color:var(--dim)">${_chipLogDate?shown.length+' on '+_chipLogDate:'recent '+shown.length+' of '+done.length}</span>
+      <span style="display:inline-flex;align-items:center;gap:3px;${_chipLogDate?'color:var(--fg)':'color:var(--dim)'}">📅
+        <select onchange="setChipLogDate(this.value)" title="pick a date to see all its trades"
+          style="font-size:10px;background:${_chipLogDate?'var(--line)':'var(--panel,#1a1a1a)'};color:var(--fg);border:1px solid ${_chipLogDate?'var(--fg)':'var(--line)'};border-radius:4px;padding:1px 4px">
+          <option value="">Recent (24)</option>
+          ${logDays.map(d=>`<option value="${d}"${_chipLogDate===d?' selected':''}>${d}</option>`).join('')}
+        </select></span>
+      <span style="color:var(--dim)">click a row → full trade story</span></div>
+    ${rows||`<div style="font-size:10px;color:var(--dim)">no trades on ${_chipLogDate||'this window'}</div>`}`;
 }
 function renderProviderEdge(edge){
   const el=document.getElementById('provideredge'); if(!el) return;
