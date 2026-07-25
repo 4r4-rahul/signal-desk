@@ -557,8 +557,12 @@ function dayPicker(which, days){
   const opts = ['<option value="">Live (today)</option>']
     .concat((days||[]).map(d=>`<option value="${d}"${_dayPick[which]===d?' selected':''}>${d}</option>`))
     .join('');
-  return `<select onchange="pickDay('${which}', this.value)" title="pick a date to see that day's full trades"
-    style="font-size:10px;background:var(--panel,#1a1a1a);color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:1px 3px">${opts}</select>`;
+  // Visible "📅 date" label so it reads as a date selector, not a mystery dropdown. Highlighted when a
+  // past date is active, so it's obvious you are looking at history, not today.
+  const active = !!_dayPick[which];
+  return `<span style="display:inline-flex;align-items:center;gap:3px;font-size:10px;${active?'color:var(--fg)':'color:var(--dim)'}">
+    📅 <select onchange="pickDay('${which}', this.value)" title="pick a date to see that day's full trades"
+      style="font-size:10px;background:${active?'var(--line)':'var(--panel,#1a1a1a)'};color:var(--fg);border:1px solid ${active?'var(--fg)':'var(--line)'};border-radius:4px;padding:1px 4px">${opts}</select></span>`;
 }
 const muted=new Set(); // providers toggled off in the filter
 let chipOnly=0;        // "🤖 Chip chips" solo filter — show ONLY chip's self-generated signals
