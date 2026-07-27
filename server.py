@@ -1468,7 +1468,10 @@ def monitor_loop():
                     if not p.get("ticker") or len(leg) < 2:
                         continue
                     st = MONITOR.setdefault(p["id"], {"fired": set()})
-                    if "expiry" not in st and p.get("expiry"):     # price the position's REAL expiry, not nearest
+                    # FOLLOW a corrected expiry. This used to cache the first expiry seen and never update
+                    # it — so fixing a position's expiry (e.g. WMT 08/07 -> 07/31) had no effect until a
+                    # restart, because the monitor kept quoting the stale one. Sync whenever it changes.
+                    if p.get("expiry") and st.get("expiry") != p["expiry"]:
                         st["expiry"] = p["expiry"]
                     q = MK.option_quote(p["ticker"], leg[:-1], leg[-1], expiry=st.get("expiry"), ib=conn)
                     if not q or q.get("error") or not q.get("mid"):
