@@ -897,11 +897,6 @@ function renderSources(src,nowIso,ibkr){
   // extensions -> treat as healthy so nothing regresses). green = heartbeat AND reading; amber = tab open
   // but blind (scrape broke — the "green dot lying" case); gray = no heartbeat (tab minimized/closed).
   const isHealthy=k=>src[k].healthy!==false;
-  // READING BUT NOT RELAYING — the failure that hid itself. A window can heartbeat healthy (the
-  // extension found Discord's message list, `seen` climbing) and still POST nothing to the desk, so the
-  // dot stayed green while prince/jmt/optionking went 23-66h without relaying a single message and
-  // prince_small relayed 8m ago. Green-means-fine was a lie. If a channel is live+healthy but its last
-  // RELAY is far older than the freshest channel's, it is mute: the tab needs reloading.
   // "NOT RELAYING" WAS A FALSE ALARM. It flagged any channel >6h behind the FRESHEST relay — but the
   // freshest is always chip, a server daemon that emits a scalp every ~20s. So every human who simply
   // hadn't posted in 6h (a weekend, a quiet Monday open, a provider with no setup that day) rendered
@@ -921,11 +916,22 @@ function renderSources(src,nowIso,ibkr){
   // heartbeat (~20s). Judging staleness off that produced a DARK flash + outage alarm on every single
   // restart — a false alarm the operator then had to chase. 'waiting' says so honestly instead.
   const isWaiting=k=>src[k].live_session===false;
+  // THE HONEST THREE-WAY. The old 'not relaying' conflated two very different things. A tab can be:
+  //  · live      — heartbeating AND a message arrived recently (actively relaying)
+  //  · listening — heartbeating fine, reading Discord, the provider just HASN'T POSTED in a while. This
+  //                is NORMAL and needs NO action; it is not an outage and must not say "reload tab".
+  //  · dark      — heartbeat STOPPED. The tab is genuinely throttled/closed → reload it.
+  // So 'listening' vs 'dark' is the real distinction, and it is the HEARTBEAT that separates them, never
+  // message timing (a quiet provider heartbeats normally). QUIET_MS just sets how long without a MESSAGE
+  // before we say "listening (quiet)" instead of "live".
+  const QUIET_MS=90*60*1000;                    // no message for 90 min while the tab beats = listening
+  const msgAge=k=>{const t=Date.parse(src[k].last_signal_iso||0); return t>0?(Date.parse(nowIso)-t):Infinity;};
   const stateOf=k=>isLocal(k)?'local':(isWaiting(k)?'waiting'
-    :(darkAge(k)>180?'dark':(!isLive(k)?'stale':(!isHealthy(k)?'blind':'live'))));
-  const liveN=keys.filter(k=>stateOf(k)==='live').length;
-  const watched=keys.filter(k=>!isLocal(k)).length;   // chip is not an extension-watched channel   // truly RECEIVING, not just tab-open
-  const RANK={live:6,local:5,waiting:4,mute:3,blind:2,stale:1,dark:0}, DOT={live:'#22c55e',local:'#a78bfa',waiting:'#64748b',mute:'#f97316',blind:'#f59e0b',stale:'#6b7280',dark:'#ef4444'};
+    :(darkAge(k)>180?'dark':(!isLive(k)?'stale':(!isHealthy(k)?'blind':(msgAge(k)>QUIET_MS?'listening':'live')))));
+  // both live AND listening mean the tab is UP and receiving-capable — that is what the count should show
+  const liveN=keys.filter(k=>['live','listening'].includes(stateOf(k))).length;
+  const watched=keys.filter(k=>!isLocal(k)).length;   // chip is not an extension-watched channel
+  const RANK={live:6,listening:5.5,local:5,waiting:4,blind:2,stale:1,dark:0}, DOT={live:'#22c55e',listening:'#38bdf8',local:'#a78bfa',waiting:'#64748b',blind:'#f59e0b',stale:'#6b7280',dark:'#ef4444'};
   keys.sort((a,b)=>(RANK[stateOf(b)]-RANK[stateOf(a)])||((src[b].count||0)-(src[a].count||0)));
   el.innerHTML=extensionOutageHTML(src,nowIso)+`<div class="rail-h">📡 Data feeds <span class="rail-n">${liveN}/${watched} providers</span></div>`+ib+keys.map(k=>{
     const s=src[k], stt=stateOf(k);
@@ -933,17 +939,17 @@ function renderSources(src,nowIso,ibkr){
     const rate=s.count?(s.count/hrs).toFixed(1):'0';
     const last=s.last_signal?`${ago(s.last_signal_iso,nowIso)} · ${s.last_signal}`:'no signal yet';
     const key=s.provider||k;
-    const tip={live:'live — receiving & reading Discord (click to mute)',
+    const tip={live:'live — tab is relaying and this provider posted recently (click to mute)',
+               listening:'👂 LISTENING — the tab is alive and reading Discord; this provider simply has not posted in a while. Nothing to do; NOT an outage.',
                local:'local engine — chip runs server-side, not in a browser tab. Nothing to reload; it beats when it emits a scalp.',
                waiting:"reconnecting — the desk restarted; waiting for this channel's first heartbeat (~20s). Not an outage.",
-               dark:'🔴 NO HEARTBEAT — the browser has throttled this tab. Messages are NOT reaching the desk. RELOAD IT.',
-               mute:'⚠ READING but NOT RELAYING — the tab sees Discord yet posts nothing to the desk. RELOAD this channel tab.',
+               dark:'🔴 NO HEARTBEAT — the browser has throttled/closed this tab. Messages are NOT reaching the desk. RELOAD IT.',
                blind:'⚠ tab is open but NOT reading Discord — scrape broke, reload the channel',
                stale:'stale — window not sending (minimized/closed?)'}[stt];
     const tag={live:'',local:'<small style="color:#a78bfa">local engine</small>',
+              listening:`<small style="color:#38bdf8">👂 listening · quiet ${s.last_signal_iso?ago(s.last_signal_iso,nowIso):''}</small>`,
               waiting:'<small style="color:var(--dim)">reconnecting…</small>',
               dark:'<small style="color:#ef4444;font-weight:800">DARK — reload tab</small>',
-              mute:'<small style="color:#f97316;font-weight:700">not relaying — reload tab</small>',
               blind:'<small style="color:var(--amber)">not reading</small>',
                stale:'<small style="color:var(--amber)">stale</small>'}[stt];
     return `<div class="src ${muted.has(key)?'off':''}" onclick="toggleSrc('${key}')" title="${tip}">
