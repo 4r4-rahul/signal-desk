@@ -1885,7 +1885,16 @@ def _apply_entry_fill(prov, text, c, data, res):
     # default — this was the QQQ 700C misread (a 7/20 swing priced as 0DTE → false 'setup failed').
     try:
         _dte, _exp = E._parse_expiry(text)
-        if _exp and _exp.upper() != "0DTE":
+        # Let the FILL override the watch's expiry ONLY when it states an EXPLICIT date. A RELATIVE phrase
+        # ("we ride into next week") re-resolves off the FILL's OWN day — so prince_small's 07/31 watch,
+        # filled the following Monday, was rewritten to 08/07, a DIFFERENT contract than the one watched
+        # and the one they hold. When the fill is merely relative and the watch already carries a concrete
+        # date, keep the watch's. Explicit dates in a fill ("expiry july 20 im in") still override.
+        _explicit = bool(re.search(
+            r'\b\d{1,2}[/-]\d{1,2}\b'
+            r'|\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s*\d{1,2}\b'
+            r'|\b\d{1,2}\s*(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)', text.lower()))
+        if _exp and _exp.upper() != "0DTE" and (_explicit or not w["sig"].get("expiry")):
             w["sig"]["expiry"] = _exp
             if _dte is not None: w["sig"]["dte"] = _dte
             w.pop("opt", None)                           # force a re-quote on the corrected expiry
