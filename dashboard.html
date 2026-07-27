@@ -902,11 +902,15 @@ function renderSources(src,nowIso,ibkr){
   // dot stayed green while prince/jmt/optionking went 23-66h without relaying a single message and
   // prince_small relayed 8m ago. Green-means-fine was a lie. If a channel is live+healthy but its last
   // RELAY is far older than the freshest channel's, it is mute: the tab needs reloading.
-  const relayTimes=keys.map(k=>Date.parse(src[k].last_signal_iso||0)).filter(t=>t>0);
-  const freshestRelay=relayTimes.length?Math.max(...relayTimes):0;
-  const MUTE_LAG_MS=6*3600*1000;                 // >6h behind the freshest live channel = not relaying
-  const isMute=k=>{const t=Date.parse(src[k].last_signal_iso||0);
-    return freshestRelay>0 && (!t || (freshestRelay-t)>MUTE_LAG_MS);};
+  // "NOT RELAYING" WAS A FALSE ALARM. It flagged any channel >6h behind the FRESHEST relay — but the
+  // freshest is always chip, a server daemon that emits a scalp every ~20s. So every human who simply
+  // hadn't posted in 6h (a weekend, a quiet Monday open, a provider with no setup that day) rendered
+  // "not relaying — reload tab" while its tab was perfectly alive (heartbeat 0 min ago, and other
+  // providers relaying fine). Message TIMING cannot tell "provider quiet" from "tab broken"; the
+  // HEARTBEAT can — a dead tab stops beating (see darkAge below). So the mute state is retired. A quiet
+  // provider is 'live' with an honest "last signal Nh ago"; a truly broken tab shows DARK and asks for a
+  // reload. The genuine "reads Discord but posts nothing" failure needs the extension to report unrelayed
+  // messages it can SEE — a message-timing proxy only cries wolf.
   const darkAge=k=>(Date.parse(nowIso)-Date.parse(src[k].last_beat||0))/1000;
   // chip is a SERVER-SIDE DAEMON, not a watched browser tab: there is no tab to reload, and it only
   // beats when it EMITS a scalp, so a quiet stretch is normal rather than an outage. Telling the
@@ -918,7 +922,7 @@ function renderSources(src,nowIso,ibkr){
   // restart — a false alarm the operator then had to chase. 'waiting' says so honestly instead.
   const isWaiting=k=>src[k].live_session===false;
   const stateOf=k=>isLocal(k)?'local':(isWaiting(k)?'waiting'
-    :(darkAge(k)>180?'dark':(!isLive(k)?'stale':(!isHealthy(k)?'blind':(isMute(k)?'mute':'live')))));
+    :(darkAge(k)>180?'dark':(!isLive(k)?'stale':(!isHealthy(k)?'blind':'live'))));
   const liveN=keys.filter(k=>stateOf(k)==='live').length;
   const watched=keys.filter(k=>!isLocal(k)).length;   // chip is not an extension-watched channel   // truly RECEIVING, not just tab-open
   const RANK={live:6,local:5,waiting:4,mute:3,blind:2,stale:1,dark:0}, DOT={live:'#22c55e',local:'#a78bfa',waiting:'#64748b',mute:'#f97316',blind:'#f59e0b',stale:'#6b7280',dark:'#ef4444'};

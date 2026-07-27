@@ -170,6 +170,15 @@ def touch_source(key, provider=None, desc=None, display=None, healthy=None, seen
     `healthy` is the extension's SCRAPE health (did it find Discord's message list this tick?) — distinct
     from the mere heartbeat. A relayed message (desc) is itself proof the scrape works, so it marks healthy."""
     now = datetime.now(ET)
+    # NEVER create a phantom source keyed by PROVIDER NAME. Two call sites fall back to `prov` when the
+    # channel is missing (touch_source(data.get("channel") or prov, ...)); that minted a second
+    # "prince_small" source alongside the real discord_… one, which then rendered as a ghost DARK row.
+    # If this key isn't a real channel and we already track this provider on a channel, touch THAT.
+    if provider and not str(key).startswith("discord_") and key != "chip" and key not in SOURCES:
+        chan = next((kk for kk, vv in SOURCES.items()
+                     if vv.get("provider") == provider and str(kk).startswith("discord_")), None)
+        if chan:
+            key = chan
     s = SOURCES.setdefault(key, {"name": display or key, "count": 0, "first": now.isoformat()})
     s["last_beat"] = now.isoformat()
     s["live_session"] = True          # PROVEN alive in THIS process — see _load_sources()
@@ -699,6 +708,15 @@ def _load_sources():
         d = json.loads(SOURCES_STORE.read_text())
         if not isinstance(d, dict):
             return {}
+        # DROP phantom provider-name orphans: a source keyed by a bare provider name that duplicates the
+        # same provider already tracked on a real discord_ channel. These were minted by the
+        # channel-or-provider fallback (now fixed) and showed as ghost rows.
+        chan_provs = {v.get("provider") for k, v in d.items()
+                      if isinstance(v, dict) and str(k).startswith("discord_")}
+        for k in [k for k, v in d.items()
+                  if isinstance(v, dict) and not str(k).startswith("discord_") and k != "chip"
+                  and v.get("provider") in chan_provs]:
+            del d[k]
         for v in d.values():
             if isinstance(v, dict):
                 v["live_session"] = False
