@@ -740,17 +740,27 @@ function checkSounds(S,d){
     }
     if(['CLOSED','CUT'].includes(p.state) && !_heard.has('x:'+p.id)){ _remember('x:'+p.id); pos=true; }
   }
+  const nowMs=Date.parse((d&&d.now)||'')||Date.now();
   for(const s of (S||[])){
     if(!s || !s.id) continue;
     if(isChipRow(s)) continue;                              // chip: no alarm/notice/new tiers
     const bad=s.corrected||s.phantom_strike||s.misparse||s.verified===false;
     if(bad && !_heard.has('c:'+s.id)){ _remember('c:'+s.id); alarm=true; }
-    if(!_heard.has('n:'+s.id)){ _remember('n:'+s.id); fresh=true; }
+    if(!_heard.has('n:'+s.id)){
+      _remember('n:'+s.id); fresh=true;
+      // VISUAL toast for a just-arrived provider signal — new signals were sound-ONLY, so a blocked
+      // AudioContext (tab backgrounded / 🔔 not yet clicked) meant NO notification at all. A feed MESSAGE
+      // already toasts; the SIGNAL is more important and must too. Recency-gated so opening the desk does
+      // not replay the whole day's cards as toasts.
+      if((nowMs-(Date.parse(s.iso||s.ts_utc||0)||0))<300000){
+        const sg=s.sig||{};
+        providerToast(`🆕 ${sg.ticker||''} ${sg.strike||''}${sg.type||''}${sg.premium?' @ '+sg.premium:''}`, (s.provider||'')+' — NEW SIGNAL');
+      }
+    }
     if((s.live&&s.live.entry&&s.live.entry.action)==='TAKE' && !_heard.has('t:'+s.id)){ _remember('t:'+s.id); notice=true; }
   }
   // A PROVIDER SPOKE. Every message in the live feed gets a soft blip the first time we see it — but
   // only if it actually just arrived (ts within 2 min), so opening the desk does not replay the day.
-  const nowMs=Date.parse((d&&d.now)||'')||Date.now();
   for(const f of ((d&&d.feed)||[])){
     if(!f || !f.id) continue;
     const k='f:'+f.id;
