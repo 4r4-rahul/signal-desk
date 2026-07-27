@@ -1459,11 +1459,16 @@ function chipBookHTML(b){
   const pHead=`<div onclick="toggleFold('chipbook-periods')" style="cursor:pointer;user-select:none;margin-top:7px;font-size:10px;color:var(--muted)">
      <span style="display:inline-block;width:9px;transform:rotate(${chipFold('chipbook-periods',false)?90:0}deg);transition:transform .18s">▸</span>
      by day / week / month <span style="color:var(--dim)">— audited, reconciles to book</span></div>`;
+  // b.pnl is the TRUE trading P&L (top-ups excluded); b.equity is the FUNDED book it sizes off. Show
+  // both, and the injected capital, so an auto-refill can never be mistaken for the strategy recovering.
+  const inj=b.injected||0;
   return `<div class="sub" style="display:flex;gap:14px;flex-wrap:wrap;align-items:baseline">
-      <b style="font-size:17px">$${b.equity.toLocaleString(undefined,{minimumFractionDigits:2})}</b>
-      <b style="color:${pc}">${b.pnl>=0?'+':''}$${Math.round(b.pnl).toLocaleString()} (${b.return_pct>=0?'+':''}${b.return_pct}%)</b>
-      <span class="mono" style="color:var(--dim)">start $${b.start.toLocaleString()} · risk/trade $${Math.round(b.risk_per_trade).toLocaleString()} · dd ${b.drawdown_pct}%</span>
+      <span><b style="font-size:17px">$${b.equity.toLocaleString(undefined,{maximumFractionDigits:0})}</b> <span style="color:var(--dim);font-size:10px">book (funded)</span></span>
+      <b style="color:${pc}">true P&L ${b.pnl>=0?'+':''}$${Math.round(b.pnl).toLocaleString()} (${b.return_pct>=0?'+':''}${b.return_pct}%)</b>
+      <span class="mono" style="color:var(--dim)">risk/trade $${Math.round(b.risk_per_trade).toLocaleString()} · dd ${b.drawdown_pct}%</span>
     </div>
+    ${inj>0?`<div class="sub" style="color:#f59e0b;font-size:10.5px">💵 auto-funded +$${inj.toLocaleString()} (${b.refills} × $100k top-up) · deployed $${(b.deployed||0).toLocaleString()} — top-ups keep sizing meaningful, excluded from true P&L</div>`:
+      `<div class="sub" style="color:var(--dim);font-size:10px">auto-refill armed: +$100k when the book dips to $150k (start $${b.start.toLocaleString()})</div>`}
     <div class="sub mono" style="color:var(--dim)">${b.n} trades · ${b.wins}W/${b.losses}L · win ${b.win_rate}% · avg win ${b.avg_win==null?'—':'$'+b.avg_win} · avg loss ${b.avg_loss==null?'—':'$'+b.avg_loss} · PF ${b.profit_factor==null?'—':b.profit_factor} · exp ${b.expectancy_usd==null?'—':'$'+b.expectancy_usd}/trade${b.n_refused?' · '+b.n_refused+' refused on size':''}</div>
     ${pHead}${periods}`;
 }

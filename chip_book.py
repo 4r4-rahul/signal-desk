@@ -47,6 +47,12 @@ def _secs_between(a, b):
 # NOTE the concurrent-exposure math changed with the universe: 10 tickers x 1% = up to 10% of the book
 # at risk simultaneously (it was 2% with two tickers). Same per-trade discipline, 5x the breadth.
 START_EQUITY = 250_000.0     # owner-funded paper book
+# AUTO-REFILL. Owner's call: keep the scalp book funded so position sizing stays meaningful over the
+# month-long study — a shrinking book quietly shrinks every trade and muddies the per-ticker data. When
+# equity drops near REFILL_TRIGGER, inject REFILL_AMOUNT. Tracked SEPARATELY (injected capital) so the
+# headline stays honest: TRUE P&L = equity - START - injected, never inflated by the top-ups.
+REFILL_TRIGGER = 150_000.0
+REFILL_AMOUNT = 100_000.0
 RISK_PCT = 1.0               # % of CURRENT equity risked per position
 MAX_CONCURRENT = 4           # open positions at once — a real book has finite attention and margin
 RT_COST_PER_CT = 1.30        # $1.00 open + ~$0.30 fees; $0 to close
@@ -121,6 +127,8 @@ def _build_rows(con):
     """The core replay loop, factored out so replay() and trades_all() share ONE source of truth."""
     if True:
         eq = peak = START_EQUITY
+        injected = 0.0
+        injections = []
         rows, refused, plans = [], [], []
         daily = defaultdict(float)
         for (sid, tk, strike, typ, exp, stop_pct, t1_pct, entry, ret, r, result,
@@ -136,8 +144,14 @@ def _build_rows(con):
             # $ P&L = cost-honest return% applied to the notional actually held
             pnl = (float(ret) / 100.0) * entry * 100.0 * qty
             eq += pnl
-            peak = max(peak, eq)
             daily[day] += pnl
+            # AUTO-REFILL: top up the moment the book dips to the trigger, so the NEXT trade sizes off a
+            # healthy balance. Can fire more than once if a big loss blows through a whole tranche.
+            while eq <= REFILL_TRIGGER:
+                eq += REFILL_AMOUNT
+                injected += REFILL_AMOUNT
+                injections.append({"day": day, "amount": REFILL_AMOUNT, "equity_after": round(eq, 2)})
+            peak = max(peak, eq)
             # THE EXECUTABLE PLAN, not the intended one. 1/2-1/4-1/4 only divides at multiples of 4, and
             # this book sizes to 3 and 7 — so "half out at T1" meant selling 1.5 and 3.5 contracts, orders
             # that cannot be placed. Recording the plan we could actually TRADE is what makes the P&L and
@@ -169,7 +183,7 @@ def _build_rows(con):
                 rows[-1]["checks"] = {"stage": "post", "items": _pc, "summary": TC.summarise(_pc)}
             except Exception:
                 pass
-        return rows, refused, daily, eq, peak, plans
+        return rows, refused, daily, eq, peak, plans, injected, injections
 
 
 def _period(day, kind):
@@ -195,12 +209,18 @@ def _cells(rows):
     return {k: round(v, 2) for k, v in agg.items()}
 
 
-def _summarise(rows, refused, daily, eq, peak, plans=None):
+def _summarise(rows, refused, daily, eq, peak, plans=None, injected=0.0, injections=None):
     n = len(rows)
     wins = [r for r in rows if r["pnl"] > 0]
     losses = [r for r in rows if r["pnl"] <= 0]
     gross_w = sum(r["pnl"] for r in wins)
     gross_l = sum(r["pnl"] for r in losses)
+    # TRUE cumulative trading P&L = book equity minus the starting stake minus every top-up. The refills
+    # keep the book funded for sizing but must NEVER flatter the performance number — this is the real
+    # money made/lost by the strategy, and it is what `pnl` reports.
+    injected = injected or 0.0
+    true_pnl = eq - START_EQUITY - injected
+    deployed = START_EQUITY + injected
     by = {}
     for kind in ("day", "week", "month"):
         agg = defaultdict(lambda: {"pnl": 0.0, "n": 0, "wins": 0})
@@ -213,8 +233,11 @@ def _summarise(rows, refused, daily, eq, peak, plans=None):
                     for k, v in sorted(agg.items())]
     return {
         "start": START_EQUITY, "equity": round(eq, 2), "peak": round(peak, 2),
-        "pnl": round(eq - START_EQUITY, 2),
-        "return_pct": round((eq / START_EQUITY - 1) * 100, 2),
+        # pnl = TRUE trading P&L (excludes the top-ups). equity = the funded book balance chip sizes off.
+        "pnl": round(true_pnl, 2),
+        "injected": round(injected, 2), "refills": len(injections or []),
+        "injections": (injections or [])[-20:], "deployed": round(deployed, 2),
+        "return_pct": round((true_pnl / deployed) * 100, 2) if deployed else 0.0,
         "drawdown_pct": round((eq / peak - 1) * 100, 2) if peak else 0.0,
         "risk_pct": RISK_PCT, "risk_per_trade": round(eq * RISK_PCT / 100.0, 2),
         "n": n, "wins": len(wins), "losses": len(losses),
@@ -222,7 +245,7 @@ def _summarise(rows, refused, daily, eq, peak, plans=None):
         "avg_win": round(gross_w / len(wins), 2) if wins else None,
         "avg_loss": round(gross_l / len(losses), 2) if losses else None,
         "profit_factor": round(gross_w / abs(gross_l), 2) if gross_l else None,
-        "expectancy_usd": round((eq - START_EQUITY) / n, 2) if n else None,
+        "expectancy_usd": round(true_pnl / n, 2) if n else None,
         "by_day": by["day"], "by_week": by["week"], "by_month": by["month"],
         "trades": rows[-60:],
         # UNCAPPED per-(day,ticker) P&L for the theta pairing. `trades` above is capped at 60 for the
