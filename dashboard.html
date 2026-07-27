@@ -2455,6 +2455,10 @@ function posVerdict(p){   // live "what do I do NOW" — hardened for the two pr
   let c,txt;
   // 1) STOP breach — cut FIRMLY (your losses overrun the stop by ~23% — no 'giving it room')
   if(pnl<=-stop*0.85){ c='skip'; txt=`🔴 ${Math.round(pnl)}% — AT STOP: cut now at $${p.stop}. Don't give it room — this is exactly where losses overrun.`; }
+  // 1b) LOSS REGULATION (owner's ask): the THESIS has broken AND we're well on the way to the stop.
+  //     Cut EARLY to regulate the loss rather than riding passively to the full stop. Server sets this
+  //     only when BOTH are true (tape now AGAINST + >=40% of the way to the stop).
+  else if(p.live.risk==='regulate'){ c='skip'; txt=`🟠 ${p.live.risk_msg||'thesis broke & nearing stop — cut to regulate the loss'}`; }
   // 2) GIVE-BACK / whipsaw guard — was up big, now bleeding back toward a loss
   else if(peak>=25 && pnl<=peak-20 && pnl>0){ c='wait'; txt=`⚡ was +${Math.round(peak)}%, now +${Math.round(pnl)}% — GIVING IT BACK. Bank ${rt?twothirds:half} NOW before it round-trips.`; }
   // 3) round-trip setup popped — bank hard (lottos/far-OTM collapse)
@@ -2463,7 +2467,13 @@ function posVerdict(p){   // live "what do I do NOW" — hardened for the two pr
   else if(pnl>=t1){ c='take'; txt=`🟢 +${Math.round(pnl)}% — at T1: trim ${trim}, move stop→BE $${p.avg_entry}`; }
   else if(pnl>=0){ c='wait'; txt=`🟡 +${Math.round(pnl)}% — hold, stop $${p.stop}${be?' (at BE — free roll)':''}`; }
   else { c='wait'; txt=`🟡 ${Math.round(pnl)}% — hold, hard stop $${p.stop} (honor it)`; }
-  return `<div class="verdict v-${c}">🎯 <b>${txt}</b></div>`;
+  // THESIS line — always show whether the underlying tape still supports the trade, so a breaking thesis
+  // is visible BEFORE it becomes critical. 'watch' = one risk leg tripped; the verdict above escalates
+  // to a cut only when both do.
+  const th=p.live.thesis, risk=p.live.risk;
+  const thHTML = th ? `<div style="font-size:11px;margin-top:3px;color:${th==='AGAINST'?'#ef4444':th==='ALIGNED'?'#22c55e':'#f59e0b'}">
+      thesis: <b>${th==='AGAINST'?'BROKEN — tape against':th==='ALIGNED'?'intact — tape supports':'mixed'}</b>${risk==='watch'&&p.live.risk_msg?` · <span style="color:var(--muted)">${esc(p.live.risk_msg)}</span>`:''}</div>` : '';
+  return `<div class="verdict v-${c}">🎯 <b>${txt}</b>${thHTML}</div>`;
 }
 function coachHTML(s){
   if(!s.ticket||s.ticket.limit==null) return '';

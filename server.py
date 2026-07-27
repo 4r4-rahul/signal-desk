@@ -1253,6 +1253,31 @@ def _check_pos_rules(p, st):
     from datetime import datetime
     pnl, peak = st.get("pnl_pct", 0), st.get("peak_pct", 0)
     _check_ustop(p, st)
+    # ── LOSS REGULATION (owner's ask) ────────────────────────────────────────────────────────────────
+    # Warn on the LIVE card when the THESIS has BROKEN *and* the position is well on its way to the stop,
+    # so the loss can be CUT EARLY instead of riding passively to the full stop. The stop is the hard
+    # floor; this is the smarter, earlier exit. Fires only when BOTH are true — a dead thesis alone might
+    # still recover, and a normal drawdown with the tape still onside is just the trade breathing.
+    # Recomputed EVERY cycle (st["risk"]) so the card reflects the current state, not a one-shot.
+    _entry = p.get("entry") or p.get("avg_entry")
+    _stop = p.get("stop")
+    thesis = st.get("thesis")                         # ALIGNED / MIXED / AGAINST from the underlying tape
+    st.pop("risk", None); st.pop("risk_msg", None)
+    if _entry and _stop and _entry > 0 and p.get("state") not in ("CLOSED", "CUT"):
+        stop_pct = (_stop / _entry - 1) * 100         # the stop as a %-move (e.g. -30)
+        frac = (pnl / stop_pct) if stop_pct < 0 else 0    # 0 = breakeven … 1.0 = at the stop
+        broke = thesis == "AGAINST"
+        nearing = pnl < 0 and frac >= 0.4             # at least 40% of the way to the stop, and red
+        pct_to_stop = int(min(max(frac, 0), 1) * 100)
+        if broke and nearing:
+            st["risk"] = "regulate"
+            st["risk_msg"] = (f"⚠ THESIS BROKE — tape now AGAINST the trade, {pnl:+.0f}% "
+                              f"({pct_to_stop}% of the way to the {stop_pct:.0f}% stop). Cut to regulate the loss.")
+            _pos_alert(p, st, "regulate", st["risk_msg"])
+        elif broke or nearing:
+            st["risk"] = "watch"
+            st["risk_msg"] = (f"tape turned AGAINST the trade ({pnl:+.0f}%)" if broke
+                              else f"{pnl:+.0f}% — {pct_to_stop}% of the way to the {stop_pct:.0f}% stop")
     if pnl <= -45:
         _pos_alert(p, st, "stop", "🛑 STOP −45% hit — exit now")
     elif _round_trip_setup(p) and peak >= 35 and p["state"] == "OPEN":
@@ -1501,6 +1526,13 @@ def monitor_loop():
                         if _prev is not None and abs(_sp - _prev) > 1e-9:
                             st["spot_dir"] = "up" if _sp > _prev else "down"          # tick-over-tick direction
                         st["spot"] = _sp                                              # -> stop-watch + card display
+                    # THESIS CHECK for loss regulation: does the underlying TAPE still support this
+                    # option's direction? AGAINST = the reason we entered has broken.
+                    try:
+                        _al = _tape_align(leg[-1], _tape_cached(conn, p["ticker"]))
+                        st["thesis"] = _al["verdict"]; st["thesis_why"] = _al.get("bullets")
+                    except Exception:
+                        pass
                     _check_pos_rules(p, st)
                 except Exception:
                     continue
@@ -3153,7 +3185,7 @@ class H(http.server.BaseHTTPRequestHandler):
             refresh_account()  # applied within seconds — still entirely on the main thread.
             check_alerts()
             livekeys = ("mid", "pnl_pct", "peak_pct", "iv", "delta", "spread_pct", "alert", "mismatch",
-                        "spot", "entry_spot", "spot_dir")
+                        "spot", "entry_spot", "spot_dir", "thesis", "risk", "risk_msg")
             withlive = lambda p: {**p, "live": {k: MONITOR.get(p["id"], {}).get(k) for k in livekeys}}
             _allpos = M.load()                          # read the positions ledger ONCE per poll (was 3×)
             # ONE card per trade: attach each position (open OR closed) to its signal by journal_id
