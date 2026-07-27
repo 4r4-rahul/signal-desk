@@ -257,7 +257,9 @@ if (!window.__chatScraper) {
         const timeEl = li.querySelector('time[datetime]');
         if (timeEl) {
           const age = (Date.now() - new Date(timeEl.getAttribute('datetime')).getTime()) / 60000;
-          if (age > 10) return;                     // ignore old history rendered on scroll
+          if (age > 20) return;                     // ignore old history rendered on scroll (was 10 —
+          // widened because a BACKGROUNDED tab throttles the re-scan timer to ~1/min, so a genuinely
+          // missed message can be >10 min old by the time we re-scan and catch it).
         }
         const isSignal = /\b\d{2,5}(?:\.\d)?\s*(?:[cp]\b|call|put)/i.test(text);
         const isMgmt = /\d|half|trim|out\b|cut|stop|runner|secure|lock|flat|close|exit|sold|off\b/i.test(text);
@@ -272,12 +274,23 @@ if (!window.__chatScraper) {
       try { chrome.runtime.sendMessage({ relay: { author: lastAuthor, text, reply_to: replyTo, msg_id: li.id, channel: channelKey(), name: channelDisplay(), edited: isEdit } }); } catch (e) {}
       setStatus((isEdit ? '✏️ edit routed: ' : '⚡ routed: ') + text.slice(0, 42));
     };
+    // BURST-ROBUST re-scan: whenever the DOM changes, scan the added nodes AND, debounced, re-scan the
+    // whole recent window. A fast burst (ADBE→GOOGL→MSFT in seconds) batches DOM updates so addedNodes
+    // can skip one; Discord then virtualizes it out of the DOM before the 20s heartbeat catches it. This
+    // fires within ~250ms of any change while the messages are still on screen. watchSeen dedupes, so a
+    // node scanned twice relays once.
+    const rescanRecent = () => {
+      const el = document.querySelector('[data-list-id="chat-messages"]');
+      if (el) Array.from(el.querySelectorAll('li[id^="chat-messages-"]')).slice(-60).forEach(scan);
+    };
     S.observer = new MutationObserver((muts) => {
       muts.forEach((m) => m.addedNodes.forEach((nd) => {
         if (nd.nodeType !== 1) return;
         if (nd.matches && nd.matches('li[id^="chat-messages-"]')) scan(nd);
         if (nd.querySelectorAll) nd.querySelectorAll('li[id^="chat-messages-"]').forEach(scan);
       }));
+      clearTimeout(S.rescanT);
+      S.rescanT = setTimeout(rescanRecent, 250);          // catch anything addedNodes missed in the burst
     });
     S.observer.observe(list, { childList: true, subtree: true });
     S.watching = true;
@@ -292,7 +305,7 @@ if (!window.__chatScraper) {
       const el = document.querySelector('[data-list-id="chat-messages"]');
       const lis = el ? el.querySelectorAll('li[id^="chat-messages-"]') : [];
       const healthy = !!el && lis.length > 0;              // container found AND it has messages
-      if (el) Array.from(lis).slice(-25).forEach(scan);    // safety re-scan of the last ~25
+      if (el) Array.from(lis).slice(-60).forEach(scan);    // safety re-scan of the last ~60 (was 25)
       try { chrome.runtime.sendMessage({ relay: { watching: true, channel: channelKey(),
         name: channelDisplay(), healthy: healthy, seen: lis.length } }); } catch (e) {}
     };
