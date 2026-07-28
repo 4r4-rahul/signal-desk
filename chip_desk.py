@@ -143,6 +143,8 @@ MAX_HOLD_S = 1200           # 20 min — time stop AND book-slot release
 # can be measured PAIRED on identical entries. What is NOT decidable: any entry-signal edge smaller than
 # ~+0.10R. Design accordingly — spend the sample on mechanics, not on hunting entry alpha.
 LOOP_SLEEP = 5              # scan cadence — 5s is plenty for scalp entries; keeps the lap cheap
+_STARVE_LIMIT = 4          # this many consecutive laps (~20s) with NO market data -> rebuild the IBKR
+                           # connection. A starved (not errored) line is invisible to the error handler.
 
 _MECH_CACHE = {"ts": 0.0, "data": None}
 _NEWS_CACHE = {"ts": 0.0, "data": None}
@@ -1081,6 +1083,7 @@ def _maybe_thesis(tkr, ind, spot, now, a, mech):
 def scan_loop():
     conn = None
     book = {}
+    starve = 0                   # consecutive laps with NO market data on ANY ticker (self-heal trigger)
     print("🤖 chip desk: scan loop started (shadow-only provider 'chip').", flush=True)
     _load_activity()             # bring back today's scalp log so a restart does not blank the UI
     _rebuild_book(book)          # adopt scalps that were still open across a restart
@@ -1102,6 +1105,7 @@ def scan_loop():
             SCAN["session"] = "open"
             mechs = _load_mechanics()
             server = _srv()
+            lap_got = 0                  # how many tickers returned a live spot this lap
             for tkr in TICKERS:
                 try:
                     ind = _tape(conn, tkr)                           # chip's own 1-min tape (session VWAP)
@@ -1119,6 +1123,7 @@ def scan_loop():
                     sdir = ("up" if spot > ps else "down" if spot < ps else None) if (spot and ps) else None
                     if spot:
                         _PREV_SPOT[tkr] = spot
+                        lap_got += 1                     # proof the IBKR line is actually feeding data
                     news = _news(tkr)
                     # SHADOW BOTH DIRECTIONS independently (anti-correlated, so usually only one qualifies).
                     aC = assess(tkr, ind, mech, smin, "C", crossed_up, crossed_down)
@@ -1190,6 +1195,23 @@ def scan_loop():
                                 STATUS[key]["state"], STATUS[key]["reason"] = r
                 except Exception:
                     continue
+            # DATA-STARVATION SELF-HEAL. A connected-but-STARVED IBKR line (its market-data slots taken by
+            # other clients) returns no spot on ANY ticker and does NOT raise — so the error-based
+            # reconnect below never fires and chip sits in "no tape data yet" until a human restarts it,
+            # silently dropping a whole session from the dataset. Detect a run of empty laps and rebuild
+            # the connection ourselves. Only during a live session (lap_got is meaningfully 0 only then).
+            if lap_got == 0:
+                starve += 1
+                if starve >= _STARVE_LIMIT:
+                    print(f"🤖 chip desk: {starve} laps with NO market data — rebuilding IBKR connection", flush=True)
+                    try: conn.disconnect()
+                    except Exception: pass
+                    conn = None
+                    starve = 0
+                    time.sleep(3)
+                    continue                              # top of loop reconnects (client_id 82) fresh
+            else:
+                starve = 0
             # THESIS EXPERIMENT: settle whatever is now coverable, reusing THIS connection (never open a
             # second IBKR handle on a 5-second loop). limit=None is mandatory — see horizon.resolve.
             try:
