@@ -1083,7 +1083,8 @@ def _maybe_thesis(tkr, ind, spot, now, a, mech):
 def scan_loop():
     conn = None
     book = {}
-    starve = 0                   # consecutive laps with NO market data on ANY ticker (self-heal trigger)
+    starve = 0                   # consecutive laps with DEGRADED market data (self-heal trigger)
+    was_closed = True            # force a fresh connection on the first open lap (kills the stale line)
     print("🤖 chip desk: scan loop started (shadow-only provider 'chip').", flush=True)
     _load_activity()             # bring back today's scalp log so a restart does not blank the UI
     _rebuild_book(book)          # adopt scalps that were still open across a restart
@@ -1100,8 +1101,19 @@ def scan_loop():
                 book.clear()
                 STATUS.clear()
                 SCAN["session"] = "closed"
+                was_closed = True                        # so we rebuild the line at the NEXT open
                 time.sleep(30)
                 continue
+            # FRESH CONNECTION AT THE OPEN. The line sat idle all night (the closed branch just sleeps),
+            # and an idle IBKR handle comes up STALE — connected but starved, feeding no data. That is why
+            # chip emitted nothing this morning despite a live market. Force a clean reconnect on the very
+            # first open lap so the session starts on a healthy line, not last night's corpse.
+            if was_closed:
+                was_closed = False
+                try: conn.disconnect()
+                except Exception: pass
+                conn = MK.connect(client_id=82)
+                print("🤖 chip desk: market open — fresh IBKR connection for the session", flush=True)
             SCAN["session"] = "open"
             mechs = _load_mechanics()
             server = _srv()
@@ -1200,10 +1212,14 @@ def scan_loop():
             # reconnect below never fires and chip sits in "no tape data yet" until a human restarts it,
             # silently dropping a whole session from the dataset. Detect a run of empty laps and rebuild
             # the connection ourselves. Only during a live session (lap_got is meaningfully 0 only then).
-            if lap_got == 0:
+            # DEGRADED, not just dead: a PARTIALLY starved line feeds a couple of tickers and starves the
+            # rest, so lap_got is 1-2 (never 0) and the old "== 0" check never fired — chip limped all
+            # morning reading 2 of 10 tickers and emitting nothing. Trigger when FEWER THAN HALF the
+            # tickers return a spot: a healthy line feeds all ~10, so <5 means the connection is sick.
+            if lap_got < max(1, len(TICKERS) // 2):
                 starve += 1
                 if starve >= _STARVE_LIMIT:
-                    print(f"🤖 chip desk: {starve} laps with NO market data — rebuilding IBKR connection", flush=True)
+                    print(f"🤖 chip desk: {starve} laps with only {lap_got}/{len(TICKERS)} tickers feeding — rebuilding IBKR connection", flush=True)
                     try: conn.disconnect()
                     except Exception: pass
                     conn = None
