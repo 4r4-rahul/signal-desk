@@ -556,7 +556,11 @@ function chipTradeDetail(t){
 }
 // The collapsible date control: a compact <select> of available dates. Rendered inline in each log header.
 function dayPicker(which, days){
-  const opts = ['<option value="">Live (today)</option>']
+  // Honest default label: chip's live view IS today (the server loads today's activity); the seller's
+  // live view is the RECENT trades ACROSS sessions (last 40), so calling it "today" was the very thing
+  // that made yesterday's 15:57 rows look wrong. Say "Recent" there.
+  const liveLabel = which==='seller' ? 'Recent (all days)' : 'Live (today)';
+  const opts = [`<option value="">${liveLabel}</option>`]
     .concat((days||[]).map(d=>`<option value="${d}"${_dayPick[which]===d?' selected':''}>${d}</option>`))
     .join('');
   // Visible "📅 date" label so it reads as a date selector, not a mystery dropdown. Highlighted when a
@@ -1484,12 +1488,24 @@ function fmtET(iso){
   try{ return new Date(iso).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',hour12:false,timeZone:'America/New_York'}); }
   catch(e){ return (iso||'').slice(11,16); }
 }
-// HH:MM:SS ET — the precise entry/exit stamps for a trade's full detail (fmtET drops seconds to keep the
-// compact ledger rows narrow; the expanded record wants the exact fill times).
+// ET date, e.g. "Jul 29" (short) — so a timestamp is never ambiguous across days. The seller "live"
+// ledger shows the RECENT trades across sessions, so yesterday's 15:57 EOD settlement sits next to
+// today's 13:42 — without a date that reads like a bug ("why is it 15:57 in today's ledger?").
+function fmtETdate(iso){
+  if(!iso) return '';
+  try{ return new Date(iso).toLocaleDateString('en-US',{month:'short',day:'numeric',timeZone:'America/New_York'}); }
+  catch(e){ return (iso||'').slice(0,10); }
+}
+function isTodayET(iso){
+  try{ const d=new Date(iso).toLocaleDateString('en-CA',{timeZone:'America/New_York'});
+    return d===new Date().toLocaleDateString('en-CA',{timeZone:'America/New_York'}); }catch(e){ return false; }
+}
+// DATE + HH:MM:SS ET — the precise entry/exit stamps for a trade's full detail (fmtET drops seconds to
+// keep the compact ledger rows narrow; the expanded record wants the exact fill date AND time).
 function fmtETsec(iso){
   if(!iso) return '';
-  try{ return new Date(iso).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false,timeZone:'America/New_York'})+' ET'; }
-  catch(e){ return (iso||'').slice(11,19); }
+  try{ return fmtETdate(iso)+', '+new Date(iso).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false,timeZone:'America/New_York'})+' ET'; }
+  catch(e){ return (iso||'').slice(0,19).replace('T',' '); }
 }
 // THE THETA MIRROR — the premium-seller books (long theta) beside chip (the buyer). Two arms:
 // arm1 = directional credit spread on chip's side (isolates the theta sign), arm2 = neutral condor.
@@ -1640,12 +1656,17 @@ function renderSeller(s){
   }).join('');
   // LEDGER of resolved seller trades — the mirror of chip's scalp log.
   const ledRows=led.slice(0,ledCap).map(p=>{
-    const t=fmtET(p.closed||p.opened||'');
+    const iso=p.closed||p.opened||'';
+    const t=fmtET(iso);
+    // Prefix the DATE when the row is NOT from today — the "recent" view mixes sessions, so a bare
+    // "15:57" from yesterday looked like a bug. Today's rows stay compact (time only).
+    const notToday=iso&&!isTodayET(iso);
+    const stamp=notToday?`<span style="color:#f59e0b">${fmtETdate(iso)}</span> ${t}`:t;
     const k=_skey(p), open=_sellerOpenDetail.has(k);
     return `<div style="border-top:1px solid var(--line)">
       <div onclick="toggleSeller('${k}')" title="click for full trade detail" style="cursor:pointer;display:flex;gap:6px;align-items:center;font-size:10.5px;padding:3px 0">
         <span style="color:var(--dim);width:10px">${open?'▾':'▸'}</span>
-        <span style="color:var(--dim);width:34px">${t}</span>
+        <span style="color:var(--dim);width:${notToday?62:34}px">${stamp}</span>
         <b style="width:32px">${p.ticker}</b>${armTag(p.arm)}
         <span style="color:var(--dim);width:52px">cr $${p.credit}</span>
         <span style="margin-left:auto;color:${col(p.pnl)};font-weight:700;width:52px;text-align:right">${money(p.pnl)}</span>
