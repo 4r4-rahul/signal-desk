@@ -494,6 +494,18 @@ def indicators(bars):
         out["ema135"] = round(float(_ema(c[-405:], 135)), 2)
     if len(c) >= 945:
         out["ema315"] = round(float(_ema(c[-945:], 315)), 2)
+    # MARKET STRUCTURE (swings, BOS, displacement, premium/discount, FVG) — the price-action lens the
+    # indicators above are blind to. Computed here because this is where the raw OHLC lives; folded under
+    # `struct` so it rides along wherever `ind` goes (entry-feature capture, tape-align) without touching
+    # any existing field. Fail-soft inside structure.features.
+    try:
+        import structure as _ST
+        # PYTHON floats, not the numpy array `c` — else disp_atr/premium_pct come out np.float64, which
+        # json.dumps only survives via default=str (silently stringifying the numbers in the saved card).
+        out["struct"] = _ST.features([float(b.high) for b in bars],
+                                     [float(b.low) for b in bars], [float(x) for x in c])
+    except Exception:
+        out["struct"] = None
     return out
 
 

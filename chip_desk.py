@@ -354,6 +354,10 @@ def _entry_features(ind, a, spot, session_min, side, news_state):
         "bb_width_pct": _pct(bb_up, bb_low, bb_mid), "bb_pos": bb_pos,
         "tape_score": a.get("score"), "tape_grade": a.get("grade"),
         "regime": a.get("regime"), "news": news_state,
+        # MARKET STRUCTURE at entry (from structure.py via indicators) — swings, BOS, displacement,
+        # premium/discount, FVG. Captured so the month of data can test whether "bought a displacement
+        # into premium with no defended higher low" predicts chip's losers. Logged, not (yet) gated.
+        "struct": ind.get("struct"),
     }
 
 

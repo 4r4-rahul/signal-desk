@@ -41,7 +41,13 @@ CREATE TABLE IF NOT EXISTS signals (
   rv REAL, iv_rv REAL, omega REAL, spread_pct REAL, bid REAL, ask REAL, mid REAL,
   tape TEXT, cosign TEXT,
   verified INTEGER, paper INTEGER, manual_override INTEGER,
-  raw TEXT
+  raw TEXT,
+  -- MARKET STRUCTURE at entry (structure.py, via chip's tape). Added as columns so the price-action
+  -- read is queryable per trade alongside the indicators — the month of data can test whether e.g.
+  -- "displacement into premium with no defended higher low" clusters in chip's losers.
+  struct_state TEXT, struct_bos TEXT, struct_higher_low INTEGER, struct_lower_high INTEGER,
+  struct_displacement TEXT, struct_disp_atr REAL, struct_fvg TEXT, struct_in_fvg INTEGER,
+  struct_premium_pct REAL, struct_dist_hi_pct REAL, struct_dist_lo_pct REAL
 );
 CREATE TABLE IF NOT EXISTS decisions (
   signal_id TEXT PRIMARY KEY,
@@ -111,6 +117,19 @@ _ADDED_COLS = (
     ("outcomes", "cost_pct",       "REAL"),   # commission+fees as % of premium paid
     ("outcomes", "score_basis",    "TEXT"),   # basis version + any degradation flag (see SHADOW_BASIS)
     ("outcomes", "n_tick_tradeable", "INTEGER"),  # ticks carrying a two-sided quote (exit opportunities)
+    # --- MARKET STRUCTURE at entry (structure.py). Migrated onto the live signals table so the
+    #     price-action read is queryable per trade for the month-long study. ---
+    ("signals", "struct_state",       "TEXT"),     # up / down / range
+    ("signals", "struct_bos",         "TEXT"),     # bull / bear break of structure
+    ("signals", "struct_higher_low",  "INTEGER"),  # 1 if last swing low > prior swing low
+    ("signals", "struct_lower_high",  "INTEGER"),
+    ("signals", "struct_displacement", "TEXT"),    # bull / bear impulsive leg present
+    ("signals", "struct_disp_atr",    "REAL"),     # recent leg magnitude in ATR (signed)
+    ("signals", "struct_fvg",         "TEXT"),     # bull / bear unfilled 3-bar gap
+    ("signals", "struct_in_fvg",      "INTEGER"),
+    ("signals", "struct_premium_pct", "REAL"),     # 0=discount .. 1=premium in the swing range
+    ("signals", "struct_dist_hi_pct", "REAL"),     # runway to nearest swing high
+    ("signals", "struct_dist_lo_pct", "REAL"),
 )
 
 
@@ -224,6 +243,26 @@ def _signal_row(e):
         "verified": (1 if e.get("verified") else (0 if e.get("verified") is False else None)),
         "paper": 1 if e.get("paper") else 0, "manual_override": 1 if e.get("manual_override") else 0,
         "raw": (e.get("raw") or "")[:300],
+        **_struct_row(e),
+    }
+
+
+def _struct_row(e):
+    """Flatten the entry-time market-structure snapshot (structure.py output) into DB columns. Lives on
+    the card under chip.entry_features.struct (or the shadow's copy). All-None when absent — a human
+    provider card has no chip tape, which is fine."""
+    ef = ((e.get("chip") or {}).get("entry_features")
+          or (e.get("shadow") or {}).get("entry_features")
+          or e.get("entry_features") or {})
+    s = (ef or {}).get("struct") or {}
+    _b = lambda v: 1 if v is True else 0 if v is False else None
+    return {
+        "struct_state": s.get("structure"), "struct_bos": s.get("bos"),
+        "struct_higher_low": _b(s.get("higher_low")), "struct_lower_high": _b(s.get("lower_high")),
+        "struct_displacement": s.get("displacement"), "struct_disp_atr": _f(s.get("disp_atr")),
+        "struct_fvg": s.get("fvg"), "struct_in_fvg": _b(s.get("in_fvg")),
+        "struct_premium_pct": _f(s.get("premium_pct")),
+        "struct_dist_hi_pct": _f(s.get("dist_to_hi_pct")), "struct_dist_lo_pct": _f(s.get("dist_to_lo_pct")),
     }
 
 
