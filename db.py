@@ -248,13 +248,18 @@ def _signal_row(e):
 
 
 def _struct_row(e):
-    """Flatten the entry-time market-structure snapshot (structure.py output) into DB columns. Lives on
-    the card under chip.entry_features.struct (or the shadow's copy). All-None when absent — a human
-    provider card has no chip tape, which is fine."""
+    """Flatten the entry-time market-structure snapshot (structure.py output) into DB columns. It rides
+    in TWO places depending on the trade's origin — captured for EVERY provider, not just chip:
+      · chip scalps  -> chip.entry_features.struct (snapshotted at the fire)
+      · human cards  -> tech.ind.struct (from the ingest-time market.context enrichment)
+    First one found wins; all-None only if the tape was too thin to compute (never enriched)."""
     ef = ((e.get("chip") or {}).get("entry_features")
           or (e.get("shadow") or {}).get("entry_features")
           or e.get("entry_features") or {})
-    s = (ef or {}).get("struct") or {}
+    s = (ef or {}).get("struct")
+    if not s:                                          # human provider path — structure is under tech.ind
+        s = ((e.get("tech") or {}).get("ind") or {}).get("struct")
+    s = s or {}
     _b = lambda v: 1 if v is True else 0 if v is False else None
     return {
         "struct_state": s.get("structure"), "struct_bos": s.get("bos"),
