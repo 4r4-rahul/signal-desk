@@ -883,7 +883,10 @@ _FILL_VERB = re.compile(r'\b(?:in|got in|i(?:\'| a)?m in)\s*(?:@|at)\s*\$?\d'
                         r'|(?:@|\bat)\s*\$?\d.{0,12}\bfill(?:ed)?\b', re.I)
 # WATCH intent — eyeing/considering a setup but NOT in. Includes Prince's phrasings: "looks nice", "let's
 # see", "limit order set" (a resting order, not a fill), "leaning".
-_WATCH_RE = re.compile(r'\b(watch(?:ing|list)?|on watch|keep(?:ing)? an eye|eye ?ing|on (?:my )?radar'
+# watch\w{0,3} (not watch(?:ing|list)?) so provider TYPOS still register as a watch: prince_small's
+# "Watchin AAPL 350 Calls" (missing g) and the earlier "Watchimg NVDA" both scored NOISE and were
+# REJECTED because the strict form did not match — a real, actionable watch dropped on a one-letter slip.
+_WATCH_RE = re.compile(r'\b(watch\w{0,3}|on watch|keep(?:ing)? an eye|eye ?ing|on (?:my )?radar'
                        r'|might be a play|could be a play|may(?:be)? a play|watch for'
                        r'|may(?: need)? (?:to )?pivot|might pivot|thinking about|considering'
                        r'|looks? (?:nice|good|clean|strong|solid|interesting)|let\'?s see|see the close'

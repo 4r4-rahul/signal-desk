@@ -1487,7 +1487,13 @@ def monitor_loop():
                 except Exception: pass
             IBKR["connected"] = bool(conn and conn.isConnected())      # live market-data link status
             IBKR["mkt_type"] = MK.env("IBKR_MARKET_DATA_TYPE", "2")
-            for p in M.open_positions():
+            # How many OPEN POSITIONS the monitor has to price. last_data only ticks when a position (or
+            # actionable card) is quoted, so with nothing open it goes "stale" and the UI cried "idle
+            # 68m" as if the LINK were down — when it was just idle for lack of anything to track. This
+            # lets the UI say "no open trades" instead of alarming.
+            _openpos = M.open_positions()
+            IBKR["open_positions"] = len(_openpos)
+            for p in _openpos:
                 try:
                     leg = p.get("leg") or ""
                     if not p.get("ticker") or len(leg) < 2:

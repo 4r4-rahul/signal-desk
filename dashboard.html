@@ -866,15 +866,19 @@ function ibkrRowHTML(ibkr,nowIso){
   if(!ibkr) return '';
   const fresh=ibkr.last_data&&(Date.parse(nowIso)-Date.parse(ibkr.last_data))/1000<120;
   const on=!!ibkr.connected;
-  const col=on?(fresh?'#22c55e':'#f59e0b'):'#ef4444';
-  const label=on?(fresh?'live · data flowing':'connected · idle'):'disconnected';
+  // "idle" only alarms when there's something the monitor SHOULD be pricing. last_data ticks only on a
+  // position/card quote, so with 0 open positions it goes stale by design — that's "nothing to track",
+  // not a dead link (chip proves data flows). Distinguish the two so a quiet book doesn't look broken.
+  const nothingToTrack = (ibkr.open_positions||0)===0;
+  const col=on?(fresh?'#22c55e':(nothingToTrack?'#64748b':'#f59e0b')):'#ef4444';
+  const label=on?(fresh?'live · data flowing':(nothingToTrack?'connected · no open trades to price':'connected · idle')):'disconnected';
   const mt={'1':'realtime','2':'frozen','3':'delayed','4':'delayed'}[String(ibkr.mkt_type||'')]||'';
   const ago=ibkr.last_data?Math.round((Date.parse(nowIso)-Date.parse(ibkr.last_data))/1000):null;
   return `<div class="src" style="cursor:default" title="IBKR market-data link — option quotes, greeks, live prices">
     <span class="d" style="background:${col};margin-top:5px;flex-shrink:0"></span>
     <div style="line-height:1.4;min-width:0;flex:1">
       <div style="display:flex;align-items:center;gap:6px"><b>🏦 IBKR</b>${mt?`<small style="color:var(--dim)">${mt}</small>`:''}</div>
-      <small style="color:${on?'var(--muted)':'var(--red)'}">${label}${ago!=null?` · quote ${ago}s ago`:''}</small>
+      <small style="color:${on?'var(--muted)':'var(--red)'}">${label}${(ago!=null&&!(on&&nothingToTrack))?` · quote ${ago}s ago`:''}</small>
     </div></div>`;
 }
 // EXTENSION-LEVEL outage. Four individual DARK badges describe the symptom; if EVERY provider channel
