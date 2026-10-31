@@ -1,48 +1,48 @@
-# Copy-Trading Edge Analysis
+# signal-desk
 
-Measure the *real* edge of Discord options-signal providers (not their hype), find how to
-execute them profitably, and forward-test on your own fills. Built for a $15k account.
+A research desk for options trading signals: scrape the alerts a signal provider posts, reconstruct their realized results from their own recaps, measure the edge that survives slippage and fees, test whether outcomes are predictable at all, and then forward-test your own fills against the provider's quotes before scaling anything.
 
-## Start here
-1. **[ACCOUNT_PLAN.md](ACCOUNT_PLAN.md)** — the $15k operating system (the 7 rules). READ FIRST.
-2. **[COMPARISON.md](COMPARISON.md)** — 6 providers ranked honestly (only 2 are trustworthy).
-3. **channels/mike/PLAYBOOK.md** — exact contracts / stops / exits for your account size.
+The conclusion it reached, on the providers it was pointed at: outcomes are not predictable trade by trade (forward AUC around 0.55, and a neural net only overfit). The edge, where one exists, comes from provider selection, execution and risk sizing. Providers who publish their losers can be measured; providers who publish highlight reels cannot.
 
-## The verdict (tl;dr)
-- **Only Sulker & Mike document their losses** → the only two worth following. Diversify across
-  both (they're −0.10 correlated → ~32% less drawdown).
-- **JMT, Prince (×2), Option King** = highlight reels (hide losers). Avoid.
-- **You cannot predict which trade wins** (proven: forward AUC ~0.55, neural net overfits). The
-  edge is provider-selection + execution + risk, not prediction.
+## Architecture
 
-## How it works
-```
-extension/            Browser scraper (per-channel, crash-safe). Load unpacked in Chrome.
-load.py <ch>          Scraped JSON -> channels/<ch>/<ch>.db
-parse_recaps.py mike  Realized results from recaps (Mike)
-sulker_recaps.py      Realized results + contract-high/MFE (Sulker)
-cross_provider.py     Scorecard, segment edges, exit-target curve (all providers)
-edge_ops.py           Daily risk, outlier concentration, Kelly, correlation, edge-decay
-mike_ml.py            ML proof: outcomes not predictable
-deep_predict.py       Deep NN + vectors + regime; shows the leakage trap; honest forward test
-tracker.py <ch>       FORWARD TRACKER — log live alerts + YOUR fills -> real edge
+```mermaid
+flowchart LR
+    EXT[Browser extension<br/>per-channel scraper, crash-safe] --> LOAD[load.py<br/>scraped JSON to SQLite per channel]
+    LOAD --> REC[Recap parsers<br/>realized results, contract high, MFE]
+    REC --> SCORE[cross_provider.py<br/>scorecard, segment edges, exit-target curve]
+    SCORE --> OPS[edge_ops.py<br/>daily risk, outlier concentration, Kelly, correlation, edge decay]
+    SCORE --> ML[Honesty checks<br/>mike_ml.py, deep_predict.py: leakage trap, forward test]
+    OPS --> TRACK[tracker.py<br/>forward tracker: live alerts plus your real fills]
+    TRACK --> EDGE[(Your post-slippage edge)]
+    LLM[LLM alert parsing and routing<br/>llm_parse.py, llm_route.py, llm_eval.py] --> LOAD
+    DASH[dashboard.html<br/>ledger and open positions] --- TRACK
 ```
 
-## Providers (channels/<name>/)
-`sulker` ✅ primary · `mike` ✅ diversifier · `jmt` ✗ · `prince` ✗ · `prince_sac` ✗ · `optionking` ⚠️
+## The forward-test loop (the point of all this)
 
-## Daily forward-test workflow (the point of all this)
 ```
-# refresh data: scrape channel briefly, then:
-python3 load.py sulker channels/sulker/messages.json
-python3 tracker.py sulker sync            # pull new live alerts
-python3 tracker.py sulker list            # see open (🎰 = lotto)
-python3 tracker.py sulker take <id> 1.05  # your real entry fill
-python3 tracker.py sulker close <id> 1.55 # your exit  (or --pct 45)
-python3 tracker.py sulker score           # YOUR edge vs his quotes
+python3 load.py <channel> channels/<channel>/messages.json
+python3 tracker.py <channel> sync             # pull new live alerts
+python3 tracker.py <channel> list             # open alerts
+python3 tracker.py <channel> take <id> 1.05   # your real entry fill
+python3 tracker.py <channel> close <id> 1.55  # your exit, or --pct 45
+python3 tracker.py <channel> score            # your edge versus the provider's quotes
 ```
-Run 2–4 weeks. Scale size up only if your post-slippage edge is clearly positive.
+
+Run it for two to four weeks. Scale size only if the post-slippage edge is clearly positive. Account rules, position limits and daily loss limits live in `ACCOUNT_PLAN.md`.
+
+## What each piece does
+
+- **extension/** Chrome extension that scrapes one channel at a time and survives reloads.
+- **load.py, parse_recaps.py, sulker_recaps.py** Normalize scraped messages and recover realized results from the provider's own recap posts.
+- **cross_provider.py, edge_ops.py** Scorecards across providers, edge by segment and exit target, daily risk budget, Kelly sizing, correlation between providers, edge decay over time.
+- **mike_ml.py, deep_predict.py, llm_eval.py** The honesty layer: can outcomes be predicted, and does the LLM parse alerts correctly. Includes the leakage trap that made an early model look better than it was.
+- **tracker.py, dashboard.html** Forward tracker and ledger for live alerts and your own fills.
+- **ACCOUNT_PLAN.md, COMPARISON.md** Operating rules and the provider comparison.
 
 ## Environment
-Python 3.14; ML deps in `.venv` (numpy, scikit-learn). Market data cached in `data/`
-(SPY & VIX daily via Yahoo). Run ML scripts with `.venv/bin/python`.
+
+Python 3.14; ML dependencies in `.venv` (numpy, scikit-learn). Market data cached in `data/` (SPY and VIX daily via Yahoo). Run the ML scripts with `.venv/bin/python`. Provider channels and personal position files under `channels/` are local data.
+
+Personal research project. Nothing here is investment advice.
