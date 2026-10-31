@@ -35,3 +35,9 @@ eval/.route_cache.json
 channels/_route_context.json
 channels/_msg_context.json
 inbox
+
+# personal positions, scraped feeds and runtime logs stay local
+channels/_positions.json
+channels/_feed.json
+channels/_feed_seen.json
+logs/
